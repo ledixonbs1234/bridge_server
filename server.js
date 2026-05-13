@@ -175,6 +175,21 @@ app.get('/api/skills', (req, res) => {
     res.json(declarations);
 });
 
+// THÊM ĐOẠN NÀY VÀO TRONG SERVER.JS
+app.get('/api/system-prompt', (req, res) => {
+    const promptPath = path.join(__dirname, 'system_prompt.md');
+    try {
+        if (fs.existsSync(promptPath)) {
+            const content = fs.readFileSync(promptPath, 'utf8');
+            res.json({ success: true, prompt: content });
+        } else {
+            res.json({ success: false, error: "File system_prompt.md không tồn tại." });
+        }
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 app.get('/api/task', (req, res) => {
     if (taskQueue.length > 0 && !currentTaskPromise) {
         const task = taskQueue.shift();
