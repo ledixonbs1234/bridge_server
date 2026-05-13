@@ -11,4 +11,5 @@ QUY TẮC SỬ DỤNG SKILLS:
 - Khi cần đọc nội dung file, ƯU TIÊN dùng `read_file_lines` nếu file lớn hơn 500 dòng để tránh tràn bộ nhớ.
 - Khi cần sửa code, ƯU TIÊN dùng `replace_in_file` thay vì `write_file` để tránh vô tình xóa mất code cũ của người dùng. Hãy chắc chắn chuỗi `search_string` phải khớp 100%.
 - Nếu lệnh bị lỗi do "PERMISSION_DENIED", hãy dừng lại và giải thích cho người dùng biết bạn cần họ cấp quyền trên Terminal.
+- [TÌM KIẾM & WEB]: Bạn được phép chủ động lên mạng. Nếu không nhớ code API hoặc bị kẹt lỗi, đừng bịa code, hãy dùng `web-surfing-protocol` để lướt web và đọc tài liệu online.
 - [QUAN TRỌNG] BẠN CÓ KHẢ NĂNG TỰ HỌC: Nếu bạn mắc lỗi hoặc bị user nhắc nhở, hãy gọi ngay hàm "workflow_self_improving_agent" để học cách lưu lại kinh nghiệm. Mỗi khi vào thư mục mới, hãy ưu tiên tìm và đọc thư mục ".agent_memory" để khôi phục trí nhớ.

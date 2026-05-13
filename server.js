@@ -175,12 +175,36 @@ app.get('/api/skills', (req, res) => {
     res.json(declarations);
 });
 
-// THÊM ĐOẠN NÀY VÀO TRONG SERVER.JS
 app.get('/api/system-prompt', (req, res) => {
     const promptPath = path.join(__dirname, 'system_prompt.md');
     try {
         if (fs.existsSync(promptPath)) {
-            const content = fs.readFileSync(promptPath, 'utf8');
+            let content = fs.readFileSync(promptPath, 'utf8');
+
+            // --- TỰ ĐỘNG NHÚNG BỘ NHỚ VÀO SYSTEM PROMPT ---
+            // Đọc các file ghi nhớ nếu chúng tồn tại trong thư mục chạy Server
+            const memoryDir = path.join(process.cwd(), '.agent_memory');
+            let memoryContext = "";
+
+            if (fs.existsSync(memoryDir)) {
+                const prefPath = path.join(memoryDir, 'PREFERENCES.md');
+                if (fs.existsSync(prefPath)) {
+                    memoryContext += `\n--- SỞ THÍCH CỦA USER (PREFERENCES.md) ---\n${fs.readFileSync(prefPath, 'utf8')}\n`;
+                }
+
+                const errPath = path.join(memoryDir, 'ERRORS.md');
+                if (fs.existsSync(errPath)) {
+                    memoryContext += `\n--- LỖI CẦN TRÁNH (ERRORS.md) ---\n${fs.readFileSync(errPath, 'utf8')}\n`;
+                }
+            }
+
+            // Nếu có dữ liệu trong bộ nhớ, tiêm thẳng vào cuối prompt
+            if (memoryContext.trim() !== "") {
+                content += `\n\n=================================\n🧠 BỘ NHỚ CỦA BẠN (Hệ thống tự động nạp vào):\n${memoryContext}=================================\n`;
+                // Dặn dò thêm AI phải dùng bộ nhớ này
+                content += `\nLƯU Ý QUAN TRỌNG: Hãy LUÔN LUÔN tuân thủ các quy tắc trong BỘ NHỚ trên khi đưa ra quyết định hoặc sinh code!`;
+            }
+
             res.json({ success: true, prompt: content });
         } else {
             res.json({ success: false, error: "File system_prompt.md không tồn tại." });
