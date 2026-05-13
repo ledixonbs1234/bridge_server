@@ -239,17 +239,68 @@ app.post('/api/execute-function', async (req, res) => {
         });
     }
 });
+// =================================================================
+// 🚀 REAL STREAMING LOGIC
+// =================================================================
+const activeStreams = new Map();
 
+// API NHẬN CHUNK THẬT TỪ EXTENSION
+app.post('/api/stream-chunk', (req, res) => {
+    const { taskId, chunk } = req.body;
+    
+    // Reset lại timeout khi có text mới sinh ra (tránh timeout oan)
+    if (currentTaskPromise && currentTaskPromise.id === taskId) {
+        clearTimeout(currentTaskPromise.timeout);
+        currentTaskPromise.timeout = setTimeout(() => {
+            if (currentTaskPromise && currentTaskPromise.id === taskId) {
+                currentTaskPromise.reject("Timeout: AI ngưng phản hồi quá lâu.");
+                currentTaskPromise = null;
+            }
+        }, 120000);
+    }
+
+    const streamRes = activeStreams.get(taskId);
+    if (streamRes && chunk) {
+        // Đẩy thẳng chunk cho client
+        streamRes.write(`data: ${JSON.stringify({ 
+            id: "chatcmpl-" + taskId, 
+            object: "chat.completion.chunk", 
+            choices: [{ delta: { content: chunk }, finish_reason: null }] 
+        })}\n\n`);
+    }
+    
+    res.json({ received: true });
+});
 app.post('/api/result', (req, res) => {
     const { taskId, success, result, error } = req.body;
     if (currentTaskPromise && currentTaskPromise.id === taskId) {
+        const streamRes = activeStreams.get(taskId);
+
         if (success) {
-            console.log(`[Node] ✅ Đã nhận kết quả cho task [${taskId}] từ Extension!`);
-            currentTaskPromise.resolve(result);
+            console.log(`[Node] ✅ Đã nhận kết quả HOÀN TẤT cho task [${taskId}]!`);
+            
+            if (streamRes) {
+                // Đóng Stream
+                streamRes.write('data: [DONE]\n\n');
+                streamRes.end();
+                activeStreams.delete(taskId);
+            }
+            currentTaskPromise.resolve(result); // Dành cho non-stream
         } else {
             console.log(`[Node] ❌ Extension báo lỗi cho task [${taskId}]:`, error);
+            if (streamRes) {
+                streamRes.write(`data: ${JSON.stringify({ 
+                    id: "chatcmpl-" + taskId, 
+                    object: "chat.completion.chunk", 
+                    choices: [{ delta: { content: `\n\n[LỖI TỪ EXTENSION: ${error}]` }, finish_reason: "stop" }] 
+                })}\n\n`);
+                streamRes.write('data: [DONE]\n\n');
+                streamRes.end();
+                activeStreams.delete(taskId);
+            }
             currentTaskPromise.reject(error);
         }
+        
         clearTimeout(currentTaskPromise.timeout);
         currentTaskPromise = null;
     }
@@ -261,44 +312,40 @@ app.post('/v1/chat/completions', async (req, res) => {
     const prompt = messages.map(m => `${m.role.toUpperCase()}:\n${m.content}`).join('\n\n');
     const taskId = Date.now().toString();
 
-    console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId})`);
+    console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Stream: ${stream ? 'Bật' : 'Tắt'}`);
+
+    if (stream) {
+        // Set Header cho SSE
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        activeStreams.set(taskId, res);
+    }
 
     try {
         const resultText = await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 if (currentTaskPromise && currentTaskPromise.id === taskId) currentTaskPromise = null;
                 console.log(`[Node] ⏰ Hết giờ (Timeout) cho task [${taskId}]!`);
+                
+                if (stream) {
+                    res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[Timeout]` }, finish_reason: "stop" }] })}\n\n`);
+                    res.write('data: [DONE]\n\n');
+                    res.end();
+                    activeStreams.delete(taskId);
+                }
                 reject("Timeout: Phản hồi mất quá nhiều thời gian.");
-            }, 300000);
+            }, 120000); 
 
             taskQueue.push({ id: taskId, prompt, resolve, reject, timeout });
         });
 
+        // Xử lý Non-stream
         if (!stream) {
             res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
-        } else {
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-           const chunks =[];
-            for (let i = 0; i < resultText.length; i += 5) { // Gửi mỗi lần 5 ký tự để tạo hiệu ứng gõ
-                chunks.push(resultText.substring(i, i + 5));
-            }
-            chunks.forEach((chunk, index) => {
-                const isLast = index === chunks.length - 1;
-                res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: chunk }, finish_reason: isLast ? "stop" : null }] })}\n\n`);
-            });
-            res.write('data: [DONE]\n\n');
-            res.end();
         }
     } catch (error) {
-        if (!stream) {
-            res.status(500).json({ error: { message: error } });
-        } else {
-            res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[Hệ thống đã bị ngắt]` }, finish_reason: "stop" }] })}\n\n`);
-            res.write('data: [DONE]\n\n');
-            res.end();
-        }
+        if (!stream) res.status(500).json({ error: { message: error } });
     }
 });
 
