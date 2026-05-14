@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const yaml = require('js-yaml'); // Thư viện đọc file .md của AgentSkill
+const Fuse = require('fuse.js'); // THÊM DÒNG NÀY
 
 const app = express();
 app.use(cors());
@@ -174,37 +175,13 @@ app.get('/api/skills', (req, res) => {
     });
     res.json(declarations);
 });
-
 app.get('/api/system-prompt', (req, res) => {
     const promptPath = path.join(__dirname, 'system_prompt.md');
     try {
         if (fs.existsSync(promptPath)) {
             let content = fs.readFileSync(promptPath, 'utf8');
-
-            // --- TỰ ĐỘNG NHÚNG BỘ NHỚ VÀO SYSTEM PROMPT ---
-            // Đọc các file ghi nhớ nếu chúng tồn tại trong thư mục chạy Server
-            const memoryDir = path.join(process.cwd(), '.agent_memory');
-            let memoryContext = "";
-
-            if (fs.existsSync(memoryDir)) {
-                const prefPath = path.join(memoryDir, 'PREFERENCES.md');
-                if (fs.existsSync(prefPath)) {
-                    memoryContext += `\n--- SỞ THÍCH CỦA USER (PREFERENCES.md) ---\n${fs.readFileSync(prefPath, 'utf8')}\n`;
-                }
-
-                const errPath = path.join(memoryDir, 'ERRORS.md');
-                if (fs.existsSync(errPath)) {
-                    memoryContext += `\n--- LỖI CẦN TRÁNH (ERRORS.md) ---\n${fs.readFileSync(errPath, 'utf8')}\n`;
-                }
-            }
-
-            // Nếu có dữ liệu trong bộ nhớ, tiêm thẳng vào cuối prompt
-            if (memoryContext.trim() !== "") {
-                content += `\n\n=================================\n🧠 BỘ NHỚ CỦA BẠN (Hệ thống tự động nạp vào):\n${memoryContext}=================================\n`;
-                // Dặn dò thêm AI phải dùng bộ nhớ này
-                content += `\nLƯU Ý QUAN TRỌNG: Hãy LUÔN LUÔN tuân thủ các quy tắc trong BỘ NHỚ trên khi đưa ra quyết định hoặc sinh code!`;
-            }
-
+            // Ghi chú: Ký ức động (Dynamic Memory) sẽ được tiêm trực tiếp vào từng câu chat 
+            // ở API /v1/chat/completions thay vì nạp cứng vào System Prompt.
             res.json({ success: true, prompt: content });
         } else {
             res.json({ success: false, error: "File system_prompt.md không tồn tại." });
@@ -348,13 +325,52 @@ app.post('/api/result', (req, res) => {
 
 app.post('/v1/chat/completions', async (req, res) => {
     const { messages, stream } = req.body;
-    const prompt = messages.map(m => `${m.role.toUpperCase()}:\n${m.content}`).join('\n\n');
-    const taskId = Date.now().toString();
+    
+    // 1. LẤY CÂU HỎI CUỐI CÙNG CỦA USER ĐỂ PHÂN TÍCH
+    const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
+    
+    // ==========================================
+    // 🧠 CƠ CHẾ GỢI NHỚ (MEMORY RECALL)
+    // ==========================================
+    let injectedMemory = "";
+    const memoryFile = path.join(process.cwd(), '.agent_memory', 'episodic.json');
+    
+    if (fs.existsSync(memoryFile)) {
+        try {
+            const memories = JSON.parse(fs.readFileSync(memoryFile, 'utf8'));
+            if (memories.length > 0) {
+                // Cấu hình AI tìm kiếm mờ (Fuzzy Search)
+                const fuse = new Fuse(memories, {
+                    keys: ['tags', 'situation'], // Chỉ tìm theo tag và tình huống
+                    threshold: 0.4, // Độ chính xác (0.0 là chính xác tuyệt đối, 1.0 là khớp bừa)
+                    useExtendedSearch: true
+                });
+                
+                const results = fuse.search(lastUserMessage).slice(0, 2); // Chỉ lấy 2 bài học liên quan nhất
+                
+                if (results.length > 0) {
+                    injectedMemory = "\n\n[HỆ THỐNG GỢI Ý TỪ BỘ NHỚ QUÁ KHỨ]:\n" + 
+                        results.map(r => `- Khi gặp: "${r.item.situation}" -> Phải làm: "${r.item.solution}"`).join('\n') +
+                        "\nLưu ý: Hãy ưu tiên áp dụng giải pháp này nếu thấy phù hợp.";
+                    
+                    console.log(`[Node] ⚡ Đã kích hoạt trí nhớ: Tìm thấy ${results.length} bài học liên quan!`);
+                }
+            }
+        } catch(e) { console.warn("[Node] Lỗi đọc bộ nhớ:", e.message); }
+    }
 
+    // Ghép bộ nhớ vào prompt cuối cùng trước khi gửi cho AI
+    const compiledPrompt = messages.map(m => {
+        if (m.role === 'user' && m.content === lastUserMessage && injectedMemory) {
+            return `USER:\n${m.content}${injectedMemory}`;
+        }
+        return `${m.role.toUpperCase()}:\n${m.content}`;
+    }).join('\n\n');
+
+    const taskId = Date.now().toString();
     console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Stream: ${stream ? 'Bật' : 'Tắt'}`);
 
     if (stream) {
-        // Set Header cho SSE
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
@@ -365,8 +381,6 @@ app.post('/v1/chat/completions', async (req, res) => {
         const resultText = await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 if (currentTaskPromise && currentTaskPromise.id === taskId) currentTaskPromise = null;
-                console.log(`[Node] ⏰ Hết giờ (Timeout) cho task [${taskId}]!`);
-                
                 if (stream) {
                     res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[Timeout]` }, finish_reason: "stop" }] })}\n\n`);
                     res.write('data: [DONE]\n\n');
@@ -376,10 +390,9 @@ app.post('/v1/chat/completions', async (req, res) => {
                 reject("Timeout: Phản hồi mất quá nhiều thời gian.");
             }, 120000); 
 
-            taskQueue.push({ id: taskId, prompt, resolve, reject, timeout });
+            taskQueue.push({ id: taskId, prompt: compiledPrompt, resolve, reject, timeout });
         });
 
-        // Xử lý Non-stream
         if (!stream) {
             res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
         }

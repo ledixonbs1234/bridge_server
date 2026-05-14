@@ -1,0 +1,13 @@
+[
+  {
+    "id": "1778723562665",
+    "date": "2026-05-14T01:52:42.665Z",
+    "tags": [
+      "os_context",
+      "environment",
+      "windows"
+    ],
+    "situation": "Cần ghi nhớ thông tin môi trường hệ thống (OS Context) để định hướng làm việc trong các phiên làm việc sau.",
+    "solution": "Hệ điều hành: Windows 10 (10.0.19045), Home: C:\\Users\\Xon, Working Directory mặc định: H:\\DATA\\NODEJS\\bridge_server."
+  }
+]
