@@ -4,15 +4,69 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const yaml = require('js-yaml'); // Thư viện đọc file .md của AgentSkill
-const Fuse = require('fuse.js'); // THÊM DÒNG NÀY
+const Fuse = require('fuse.js');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 const EXTENSION_PORT = 54321;
 let taskQueue =[];
 let currentTaskPromise = null;
+
+// =================================================================
+// 🔌 PROVIDER SYSTEM (Multi-AI Support)
+// =================================================================
+let activeProvider = null;
+let providerConfig = {};
+
+function loadProviderConfig() {
+    const configPath = path.join(__dirname, 'config.json');
+    try {
+        if (fs.existsSync(configPath)) {
+            providerConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        } else {
+            console.warn('[Node] ⚠️ config.json không tồn tại, dùng mặc định Gemini Studio.');
+            providerConfig = { activeProvider: 'gemini-studio', providers: {} };
+        }
+    } catch (err) {
+        console.error('[Node] ❌ Lỗi đọc config.json:', err.message);
+        providerConfig = { activeProvider: 'gemini-studio', providers: {} };
+    }
+
+    const providerName = providerConfig.activeProvider || 'gemini-studio';
+    const providerSettings = providerConfig.providers?.[providerName] || {};
+
+    try {
+        // Map tên provider -> file adapter
+        const providerMap = {
+            'gemini-studio': './providers/gemini-studio',
+            'openai': './providers/openai',
+            'openai-compatible': './providers/openai',  // Dùng chung adapter OpenAI
+            'claude': './providers/claude',
+            'ollama': './providers/ollama',
+            'gemini-api': './providers/gemini-api',
+        };
+
+        const adapterPath = providerMap[providerName];
+        if (!adapterPath) {
+            console.warn(`[Node] ⚠️ Provider "${providerName}" chưa có adapter, fallback về gemini-studio.`);
+            const GeminiStudio = require('./providers/gemini-studio');
+            activeProvider = new GeminiStudio(providerSettings);
+        } else {
+            const ProviderClass = require(adapterPath);
+            activeProvider = new ProviderClass(providerSettings);
+        }
+
+        console.log(`[Node] 🔌 Provider: \x1b[35m${activeProvider.getDisplayName()}\x1b[0m ${activeProvider.isExtensionBased ? '(Chrome Extension)' : '(Direct API)'}`);
+    } catch (err) {
+        console.error(`[Node] ❌ Lỗi nạp provider "${providerName}":`, err.message);
+        const GeminiStudio = require('./providers/gemini-studio');
+        activeProvider = new GeminiStudio({});
+    }
+}
+
+loadProviderConfig();
 
 // =================================================================
 // 🛡️ HỆ THỐNG BẢO MẬT & ĐIỀU KHIỂN BẰNG BÀN PHÍM
@@ -323,87 +377,227 @@ app.post('/api/result', (req, res) => {
     res.json({ received: true });
 });
 
-app.post('/v1/chat/completions', async (req, res) => {
-    const { messages, stream } = req.body;
-    
-    // 1. LẤY CÂU HỎI CUỐI CÙNG CỦA USER ĐỂ PHÂN TÍCH
-    const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
-    
-    // ==========================================
-    // 🧠 CƠ CHẾ GỢI NHỚ (MEMORY RECALL)
-    // ==========================================
-    let injectedMemory = "";
-    const memoryFile = path.join(process.cwd(), '.agent_memory', 'episodic.json');
-    
-    if (fs.existsSync(memoryFile)) {
-        try {
-            const memories = JSON.parse(fs.readFileSync(memoryFile, 'utf8'));
-            if (memories.length > 0) {
-                // Cấu hình AI tìm kiếm mờ (Fuzzy Search)
-                const fuse = new Fuse(memories, {
-                    keys: ['tags', 'situation'], // Chỉ tìm theo tag và tình huống
-                    threshold: 0.4, // Độ chính xác (0.0 là chính xác tuyệt đối, 1.0 là khớp bừa)
-                    useExtendedSearch: true
-                });
-                
-                const results = fuse.search(lastUserMessage).slice(0, 2); // Chỉ lấy 2 bài học liên quan nhất
-                
-                if (results.length > 0) {
-                    injectedMemory = "\n\n[HỆ THỐNG GỢI Ý TỪ BỘ NHỚ QUÁ KHỨ]:\n" + 
-                        results.map(r => `- Khi gặp: "${r.item.situation}" -> Phải làm: "${r.item.solution}"`).join('\n') +
-                        "\nLưu ý: Hãy ưu tiên áp dụng giải pháp này nếu thấy phù hợp.";
-                    
-                    console.log(`[Node] ⚡ Đã kích hoạt trí nhớ: Tìm thấy ${results.length} bài học liên quan!`);
-                }
-            }
-        } catch(e) { console.warn("[Node] Lỗi đọc bộ nhớ:", e.message); }
+// =================================================================
+// 🔧 HELPER: Chạy Skill cho API Provider (dùng chung logic permission)
+// =================================================================
+async function executeSkillForProvider(functionName, funcArgs) {
+    console.log(`\n[Node] ⚙️ AI yêu cầu chạy hàm: [${functionName}]`);
+    if (functionName !== 'execute_terminal_command' && !functionName.startsWith('workflow_') && functionName !== 'get_os_context') {
+        console.log(`[Node] 📦 Tham số:`, funcArgs);
     }
 
-    // Ghép bộ nhớ vào prompt cuối cùng trước khi gửi cho AI
-    const compiledPrompt = messages.map(m => {
-        if (m.role === 'user' && m.content === lastUserMessage && injectedMemory) {
-            return `USER:\n${m.content}${injectedMemory}`;
-        }
-        return `${m.role.toUpperCase()}:\n${m.content}`;
-    }).join('\n\n');
+    const skill = SKILL_REGISTRY[functionName];
+    if (!skill) {
+        return JSON.stringify({ status: "error", error_message: `Function '${functionName}' is not defined in system.` });
+    }
 
+    try {
+        const result = await skill.handler(funcArgs);
+        console.log(`[Node] ✅ Chạy hàm thành công.`);
+        return JSON.stringify({ status: "success", data: result });
+    } catch (error) {
+        console.error(`[Node] ❌ Lỗi khi chạy hàm:`, error.message);
+        let suggestion = "Vui lòng kiểm tra lại tham số.";
+        if (error.message.includes("không tồn tại")) suggestion = "Hãy dùng list_directory để kiểm tra thư mục trước.";
+        if (error.message.includes("PERMISSION_DENIED")) suggestion = "Người dùng đã từ chối lệnh này.";
+        if (error.message.includes("search_string")) suggestion = "Đoạn code tìm không khớp. Hãy đọc lại file rồi thử lại.";
+        return JSON.stringify({ status: "error", error_message: error.message, suggestion });
+    }
+}
+
+// =================================================================
+// 🧠 HELPER: Memory Recall (dùng chung cho cả 2 flow)
+// =================================================================
+function recallMemory(lastUserMessage) {
+    const memoryFile = path.join(process.cwd(), '.agent_memory', 'episodic.json');
+    if (!fs.existsSync(memoryFile)) return "";
+    try {
+        const memories = JSON.parse(fs.readFileSync(memoryFile, 'utf8'));
+        if (memories.length === 0) return "";
+        const fuse = new Fuse(memories, {
+            keys: ['tags', 'situation'],
+            threshold: 0.4,
+            useExtendedSearch: true
+        });
+        const results = fuse.search(lastUserMessage).slice(0, 2);
+        if (results.length > 0) {
+            console.log(`[Node] ⚡ Đã kích hoạt trí nhớ: Tìm thấy ${results.length} bài học liên quan!`);
+            return "\n\n[HỆ THỐNG GỢI Ý TỪ BỘ NHỚ QUÁ KHỨ]:\n" +
+                results.map(r => `- Khi gặp: "${r.item.situation}" -> Phải làm: "${r.item.solution}"`).join('\n') +
+                "\nLưu ý: Hãy ưu tiên áp dụng giải pháp này nếu thấy phù hợp.";
+        }
+    } catch (e) { console.warn("[Node] Lỗi đọc bộ nhớ:", e.message); }
+    return "";
+}
+
+// =================================================================
+// 📡 API: Provider Info & Health Check
+// =================================================================
+app.get('/api/provider', (req, res) => {
+    res.json({
+        active: providerConfig.activeProvider,
+        name: activeProvider?.getDisplayName(),
+        isExtensionBased: activeProvider?.isExtensionBased || false,
+        available: Object.keys(providerConfig.providers || {})
+    });
+});
+
+app.post('/api/provider/switch', (req, res) => {
+    const { provider } = req.body;
+    if (!provider) return res.status(400).json({ error: 'Thiếu tham số provider' });
+    if (!providerConfig.providers?.[provider]) {
+        return res.status(400).json({ error: `Provider "${provider}" không tồn tại trong config.json` });
+    }
+    // Ghi lại config
+    providerConfig.activeProvider = provider;
+    const configPath = path.join(__dirname, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
+    // Reload provider
+    loadProviderConfig();
+    res.json({ success: true, message: `Đã chuyển sang provider: ${activeProvider.getDisplayName()}` });
+});
+
+app.get('/api/config', (req, res) => {
+    res.json(providerConfig);
+});
+
+app.post('/api/config', (req, res) => {
+    const { activeProvider: newActive, providers } = req.body;
+    
+    if (newActive) providerConfig.activeProvider = newActive;
+    if (providers) {
+        for (const [key, value] of Object.entries(providers)) {
+            if (providerConfig.providers[key]) {
+                providerConfig.providers[key] = { ...providerConfig.providers[key], ...value };
+            }
+        }
+    }
+    
+    const configPath = path.join(__dirname, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
+    
+    // Reload active provider
+    loadProviderConfig();
+    res.json({ success: true, message: 'Cấu hình đã được lưu thành công' });
+});
+
+// =================================================================
+// 🚀 MAIN ENDPOINT: /v1/chat/completions (Hỗ trợ cả 2 flow)
+// =================================================================
+app.post('/v1/chat/completions', async (req, res) => {
+    const { messages, stream } = req.body;
+    const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
+    const injectedMemory = recallMemory(lastUserMessage);
     const taskId = Date.now().toString();
-    console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Stream: ${stream ? 'Bật' : 'Tắt'}`);
+
+    console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()} - Stream: ${stream ? 'Bật' : 'Tắt'}`);
+
+    // =====================================================
+    // NHÁNH 1: GEMINI STUDIO (Chrome Extension - flow cũ)
+    // =====================================================
+    if (activeProvider.isExtensionBased) {
+        const compiledPrompt = messages.map(m => {
+            if (m.role === 'user' && m.content === lastUserMessage && injectedMemory) {
+                return `USER:\n${m.content}${injectedMemory}`;
+            }
+            return `${m.role.toUpperCase()}:\n${m.content}`;
+        }).join('\n\n');
+
+        if (stream) {
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            activeStreams.set(taskId, res);
+        }
+
+        try {
+            const resultText = await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    if (currentTaskPromise && currentTaskPromise.id === taskId) currentTaskPromise = null;
+                    if (stream) {
+                        res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[Timeout]` }, finish_reason: "stop" }] })}\n\n`);
+                        res.write('data: [DONE]\n\n');
+                        res.end();
+                        activeStreams.delete(taskId);
+                    }
+                    reject("Timeout: Phản hồi mất quá nhiều thời gian.");
+                }, 120000);
+                taskQueue.push({ id: taskId, prompt: compiledPrompt, resolve, reject, timeout });
+            });
+
+            if (!stream) {
+                res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
+            }
+        } catch (error) {
+            if (!stream) res.status(500).json({ error: { message: error } });
+        }
+        return; // Kết thúc nhánh Gemini Studio
+    }
+
+    // =====================================================
+    // NHÁNH 2: API PROVIDERS (OpenAI, Claude, Ollama...)
+    // Gọi trực tiếp API, KHÔNG dùng task queue
+    // =====================================================
+    
+    // Inject memory vào messages
+    const enrichedMessages = messages.map(m => {
+        if (m.role === 'user' && m.content === lastUserMessage && injectedMemory) {
+            return { ...m, content: m.content + injectedMemory };
+        }
+        return m;
+    });
+
+    // Đọc system prompt
+    let systemPrompt = "";
+    const promptPath = path.join(__dirname, 'system_prompt.md');
+    if (fs.existsSync(promptPath)) {
+        systemPrompt = fs.readFileSync(promptPath, 'utf8');
+    }
 
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
-        activeStreams.set(taskId, res);
     }
 
     try {
-        const resultText = await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => {
-                if (currentTaskPromise && currentTaskPromise.id === taskId) currentTaskPromise = null;
-                if (stream) {
-                    res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[Timeout]` }, finish_reason: "stop" }] })}\n\n`);
-                    res.write('data: [DONE]\n\n');
-                    res.end();
-                    activeStreams.delete(taskId);
-                }
-                reject("Timeout: Phản hồi mất quá nhiều thời gian.");
-            }, 120000); 
-
-            taskQueue.push({ id: taskId, prompt: compiledPrompt, resolve, reject, timeout });
+        const resultText = await activeProvider.chat({
+            messages: enrichedMessages,
+            skillRegistry: SKILL_REGISTRY,
+            executeSkill: executeSkillForProvider,
+            systemPrompt: systemPrompt,
+            maxSteps: 15,
+            onStreamChunk: stream ? (chunk) => {
+                res.write(`data: ${JSON.stringify({
+                    id: "chatcmpl-" + taskId,
+                    object: "chat.completion.chunk",
+                    choices: [{ delta: { content: chunk }, finish_reason: null }]
+                })}\n\n`);
+            } : null
         });
 
-        if (!stream) {
+        if (stream) {
+            res.write('data: [DONE]\n\n');
+            res.end();
+        } else {
             res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
         }
     } catch (error) {
-        if (!stream) res.status(500).json({ error: { message: error } });
+        console.error(`[Node] ❌ Provider error:`, error.message);
+        if (stream) {
+            res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[LỖI: ${error.message}]` }, finish_reason: "stop" }] })}\n\n`);
+            res.write('data: [DONE]\n\n');
+            res.end();
+        } else {
+            res.status(500).json({ error: { message: error.message } });
+        }
     }
 });
 
 app.listen(EXTENSION_PORT, () => {
-    console.log(`🚀 Bridge Server Agent đang chạy ở http://localhost:${EXTENSION_PORT}`);
+    console.log(`\n🚀 Bridge Server Agent đang chạy ở http://localhost:${EXTENSION_PORT}`);
     console.log(`=================================================`);
+    console.log(`🔌 Active Provider: ${activeProvider.getDisplayName()}`);
     console.log(`⌨️  PHÍM TẮT: [Ctrl+R] Reset | [Ctrl+C] Tắt | [y/n/a] Đồng ý lệnh`);
     console.log(`=================================================\n`);
 });

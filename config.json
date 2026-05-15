@@ -1,0 +1,53 @@
+{
+  "activeProvider": "gemini-studio",
+  "providers": {
+    "gemini-studio": {
+      "name": "Gemini Studio (Free - Chrome Extension)",
+      "enabled": true,
+      "description": "Dùng Chrome Extension để điều khiển AI Studio (miễn phí, không cần API key)"
+    },
+    "openai": {
+      "name": "OpenAI (GPT-4o / GPT-4o-mini)",
+      "enabled": false,
+      "apiKey": "",
+      "model": "gpt-4o-mini",
+      "baseUrl": "https://api.openai.com/v1",
+      "maxTokens": 4096,
+      "temperature": 0.7
+    },
+    "gemini-api": {
+      "name": "Google Gemini API (Direct)",
+      "enabled": false,
+      "apiKey": "",
+      "model": "gemini-2.5-flash",
+      "maxTokens": 8192,
+      "temperature": 0.7
+    },
+    "claude": {
+      "name": "Anthropic Claude",
+      "enabled": false,
+      "apiKey": "",
+      "model": "claude-sonnet-4-20250514",
+      "baseUrl": "https://api.anthropic.com",
+      "maxTokens": 4096,
+      "temperature": 0.7
+    },
+    "ollama": {
+      "name": "Ollama (Local LLM)",
+      "enabled": false,
+      "model": "llama3.1",
+      "baseUrl": "http://localhost:11434",
+      "maxTokens": 4096,
+      "temperature": 0.7
+    },
+    "openai-compatible": {
+      "name": "OpenAI-Compatible (DeepSeek, Groq, etc.)",
+      "enabled": false,
+      "apiKey": "",
+      "model": "deepseek-chat",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "maxTokens": 4096,
+      "temperature": 0.7
+    }
+  }
+}

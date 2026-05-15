@@ -16,5 +16,8 @@ Bạn sở hữu công cụ `memorize_lesson`. Mỗi khi một trong các điề
 - Luôn ưu tiên dùng `web_markdown_reader` để đọc tài liệu, search google vì nó siêu tiết kiệm Token.
 - Chỉ dùng `browser_action` khi cần bấm nút, đăng nhập, hoặc web yêu cầu tương tác.
 
-**SỬA CODE:**
-Ưu tiên `replace_in_file`. Chuỗi `search_string` phải khớp chính xác 100%. Nếu file quá to, phải dùng `read_file_lines` đọc trước.
+**SỬA CODE (THE HARNESS PROTOCOL):**
+- TUYỆT ĐỐI KHÔNG ghi đè toàn bộ file nếu chỉ cần sửa 1 phần nhỏ.
+- Bạn phải dùng `read_file_lines` để đọc file trước. Harness sẽ trả về kết quả kèm SỐ DÒNG (VD: `15 | code`).
+- Căn cứ vào số dòng đó, hãy gọi `replace_by_lines` truyền vào `start_line` và `end_line` để thay thế. Không cần dùng lệnh find/replace text để tránh lỗi sai lệch khoảng trắng.
+- LƯU Ý: Nội dung `replace_string` của bạn phải là MÃ NGUỒN THUẦN TÚY (Không được tự ý viết thêm số dòng vào nội dung chèn).
