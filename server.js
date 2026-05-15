@@ -406,30 +406,57 @@ async function executeSkillForProvider(functionName, funcArgs) {
 }
 
 // =================================================================
-// 🧠 HELPER: Memory Recall (dùng chung cho cả 2 flow)
+// 🧠 HELPER: Dynamic Contextual Memory (Trí nhớ động phân cấp)
 // =================================================================
-function recallMemory(lastUserMessage) {
-    const memoryFile = path.join(process.cwd(), '.agent_memory', 'episodic.json');
-    if (!fs.existsSync(memoryFile)) return "";
-    try {
-        const memories = JSON.parse(fs.readFileSync(memoryFile, 'utf8'));
-        if (memories.length === 0) return "";
-        const fuse = new Fuse(memories, {
-            keys: ['tags', 'situation'],
-            threshold: 0.4,
-            useExtendedSearch: true
-        });
-        const results = fuse.search(lastUserMessage).slice(0, 2);
-        if (results.length > 0) {
-            console.log(`[Node] ⚡ Đã kích hoạt trí nhớ: Tìm thấy ${results.length} bài học liên quan!`);
-            return "\n\n[HỆ THỐNG GỢI Ý TỪ BỘ NHỚ QUÁ KHỨ]:\n" +
-                results.map(r => `- Khi gặp: "${r.item.situation}" -> Phải làm: "${r.item.solution}"`).join('\n') +
-                "\nLưu ý: Hãy ưu tiên áp dụng giải pháp này nếu thấy phù hợp.";
-        }
-    } catch (e) { console.warn("[Node] Lỗi đọc bộ nhớ:", e.message); }
-    return "";
-}
+function recallMemory(lastUserMessage, allMessagesContext = "") {
+    const memoryDir = path.join(__dirname, '.agent_memory');
+    if (!fs.existsSync(memoryDir)) return "";
 
+    let injectedContext = "\n\n[HỆ THỐNG TRÍ NHỚ (CONTEXTUAL MEMORY)]:\nLưu ý: Đây là những nguyên tắc bắt buộc từ người dùng. Hãy áp dụng ngay:\n";
+    let hasMemory = false;
+
+    // 1. GLOBAL RULES (Luôn luôn nạp - Giống biến môi trường Global)
+    const globalFile = path.join(memoryDir, 'rules', 'rules_global.md');
+    if (fs.existsSync(globalFile)) {
+        injectedContext += `\n--- QUY TẮC CHUNG ---\n${fs.readFileSync(globalFile, 'utf8')}\n`;
+        hasMemory = true;
+    }
+
+    // 2. SITUATIONAL RULES (Chỉ nạp khi nhắc trúng từ khóa - Giống Environment Variables)
+    const rulesDir = path.join(memoryDir, 'rules');
+    if (fs.existsSync(rulesDir)) {
+        const ruleFiles = fs.readdirSync(rulesDir).filter(f => f.endsWith('.md') && f !== 'rules_global.md');
+        const searchSpace = (lastUserMessage + " " + allMessagesContext).toLowerCase();
+        
+        for (const file of ruleFiles) {
+            const keyword = file.replace('.md', ''); // Ví dụ: 'react.md' -> 'react'
+            // Chỉ tiêm bộ nhớ nếu user nhắc đến từ khóa (vd: react, sql, css)
+            if (searchSpace.includes(keyword)) {
+                injectedContext += `\n--- QUY TẮC CHO [${keyword.toUpperCase()}] ---\n${fs.readFileSync(path.join(rulesDir, file), 'utf8')}\n`;
+                hasMemory = true;
+            }
+        }
+    }
+
+    // 3. EPISODIC MEMORY (RAG: Thuật toán tìm lỗi cũ của bạn)
+    const episodicFile = path.join(memoryDir, 'episodic.json');
+    if (fs.existsSync(episodicFile)) {
+        try {
+            const memories = JSON.parse(fs.readFileSync(episodicFile, 'utf8'));
+            if (memories.length > 0) {
+                const fuse = new Fuse(memories, { keys: ['tags', 'situation'], threshold: 0.4 });
+                const results = fuse.search(lastUserMessage).slice(0, 2);
+                if (results.length > 0) {
+                    injectedContext += "\n--- BÀI HỌC TỪ LỖI TRONG QUÁ KHỨ ---\n";
+                    injectedContext += results.map(r => `- Vấn đề: "${r.item.situation}" -> Xử lý: "${r.item.solution}"`).join('\n');
+                    hasMemory = true;
+                }
+            }
+        } catch (e) { console.warn("[Node] Lỗi đọc episodic memory:", e.message); }
+    }
+
+    return hasMemory ? injectedContext : "";
+}
 // =================================================================
 // 📡 API: Provider Info & Health Check
 // =================================================================
@@ -488,6 +515,8 @@ app.post('/v1/chat/completions', async (req, res) => {
     const { messages, stream } = req.body;
     const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
     const injectedMemory = recallMemory(lastUserMessage);
+    //Hàm truyền lịch sử chat, khi dùng Ai Studio trên web thì không cần
+    // const injectedMemory = recallMemory(lastUserMessage, messages.map(m => m.content).join(" "));
     const taskId = Date.now().toString();
 
     console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()} - Stream: ${stream ? 'Bật' : 'Tắt'}`);

@@ -1,13 +1,85 @@
 [
   {
-    "id": "1778723562665",
-    "date": "2026-05-14T01:52:42.665Z",
+    "id": "1778850391355",
+    "date": "2026-05-15T13:06:31.355Z",
     "tags": [
-      "os_context",
-      "environment",
-      "windows"
+      "nodejs",
+      "file_system",
+      "đệ_quy",
+      "nâng_cấp_tính_năng"
     ],
-    "situation": "Cần ghi nhớ thông tin môi trường hệ thống (OS Context) để định hướng làm việc trong các phiên làm việc sau.",
-    "solution": "Hệ điều hành: Windows 10 (10.0.19045), Home: C:\\Users\\Xon, Working Directory mặc định: H:\\DATA\\NODEJS\\bridge_server."
+    "situation": "Người dùng yêu cầu nâng cấp chức năng 'list_directory' để có thể đệ quy xem thư mục con tối đa 3 tầng.",
+    "solution": "Cập nhật hàm 'list_directory' trong 'file_system.js', thêm tham số 'depth' vào parameters, và sử dụng một hàm đệ quy helper bên trong handler để duyệt cây thư mục theo độ sâu được chỉ định (tối đa 3)."
+  },
+  {
+    "id": "1778850689796",
+    "date": "2026-05-15T13:11:29.797Z",
+    "tags": [
+      "javascript",
+      "html",
+      "web_development",
+      "feature_implementation"
+    ],
+    "situation": "Người dùng yêu cầu thêm nút 'hỏi lại' (retry) vào giao diện web chat. Tôi đã thêm nút vào sidebar và bổ sung hàm JavaScript `retryLast` để tìm câu hỏi cuối cùng của người dùng và gửi lại.",
+    "solution": "Sử dụng `replace_by_lines` để thêm phần tử HTML vào sidebar và thêm hàm JavaScript để xử lý logic tìm kiếm tin nhắn cuối cùng từ mảng `conversation`. Đảm bảo gọi lại `lucide.createIcons()` nếu cần thiết (trong trường hợp này, `lucide.createIcons()` được gọi ở cuối script, nên nó sẽ tự quét lại)."
+  },
+  {
+    "id": "1778851831330",
+    "date": "2026-05-15T13:30:31.331Z",
+    "tags": [
+      "javascript",
+      "chrome-extension",
+      "async-await",
+      "delay"
+    ],
+    "situation": "Người dùng muốn thêm delay trong hàm async trong file JavaScript của chrome extension.",
+    "solution": "Sử dụng: 'await new Promise(resolve => setTimeout(resolve, 1000));' để tạo delay 1000ms."
+  },
+  {
+    "id": "1778851963366",
+    "date": "2026-05-15T13:32:43.366Z",
+    "tags": [
+      "windows",
+      "shortcut",
+      "powershell",
+      "tips"
+    ],
+    "situation": "Người dùng muốn biết nội dung bên trong file .lnk (shortcut) trên Windows.",
+    "solution": "Sử dụng PowerShell để truy xuất thuộc tính TargetPath của file .lnk bằng ComObject 'WScript.Shell'."
+  },
+  {
+    "id": "1778854589802",
+    "date": "2026-05-15T14:16:29.802Z",
+    "tags": [
+      "python",
+      "unicode",
+      "windows",
+      "terminal"
+    ],
+    "situation": "Chạy file Python có chứa ký tự Tiếng Việt (Unicode) trên Windows terminal bị lỗi 'UnicodeEncodeError: 'charmap' codec' do encoding mặc định là cp1252.",
+    "solution": "Chuyển chuỗi in ra thành tiếng Anh hoặc sử dụng mã hóa UTF-8 khi chạy lệnh hoặc khi in (ví dụ: dùng sys.stdout.reconfigure(encoding='utf-8')). Cách đơn giản nhất là tránh dùng ký tự đặc biệt trong code nếu chỉ để test nhanh."
+  },
+  {
+    "id": "1778855352192",
+    "date": "2026-05-15T14:29:12.192Z",
+    "tags": [
+      "python",
+      "unicode",
+      "windows",
+      "encoding"
+    ],
+    "situation": "Chạy file Python chứa ký tự Vietnamese trên terminal Windows bị lỗi UnicodeEncodeError (cp1252).",
+    "solution": "Thêm sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8') vào đầu file để ép Python dùng UTF-8 cho output."
+  },
+  {
+    "id": "1778855792621",
+    "date": "2026-05-15T14:36:32.621Z",
+    "tags": [
+      "python",
+      "tiếng_việt",
+      "encoding"
+    ],
+    "situation": "Yêu cầu viết hàm đảo ngược chuỗi tiếng Việt và chạy trên Windows Terminal.",
+    "solution": "Sử dụng sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8') để tránh lỗi font/encoding khi in tiếng Việt ra terminal và dùng s[::-1] để đảo ngược chuỗi."
   }
 ]

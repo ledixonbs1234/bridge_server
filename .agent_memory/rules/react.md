@@ -1,0 +1,1 @@
+- Sử dụng Function Components thay vì Class Components.

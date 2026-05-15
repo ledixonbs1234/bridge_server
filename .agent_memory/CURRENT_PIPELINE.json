@@ -1,0 +1,39 @@
+{
+  "stages": [
+    {
+      "steps": [
+        {
+          "task": "Chạy npm start để xem ứng dụng có lỗi không",
+          "tool": "execute_terminal_command",
+          "status": "PENDING"
+        }
+      ],
+      "name": "Khởi động ứng dụng",
+      "status": "FAILED",
+      "notes": "npm start thất bại vì không có script 'start' trong package.json."
+    },
+    {
+      "name": "Kiểm tra lỗi và Fix",
+      "steps": [
+        {
+          "tool": "replace_by_lines",
+          "task": "Phân tích lỗi (nếu có) và sửa code theo chuẩn Function Components",
+          "status": "PENDING"
+        }
+      ],
+      "status": "PENDING"
+    },
+    {
+      "steps": [
+        {
+          "tool": "execute_terminal_command",
+          "task": "Chạy lại ứng dụng để đảm bảo hết lỗi",
+          "status": "PENDING"
+        }
+      ],
+      "name": "Xác nhận",
+      "status": "PENDING"
+    }
+  ],
+  "pipeline_name": "Fix React App Error"
+}
