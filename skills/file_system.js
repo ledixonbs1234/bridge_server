@@ -4,17 +4,42 @@ const os = require('os');
 
 module.exports = {
     "list_directory": {
-        description: "Lấy danh sách các tệp và thư mục trong một đường dẫn cụ thể. Dùng để xem máy tính đang có gì.",
+        description: "Lấy danh sách các tệp và thư mục trong một đường dẫn cụ thể (hỗ trợ đệ quy tối đa 3 tầng). Dùng để xem máy tính đang có gì.",
         parameters: {
             type: "object",
-            properties: { path: { type: "string", description: "Đường dẫn tuyệt đối đến thư mục. Dùng 'desktop' để lấy Desktop." } },
+            properties: { 
+                path: { type: "string", description: "Đường dẫn tuyệt đối đến thư mục. Dùng 'desktop' để lấy Desktop." },
+                depth: { type: "number", description: "Độ sâu muốn xem (tối đa 3)." }
+            },
             required: ["path"]
         },
         handler: async (args) => {
             const targetPath = args.path === "desktop" ? path.join(os.homedir(), 'Desktop') : args.path;
             if (!fs.existsSync(targetPath)) throw new Error(`Thư mục không tồn tại: ${targetPath}`);
-            const files = fs.readdirSync(targetPath);
-            return { path: targetPath, total: files.length, files: files };
+            
+            const maxDepth = Math.min(args.depth || 1, 3);
+            
+            const getFilesRecursive = (currentPath, currentDepth) => {
+                const entries = fs.readdirSync(currentPath, { withFileTypes: true });
+                const result = [];
+                
+                for (const entry of entries) {
+                    const fullPath = path.join(currentPath, entry.name);
+                    const item = {
+                        name: entry.name,
+                        type: entry.isDirectory() ? 'directory' : 'file',
+                        path: fullPath
+                    };
+                    
+                    if (entry.isDirectory() && currentDepth < maxDepth) {
+                        item.children = getFilesRecursive(fullPath, currentDepth + 1);
+                    }
+                    result.push(item);
+                }
+                return result;
+            };
+
+            return { path: targetPath, files: getFilesRecursive(targetPath, 1) };
         }
     },
 
