@@ -11,17 +11,17 @@ export default {
             properties: {
                 command: { type: "string", description: "Câu lệnh Terminal/CMD cần chạy." },
                 working_directory: { type: "string", description: "Đường dẫn thư mục để chạy lệnh (Mặc định là Home Directory)." },
-                is_background: { 
-                    type: "boolean", 
-                    description: "BẮT BUỘC ĐẶT LÀ TRUE nếu lệnh là chạy server (VD: npm run dev, npm start, node server.js)." 
+                is_background: {
+                    type: "boolean",
+                    description: "BẮT BUỘC ĐẶT LÀ TRUE nếu lệnh là chạy server (VD: npm run dev, npm start, node server.js)."
                 },
-                functionality: { 
-                    type: "string", 
-                    description: "Chức năng của lệnh này (lệnh này sẽ thực hiện việc gì)." 
+                functionality: {
+                    type: "string",
+                    description: "Chức năng của lệnh này (lệnh này sẽ thực hiện việc gì)."
                 },
-                purpose: { 
-                    type: "string", 
-                    description: "Mục đích (vì sao phải chạy lệnh này trong ngữ cảnh hiện tại)." 
+                purpose: {
+                    type: "string",
+                    description: "Mục đích (vì sao phải chạy lệnh này trong ngữ cảnh hiện tại)."
                 }
             },
             required: ["command", "functionality", "purpose"] // Ép buộc AI luôn phải giải thích
@@ -30,13 +30,13 @@ export default {
             const command = args.command;
             const cwd = args.working_directory || os.homedir();
             const isBackground = args.is_background || false;
-            
+
             // Nhận 2 tham số mới từ AI
             const functionality = args.functionality || "Không có mô tả chức năng";
             const purpose = args.purpose || "Không có mô tả mục đích";
 
             if (!global.isAutoApproveAll) {
-                const cmdText = isBackground 
+                const cmdText = isBackground
                     ? chalk.magenta(command) + chalk.bgMagenta.white(' BACKGROUND PROCESS ')
                     : chalk.yellow(command);
 
@@ -48,15 +48,14 @@ ${chalk.bold.green('🔧 Chức năng:')} ${functionality}
 ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
 `;
                 console.log(boxen(promptContent, {
-                    title: chalk.bold.redBright(' ⚠️ YÊU CẦU CHẠY TERMINAL '),
+                    title: chalk.gray(' Action Required '), // Đổi title thành màu xám tiếng Anh
                     padding: 1,
-                    borderColor: 'blue',
+                    borderColor: 'gray', // Đổi viền thành màu xám tối giản
                     borderStyle: 'round'
                 }));
 
-                const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép chạy lệnh này? [y: Yes / a: Yes to All / n: No] : `));
-
-                if (answer === 'a') { global.isAutoApproveAll = true; } 
+                const answer = await global.askPermission(chalk.bold.white(`👉 Allow execution? [y: Yes / a: Yes to All / n: No] : `));
+                if (answer === 'a') { global.isAutoApproveAll = true; }
                 else if (answer !== 'y') { throw new Error("PERMISSION_DENIED: Người dùng đã từ chối."); }
             } else {
                 console.log(`\n⚡ ${chalk.gray('Auto-running:')} ${chalk.yellow(command)}`);
@@ -67,7 +66,7 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
                 return new Promise((resolve) => {
                     const child = spawn(command, { cwd, shell: true });
                     let outputLog = "";
-                    
+
                     child.stdout.on('data', (data) => { outputLog += data.toString(); process.stdout.write(data); });
                     child.stderr.on('data', (data) => { outputLog += data.toString(); process.stderr.write(data); });
 
@@ -79,7 +78,7 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
                     setTimeout(async () => {
                         // Tự động tìm URL trong log (VD: http://localhost:5174)
                         const urlMatch = outputLog.match(/http:\/\/(localhost|127\.0\.0\.1):\d+/);
-                        
+
                         if (urlMatch) {
                             const localUrl = urlMatch[0];
                             console.log(`\n[Node] 🕵️ Tự động Ping tới ${localUrl} để kích hoạt Lazy-Compilation...`);
@@ -92,9 +91,9 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
 
                             // Đợi thêm 2.5 giây để hứng lỗi biên dịch (nếu có) văng ra màn hình
                             setTimeout(() => {
-                                resolve({ 
-                                    command, 
-                                    status: "running_in_background", 
+                                resolve({
+                                    command,
+                                    status: "running_in_background",
                                     message: `Tiến trình chạy ngầm. Đã tự động test ping tới ${localUrl}. HÃY ĐỌC KỸ startup_logs ĐỂ XEM CÓ LỖI BIÊN DỊCH KHÔNG!`,
                                     startup_logs: outputLog.substring(0, 3000) // Trả về tối đa 3000 ký tự để AI thấy lỗi Tailwind
                                 });
@@ -102,11 +101,11 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
 
                         } else {
                             // Nếu không tìm thấy URL nào, trả về bình thường
-                            resolve({ 
-                                command, 
-                                status: "running_in_background", 
+                            resolve({
+                                command,
+                                status: "running_in_background",
                                 message: "Tiến trình đã được khởi chạy ngầm.",
-                                startup_logs: outputLog.substring(0, 1500) 
+                                startup_logs: outputLog.substring(0, 1500)
                             });
                         }
                     }, 3000);

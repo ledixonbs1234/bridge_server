@@ -9,6 +9,8 @@ import { select, input } from '@inquirer/prompts';
 import chalk from 'chalk';
 import boxen from 'boxen';
 import ora from 'ora';
+import { marked } from 'marked';
+import TerminalRenderer from 'marked-terminal';
 
 
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -26,7 +28,14 @@ const EXTENSION_PORT = 54321;
 // =================================================================
 let activeProvider = null;
 let providerConfig = {};
-
+// Cấu hình Render Markdown cực đẹp cho Terminal
+marked.setOptions({
+    renderer: new TerminalRenderer({
+        reflowText: true,
+        width: process.stdout.columns || 80,
+        unescape: true
+    })
+});
 // Thêm tham số showMenu = false để mặc định bỏ qua giao diện chọn AI
 async function loadProviderConfig(showMenu = false) {
     const configPath = path.join(__dirname, 'config.json');
@@ -145,7 +154,7 @@ async function loadProviderConfig(showMenu = false) {
             activeProvider = new ProviderClass(providerSettings);
         }
         console.log(`\n🔌 Provider đang chạy: ${chalk.bold.green(activeProvider.getDisplayName())}\n`);
-        
+
         // Khôi phục lại bàn phím phòng trường hợp Inquirer khóa luồng
         process.stdin.resume();
     } catch (err) {
@@ -154,70 +163,22 @@ async function loadProviderConfig(showMenu = false) {
 }
 
 await loadProviderConfig();
-
 // =================================================================
-// 🛡️ HỆ THỐNG BẢO MẬT & ĐIỀU KHIỂN BẰNG BÀN PHÍM
-// LƯU Ý: Biến global để các file Plugin trong thư mục /skills có thể gọi được
+// 🛡️ HỆ THỐNG BẢO MẬT (Đã thiết kế lại dùng Inquirer)
 // =================================================================
-global.pendingPromptResolve = null;
-// Khôi phục (resume) lại luồng stdin vì Inquirer có thể đã pause nó sau khi chọn Model xong
-process.stdin.resume();
-readline.emitKeypressEvents(process.stdin);
-if (process.stdin.isTTY) {
-    process.stdin.setRawMode(true);
-}
-process.stdin.on('keypress', (str, key) => {
-    if (key.ctrl && key.name === 'c') {
-        console.log('\n\x1b[31m[Node] Đã tắt Server.\x1b[0m');
-        process.exit();
-    }
-    if (key.ctrl && key.name === 'r') {
-        resetSystem();
-        return;
-    }
-    // THÊM ĐOẠN NÀY ĐỂ BẤM CTRL+P MỞ MENU CHỌN AI
-    if (key.ctrl && key.name === 'p') {
-        (async () => {
-            await loadProviderConfig(true); // Truyền true để bung Menu
-            console.log(`\n⚡ Hệ thống đã sẵn sàng với AI mới!`);
-        })();
-        return;
-    }
-    if (global.pendingPromptResolve) {
-        const input = (str || '').toLowerCase();
-        if (input === 'y' || input === 'n' || input === 'a') {
-            process.stdout.write(input + '\n');
-            const resolve = global.pendingPromptResolve;
-            global.pendingPromptResolve = null;
-            resolve(input);
-        } else if (key.name === 'return' || key.name === 'enter') {
-            process.stdout.write('n\n');
-            const resolve = global.pendingPromptResolve;
-            global.pendingPromptResolve = null;
-            resolve('n');
-        }
-    }
-});
+global.isAutoApproveAll = false;
 
-global.askPermission = function (query) {
-    process.stdout.write(query);
-    return new Promise(resolve => {
-        global.pendingPromptResolve = resolve;
+global.askPermission = async function (query) {
+    // Dùng inpupt của Inquirer thay vì bắt phím ngầm
+    const answer = await input({
+        message: query
     });
+    return answer.toLowerCase().trim();
 }
+
 function resetSystem() {
-    console.log(`\n\n\x1b[41m\x1b[37m 🔄 ĐANG RESET LẠI HỆ THỐNG... \x1b[0m`);
-
-    // Đã xóa các biến taskQueue và currentTaskPromise của bản Extension cũ
-
     global.isAutoApproveAll = false;
-    if (global.pendingPromptResolve) {
-        // Trả lời 'n' (No) cho bất kỳ prompt nào đang treo chờ user gõ y/n
-        global.pendingPromptResolve('n');
-        global.pendingPromptResolve = null;
-    }
-
-    console.log(`\x1b[32m[Node] 🟢 Reset thành công! Đã hủy câu hỏi đang chờ và tắt Yes-To-All.\x1b[0m\n`);
+    console.log(`\x1b[32m[Node] 🟢 Reset thành công! Đã tắt chế độ Yes-To-All.\x1b[0m\n`);
 }
 
 // =================================================================
@@ -350,7 +311,6 @@ const activeStreams = new Map();
 // 🔧 HELPER: Chạy Skill cho API Provider (dùng chung logic permission)
 // =================================================================
 async function executeSkillForProvider(functionName, funcArgs) {
-    console.log(`\n[Node] ⚙️ AI yêu cầu chạy hàm: ${chalk.bold.yellow(functionName)}`);
 
     // Tắt in raw object đối với các hàm đã có UI đẹp
     const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines', 'get_os_context'];
@@ -365,7 +325,6 @@ async function executeSkillForProvider(functionName, funcArgs) {
 
     try {
         const result = await skill.handler(funcArgs);
-        console.log(`[Node] ✅ Chạy hàm thành công.`);
         return JSON.stringify({ status: "success", data: result });
     } catch (error) {
         console.error(`[Node] ❌ Lỗi khi chạy hàm:`, error.message);
@@ -573,6 +532,142 @@ app.listen(EXTENSION_PORT, () => {
         console.log(`🧠 Model Đang Dùng: ${chalk.cyan(activeProvider.model)}`);
     }
 
-    console.log(`⌨️  PHÍM TẮT: [Ctrl+P] Đổi AI | [Ctrl+R] Reset | [Ctrl+C] Tắt | [y/n/a] Đồng ý lệnh`);
+    console.log("⌨️ MẸO: Gõ lệnh trực tiếp vào ô chat để ra lệnh cho AI");
     console.log(`=================================================\n`);
 });
+// =================================================================
+// 💬 TERMINAL UI - PHASE 4.1 (OPENCODE + MARKDOWN HOT-SWAP)
+// =================================================================
+const cliChatHistory = [];
+
+const OC_BLUE = chalk.hex('#3B82F6');
+const OC_THINK = chalk.hex('#D97706');
+const OC_TEXT = chalk.white;
+const OC_MUTED = chalk.hex('#6B7280');
+
+async function startTerminalChatLoop() {
+    console.clear();
+    console.log(OC_MUTED(`\n  B R I D G E  S E R V E R\n`));
+
+    while (true) {
+       console.log(chalk.gray('  Ask anything...')); // In gợi ý ở dòng trên
+        const userText = await input({
+            message: OC_BLUE('▌ '),
+            theme: { prefix: '' }
+        });
+
+        const text = userText.trim();
+        if (!text) continue;
+
+        if (text === '/exit' || text === '/quit') process.exit(0);
+        if (text === '/clear') { cliChatHistory.length = 0; console.clear(); continue; }
+        if (text === '/model') { await loadProviderConfig(true); console.clear(); continue; }
+        if (text === '/reset') { resetSystem(); continue; }
+
+        process.stdout.moveCursor(0, -1);
+        process.stdout.clearLine(1);
+        console.log(`\n${OC_BLUE('▌')} ${chalk.bold.white(text)}\n`);
+
+        cliChatHistory.push({ role: 'user', content: text });
+
+        const injectedMemory = recallMemory(text);
+        const enrichedMessages = [...cliChatHistory];
+        if (injectedMemory) enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
+
+        let systemPromptText = "";
+        const promptPath = path.join(__dirname, 'system_prompt.md');
+        if (fs.existsSync(promptPath)) systemPromptText = fs.readFileSync(promptPath, 'utf8');
+
+        let fullAiResponse = '';
+        let isFirstChunk = true;
+        const startTime = Date.now();
+
+        let spinner = ora({ text: OC_MUTED.italic('Starting build...'), spinner: 'dots' }).start();
+        let isThinkingMode = false;
+
+        // BIẾN ĐẾM TỌA ĐỘ ĐỂ HOT-SWAP MARKDOWN
+        let printedRows = 0;
+        let currentLineLen = 0;
+        const terminalCols = process.stdout.columns || 80;
+        const terminalRowsMax = process.stdout.rows || 24;
+
+        try {
+            await activeProvider.chat({
+                messages: enrichedMessages,
+                skillRegistry: SKILL_REGISTRY,
+                executeSkill: async (funcName, args) => {
+                    if (!isFirstChunk) console.log('\n');
+                    spinner.stop();
+                    console.log(`\n${OC_THINK.italic('Action:')} ${OC_MUTED.italic(`Executing ${funcName}...`)}\n`);
+                    const res = await executeSkillForProvider(funcName, args);
+                    spinner = ora({ text: OC_MUTED.italic(`Evaluating output...`), spinner: 'dots' }).start();
+                    isFirstChunk = true;
+                    return res;
+                },
+                systemPrompt: systemPromptText,
+                maxSteps: 15,
+                onStreamChunk: (chunk) => {
+                    if (isFirstChunk) { spinner.stop(); isFirstChunk = false; }
+                    fullAiResponse += chunk;
+
+                    if (chunk.includes('<think>')) { isThinkingMode = true; process.stdout.write(OC_THINK.italic('Thinking:\n')); return; }
+                    if (chunk.includes('</think>')) { isThinkingMode = false; process.stdout.write('\n\n'); return; }
+
+                    // In text thô ra màn hình
+                    const textToPrint = isThinkingMode ? OC_MUTED.italic(chunk) : OC_TEXT(chunk);
+                    process.stdout.write(textToPrint);
+
+                    // Toán học: Đếm số lượng dòng Terminal đã bị chiếm dụng
+                    const rawChunk = chunk.replace(/\x1b\[[0-9;]*m/g, '');
+                    for (let i = 0; i < rawChunk.length; i++) {
+                        if (rawChunk[i] === '\n') {
+                            printedRows++;
+                            currentLineLen = 0;
+                        } else {
+                            currentLineLen++;
+                            if (currentLineLen >= terminalCols) { printedRows++; currentLineLen = 0; }
+                        }
+                    }
+                }
+            });
+
+            if (isFirstChunk) spinner.stop();
+            const cleanResponseForHistory = fullAiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+            // =======================================================
+            // 🪄 MAGIC HOT-SWAP: XÓA CHỮ THÔ VÀ BƠM MARKDOWN VÀO
+            // =======================================================
+            if (printedRows > 0 && printedRows < terminalRowsMax - 3) {
+                // Nếu text đủ ngắn nằm trọn trong 1 màn hình -> Lùi cursor lên và xóa sạch
+                process.stdout.write(`\r\x1b[${printedRows}A\x1b[0J`);
+                console.log(marked(cleanResponseForHistory).trim());
+            } else if (printedRows > 0) {
+                // Nếu text quá dài (tràn màn hình), lùi cursor sẽ làm lỗi UI. Ta in cách điệu ở dưới.
+                console.log(OC_MUTED(`\n\n--- Formatting Markdown ---\n`));
+                console.log(marked(cleanResponseForHistory).trim());
+            } else if (cleanResponseForHistory) {
+                // Trường hợp AI trả lời quá nhanh (không kịp đếm)
+                console.log(marked(cleanResponseForHistory).trim());
+            }
+
+            // THANH TRẠNG THÁI
+            const endTime = Date.now();
+            const duration = ((endTime - startTime) / 1000).toFixed(1);
+            const modelName = activeProvider.model || 'Agent';
+
+            console.log(`\n\n${OC_BLUE('■')}  ${OC_TEXT('Build')} · ${OC_MUTED(modelName + ' · ' + duration + 's')}\n`);
+
+            cliChatHistory.push({ role: 'assistant', content: cleanResponseForHistory });
+
+        } catch (error) {
+            spinner.stop();
+            console.error(chalk.red(`\n❌ Error: ${error.message}\n`));
+            cliChatHistory.pop();
+        }
+    }
+}
+
+// 7. Kích hoạt vòng lặp chat sau khi server đã Listen thành công (delay nhẹ 500ms)
+setTimeout(() => {
+    startTerminalChatLoop();
+}, 500)

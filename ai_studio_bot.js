@@ -372,7 +372,6 @@ class AIStudioBot {
                     }
                 }
             });
-            console.log("[Browser] ✅ Đã bấm Send trả kết quả Function!");
 
         } catch (error) {
             console.warn("[Browser] ⚠️ Nút Send không tự sáng. Đang ép buộc (force) click...");

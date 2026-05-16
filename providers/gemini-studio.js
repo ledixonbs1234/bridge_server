@@ -61,7 +61,6 @@ class GeminiStudioProvider extends BaseProvider {
             }
 
             if (result.type === 'text') {
-                console.log(`[${this.name}] ✅ Hoàn thành sau ${stepCount} bước.`);
                 return result.data.markdown || result.data.text;
             }
         }
