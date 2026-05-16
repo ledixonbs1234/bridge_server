@@ -111,21 +111,19 @@ global.askPermission = function (query) {
         global.pendingPromptResolve = resolve;
     });
 }
-
 function resetSystem() {
     console.log(`\n\n\x1b[41m\x1b[37m 🔄 ĐANG RESET LẠI HỆ THỐNG... \x1b[0m`);
-    taskQueue = [];
-    if (currentTaskPromise) {
-        clearTimeout(currentTaskPromise.timeout);
-        currentTaskPromise.reject("Hệ thống đã bị reset bởi người dùng (Ctrl+R).");
-        currentTaskPromise = null;
-    }
+    
+    // Đã xóa các biến taskQueue và currentTaskPromise của bản Extension cũ
+    
     global.isAutoApproveAll = false;
     if (global.pendingPromptResolve) {
+        // Trả lời 'n' (No) cho bất kỳ prompt nào đang treo chờ user gõ y/n
         global.pendingPromptResolve('n');
         global.pendingPromptResolve = null;
     }
-    console.log(`\x1b[32m[Node] 🟢 Reset thành công! Đã xóa hàng đợi, hủy lệnh đang chạy và tắt Yes-To-All.\x1b[0m\n`);
+    
+    console.log(`\x1b[32m[Node] 🟢 Reset thành công! Đã hủy câu hỏi đang chờ và tắt Yes-To-All.\x1b[0m\n`);
 }
 
 // =================================================================
@@ -384,68 +382,18 @@ app.post('/api/config', (req, res) => {
      loadProviderConfig();
     res.json({ success: true, message: 'Cấu hình đã được lưu thành công' });
 });
-
 // =================================================================
-// 🚀 MAIN ENDPOINT: /v1/chat/completions (Hỗ trợ cả 2 flow)
+// 🚀 MAIN ENDPOINT: /v1/chat/completions (ĐÃ FIX CHO CLOAKBROWSER)
 // =================================================================
 app.post('/v1/chat/completions', async (req, res) => {
     const { messages, stream } = req.body;
     const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
     const injectedMemory = recallMemory(lastUserMessage);
-    //Hàm truyền lịch sử chat, khi dùng Ai Studio trên web thì không cần
-    // const injectedMemory = recallMemory(lastUserMessage, messages.map(m => m.content).join(" "));
     const taskId = Date.now().toString();
 
-    console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()} - Stream: ${stream ? 'Bật' : 'Tắt'}`);
+    console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()}`);
 
-    // =====================================================
-    // NHÁNH 1: GEMINI STUDIO (Chrome Extension - flow cũ)
-    // =====================================================
-    if (activeProvider.isExtensionBased) {
-        const compiledPrompt = messages.map(m => {
-            if (m.role === 'user' && m.content === lastUserMessage && injectedMemory) {
-                return `USER:\n${m.content}${injectedMemory}`;
-            }
-            return `${m.role.toUpperCase()}:\n${m.content}`;
-        }).join('\n\n');
-
-        if (stream) {
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            activeStreams.set(taskId, res);
-        }
-
-        try {
-            const resultText = await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    if (currentTaskPromise && currentTaskPromise.id === taskId) currentTaskPromise = null;
-                    if (stream) {
-                        res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[Timeout]` }, finish_reason: "stop" }] })}\n\n`);
-                        res.write('data: [DONE]\n\n');
-                        res.end();
-                        activeStreams.delete(taskId);
-                    }
-                    reject("Timeout: Phản hồi mất quá nhiều thời gian.");
-                }, 120000);
-                taskQueue.push({ id: taskId, prompt: compiledPrompt, resolve, reject, timeout });
-            });
-
-            if (!stream) {
-                res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
-            }
-        } catch (error) {
-            if (!stream) res.status(500).json({ error: { message: error } });
-        }
-        return; // Kết thúc nhánh Gemini Studio
-    }
-
-    // =====================================================
-    // NHÁNH 2: API PROVIDERS (OpenAI, Claude, Ollama...)
-    // Gọi trực tiếp API, KHÔNG dùng task queue
-    // =====================================================
-
-    // Inject memory vào messages
+    // Ghép bộ nhớ (Memory) vào tin nhắn cuối cùng của user
     const enrichedMessages = messages.map(m => {
         if (m.role === 'user' && m.content === lastUserMessage && injectedMemory) {
             return { ...m, content: m.content + injectedMemory };
@@ -467,6 +415,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 
     try {
+        // GỌI THẲNG PROVIDER (Lúc này hàm chat() của gemini-studio.js sẽ tự mở Trình duyệt)
         const resultText = await activeProvider.chat({
             messages: enrichedMessages,
             skillRegistry: SKILL_REGISTRY,
@@ -482,6 +431,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             } : null
         });
 
+        // Kết thúc trả lời
         if (stream) {
             res.write('data: [DONE]\n\n');
             res.end();
@@ -489,7 +439,7 @@ app.post('/v1/chat/completions', async (req, res) => {
             res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
         }
     } catch (error) {
-        console.error(`[Node] ❌ Provider error:`, error.message);
+        console.error(`[Node] ❌ Lỗi xử lý:`, error.message);
         if (stream) {
             res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[LỖI: ${error.message}]` }, finish_reason: "stop" }] })}\n\n`);
             res.write('data: [DONE]\n\n');

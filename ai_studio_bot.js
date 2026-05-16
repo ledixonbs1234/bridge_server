@@ -4,13 +4,15 @@ class AIStudioBot {
         this.context = null;
         this.page = null
         this.isReady = false
+        // Các cờ đánh dấu để không setup lại nhiều lần gây mất thời gian
+        this.setupFlags = { system: false, functions: false, thinking: false };
     }
 
     async init() {
         if (this.isReady) return;
 
         console.log("[Browser] Đang khởi động CloakBrowser...");
-
+        const profilePath = './profile/Profile_Xon_Pro_All'; // Dùng chung profile có sẵn
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
             headless: false, // Lần đầu để false để login Google, sau login xong có thể đổi thành true
@@ -26,6 +28,154 @@ class AIStudioBot {
         console.log("[Browser] ✅ Đã vào được màn hình chat AI Studio!");
         this.isReady = true;
 
+    }
+
+    // ==========================================
+    // HÀM MỚI: CÀI ĐẶT MÔI TRƯỜNG NHƯ EXTENSION CŨ
+    // ==========================================
+    async setupAgentEnvironment(systemPrompt, functionDeclarationsStr, thinkingLevel = "High") {
+        if (!this.isReady) await this.init();
+        console.log("[Browser] ⚡ Đang kiểm tra và cài đặt môi trường Agent...");
+
+        // Chạy script trực tiếp trong trình duyệt (sử dụng lại chính logic DOM an toàn của bạn)
+        await this.page.evaluate(async ({ sys, fc, lvl, flags }) => {
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+            // 1. Cài đặt System Prompt
+            if (sys && !flags.system) {
+                const sysBtn = document.querySelector('ms-system-instructions-panel button');
+                if (sysBtn) {
+                    sysBtn.click();
+                    await sleep(800);
+
+                    const ta = document.querySelector('mat-dialog-container textarea');
+                    if (ta) {
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+                        if (nativeSetter) nativeSetter.call(ta, sys);
+                        else ta.value = sys;
+
+                        // Bổ sung dispatch cả change event để Angular nhận diện dữ liệu đã hoàn tất
+                        ta.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+                        ta.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+                        await sleep(300);
+                    }
+
+                    // Tắt dialog: Khôi phục lại logic tìm nút X như trong content.js
+                    let closeBtn = document.querySelector('mat-dialog-container [id^="mat-mdc-dialog-title"] button');
+                    if (!closeBtn) {
+                        const dialogBtns = document.querySelectorAll('mat-dialog-container button');
+                        for (const b of dialogBtns) {
+                            const icon = b.querySelector('mat-icon');
+                            if (icon && icon.textContent.toLowerCase().includes('close')) {
+                                closeBtn = b;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (closeBtn) {
+                        // Ưu tiên click nút X
+                        closeBtn.click();
+                    } else {
+                        // Fallback: Dispatch Escape (Thêm composed: true để xuyên qua Shadow DOM)
+                        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, composed: true }));
+                    }
+                    await sleep(500);
+                }
+            }
+
+           if (fc && !flags.functions) {
+                // --- BƯỚC 1: TÌM ĐÚNG NÚT TOGGLE CỦA FUNCTION CALLING ---
+                let fcToggle = null;
+                const switches = document.querySelectorAll('button[role="switch"]');
+                for (const btn of switches) {
+                    const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+                    if (ariaLabel.includes('function calling')) {
+                        fcToggle = btn; break;
+                    }
+                    // Kiểm tra element cha (dòng chứa nó) xem có chữ "Function calling" không
+                    const row = btn.closest('div, mat-list-item, ms-prompt-run-settings-row');
+                    if (row && row.textContent.includes('Function calling')) {
+                        fcToggle = btn; break;
+                    }
+                }
+
+                // Bật toggle nếu đang tắt
+                if (fcToggle && fcToggle.getAttribute('aria-checked') !== 'true') {
+                    fcToggle.click();
+                    await sleep(500);
+                }
+
+                // --- BƯỚC 2: TÌM ĐÚNG NÚT EDIT CỦA FUNCTION CALLING ---
+                let editBtn = document.querySelector('button[aria-label="Edit function declarations"], .edit-function-declarations-button');
+                if (!editBtn) {
+                    const allBtns = document.querySelectorAll('button, span.text-button, a');
+                    for (const b of allBtns) {
+                        if (b.textContent.trim().toLowerCase() === 'edit') {
+                            const row = b.closest('div, mat-list-item, ms-prompt-run-settings-row');
+                            if (row && row.textContent.includes('Function calling')) {
+                                editBtn = b; break;
+                            }
+                        }
+                    }
+                }
+
+                // --- BƯỚC 3: MỞ BẢNG CODE VÀ ĐIỀN JSON ---
+                if (editBtn) {
+                    editBtn.click();
+                    await sleep(800);
+
+                    // Chuyển sang tab Code Editor
+                    const tabs = document.querySelectorAll('mat-dialog-container div[role="tab"]');
+                    const codeTab = Array.from(tabs).find(el => el.textContent.includes('Code Editor'));
+                    if (codeTab) {
+                        codeTab.click();
+                        await sleep(400);
+                    }
+
+                    // Điền JSON
+                    const ta = document.querySelector('mat-dialog-container textarea');
+                    if (ta) {
+                        const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
+                        if (nativeSetter) nativeSetter.call(ta, fc);
+                        else ta.value = fc;
+                        ta.dispatchEvent(new Event('input', { bubbles: true }));
+                        await sleep(300);
+                    }
+
+                    // Bấm Save
+                    const saveBtn = Array.from(document.querySelectorAll('mat-dialog-actions button')).find(b => b.textContent.toLowerCase().includes('save') || b.classList.contains('ms-button-primary'));
+                    if (saveBtn) saveBtn.click();
+                    await sleep(500);
+                } else {
+                    console.warn("[Browser] Không tìm thấy nút Edit Function Calling");
+                }
+            }
+
+            // 3. Cài đặt Thinking Level
+            if (lvl && !flags.thinking) {
+                const lvlBtn = document.querySelector('mat-select[aria-label="Thinking Level"], ms-thinking-level-setting mat-select');
+                if (lvlBtn && !lvlBtn.textContent.includes(lvl)) {
+                    lvlBtn.click();
+                    await sleep(600);
+                    const options = document.querySelectorAll('mat-option');
+                    for (const opt of options) {
+                        if (opt.textContent.trim() === lvl) {
+                            opt.click();
+                            break;
+                        }
+                    }
+                    await sleep(500);
+                }
+            }
+        }, { sys: systemPrompt, fc: functionDeclarationsStr, lvl: thinkingLevel, flags: this.setupFlags });
+
+        // Cập nhật cờ để các lượt chat sau không cần click lại mất thời gian
+        this.setupFlags.system = true;
+        this.setupFlags.functions = true;
+        this.setupFlags.thinking = true;
+
+        console.log("[Browser] ✅ Môi trường Agent đã được cấu hình chuẩn xác!");
     }
 
     async sendPrompt(promptText) {
@@ -155,7 +305,7 @@ class AIStudioBot {
 
             inputField.setAttribute('data-submitting', 'true');
             inputField.setAttribute('data-submitting-done', 'true');
-            
+
             const nativeInputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
             if (nativeInputSetter) nativeInputSetter.call(inputField, val);
             else inputField.value = val;

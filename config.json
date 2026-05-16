@@ -2,9 +2,9 @@
   "activeProvider": "gemini-studio",
   "providers": {
     "gemini-studio": {
-      "name": "Gemini Studio (Free - Chrome Extension)",
+      "name": "Gemini Studio (Free Web)",
       "enabled": true,
-      "description": "Dùng Chrome Extension để điều khiển AI Studio (miễn phí, không cần API key)"
+      "description": "Dùng Web để điều khiển AI Studio (miễn phí, không cần API key)"
     },
     "openai": {
       "name": "OpenAI (GPT-4o / GPT-4o-mini)",

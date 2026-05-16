@@ -12,14 +12,30 @@ class GeminiStudioProvider extends BaseProvider {
         const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15 } = options;
         // 1. Chắc chắn Browser đã mở
         await aiStudioBot.init();
+
+        // 2. Chuyển đổi Skills sang định dạng JSON cho AI Studio
+        const functionDeclarations = Object.keys(skillRegistry).map(key => {
+            const skill = skillRegistry[key];
+            const decl = { name: key, description: skill.description };
+            if (skill.parameters) decl.parameters = skill.parameters;
+            return decl;
+        });
+
+        // 3. SET UP MÔI TRƯỜNG (Gọi hàm bạn vừa thêm ở bước 1)
+        await aiStudioBot.setupAgentEnvironment(
+            systemPrompt,
+            JSON.stringify(functionDeclarations, null, 2),
+            "High"
+        );
+
         // 2. Gom message cuối cùng (Text + Context)
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
 
-        let compiledPrompt = systemPrompt ? `[HƯỚNG DẪN HỆ THỐNG]\n${systemPrompt}\n\n` : "";
-        compiledPrompt += `[YÊU CẦU NGƯỜI DÙNG]\n${lastUserMessage}`;
+        // let compiledPrompt = systemPrompt ? `[HƯỚNG DẪN HỆ THỐNG]\n${systemPrompt}\n\n` : "";
+        // compiledPrompt += `[YÊU CẦU NGƯỜI DÙNG]\n${lastUserMessage}`;
 
         // 3. Gửi Prompt vào trình duyệt
-        await aiStudioBot.sendPrompt(compiledPrompt);
+        await aiStudioBot.sendPrompt(lastUserMessage);
 
         // 4. Vòng lặp Agent (Chờ text hoặc Function Call)
         let stepCount = 0;
@@ -49,7 +65,7 @@ class GeminiStudioProvider extends BaseProvider {
                 return result.data.markdown || result.data.text;
             }
         }
-         return '[Lỗi: Quá giới hạn vòng lặp Function Calling]';
+        return '[Lỗi: Quá giới hạn vòng lặp Function Calling]';
     }
 
     async healthCheck() {
