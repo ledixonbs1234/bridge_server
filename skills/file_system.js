@@ -1,13 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-
+import boxen from 'boxen';
+import chalk from 'chalk';
+import { highlight } from 'cli-highlight';
 export default {
     "list_directory": {
         description: "Lấy danh sách các tệp và thư mục trong một đường dẫn cụ thể (hỗ trợ đệ quy tối đa 3 tầng). Dùng để xem máy tính đang có gì.",
         parameters: {
             type: "object",
-            properties: { 
+            properties: {
                 path: { type: "string", description: "Đường dẫn tuyệt đối đến thư mục. Dùng 'desktop' để lấy Desktop." },
                 depth: { type: "number", description: "Độ sâu muốn xem (tối đa 3)." }
             },
@@ -16,13 +18,13 @@ export default {
         handler: async (args) => {
             const targetPath = args.path === "desktop" ? path.join(os.homedir(), 'Desktop') : args.path;
             if (!fs.existsSync(targetPath)) throw new Error(`Thư mục không tồn tại: ${targetPath}`);
-            
+
             const maxDepth = Math.min(args.depth || 1, 3);
-            
+
             const getFilesRecursive = (currentPath, currentDepth) => {
                 const entries = fs.readdirSync(currentPath, { withFileTypes: true });
                 const result = [];
-                
+
                 for (const entry of entries) {
                     const fullPath = path.join(currentPath, entry.name);
                     const item = {
@@ -30,7 +32,7 @@ export default {
                         type: entry.isDirectory() ? 'directory' : 'file',
                         path: fullPath
                     };
-                    
+
                     if (entry.isDirectory() && currentDepth < maxDepth) {
                         item.children = getFilesRecursive(fullPath, currentDepth + 1);
                     }
@@ -54,10 +56,10 @@ export default {
             if (!fs.existsSync(args.file_path)) throw new Error(`File không tồn tại: ${args.file_path}`);
             const content = fs.readFileSync(args.file_path, 'utf8');
             const lines = content.split(/\r?\n/);
-            
+
             // THUẬT TOÁN HARNESS: Đánh số dòng làm mỏ neo
             const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`);
-            
+
             return { file: args.file_path, total_lines: lines.length, content: numberedLines.join('\n') };
         }
     },
@@ -77,18 +79,18 @@ export default {
             if (!fs.existsSync(args.file_path)) throw new Error(`File không tồn tại: ${args.file_path}`);
             const content = fs.readFileSync(args.file_path, 'utf8');
             const lines = content.split(/\r?\n/);
-            
+
             const start = Math.max(0, args.start_line - 1);
             const end = Math.min(lines.length, args.end_line);
-            
+
             // THUẬT TOÁN HARNESS: Đánh số dòng làm mỏ neo cho đoạn cắt
             const numberedLines = lines.slice(start, end).map((line, idx) => `${start + idx + 1} | ${line}`);
-            
-            return { 
-                file: args.file_path, 
-                total_lines_in_file: lines.length, 
-                showing_lines: `${start + 1} to ${end}`, 
-                content: numberedLines.join('\n') 
+
+            return {
+                file: args.file_path,
+                total_lines_in_file: lines.length,
+                showing_lines: `${start + 1} to ${end}`,
+                content: numberedLines.join('\n')
             };
         }
     },
@@ -107,20 +109,42 @@ export default {
         },
         handler: async (args) => {
             if (!fs.existsSync(args.file_path)) throw new Error(`File không tồn tại: ${args.file_path}`);
-            
+
             if (!global.isAutoApproveAll) {
-                console.log(`\n\x1b[41m\x1b[37m ⚠️ AI YÊU CẦU SỬA FILE (Line ${args.start_line}-${args.end_line}) \x1b[0m\n📁 Đường dẫn : \x1b[36m${args.file_path}\x1b[0m`);
-                const answer = await global.askPermission(`👉 Cho phép thay thế vùng code này? [y: Yes / a: Yes to All / n: No] : `);
-                if (answer === 'a') global.isAutoApproveAll = true; 
+                // 1. Tô màu Code
+                const highlightedCode = args.replace_string
+                    ? highlight(args.replace_string, { language: 'javascript', ignoreIllegals: true })
+                    : chalk.red.italic('// Xóa bỏ những dòng này');
+
+                // 2. Tạo nội dung Box
+                const promptContent = `
+${chalk.bold.yellow('📂 File :')} ${chalk.cyan(args.file_path)}
+${chalk.bold.yellow('📍 Dòng :')} ${chalk.bgGray.white(` ${args.start_line} đến ${args.end_line} `)}
+${chalk.bold.green('✨ Nội dung thay thế:')}
+${chalk.gray('----------------------------------------')}
+${highlightedCode}
+${chalk.gray('----------------------------------------')}
+`;
+                // 3. In ra Box
+                console.log(boxen(promptContent, {
+                    title: chalk.bold.redBright(' ⚠️ YÊU CẦU SỬA CODE '),
+                    titleAlignment: 'center',
+                    padding: 1,
+                    borderColor: 'yellow',
+                    borderStyle: 'round'
+                }));
+
+                const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép thay thế vùng code này? [y: Yes / a: Yes to All / n: No] : `));
+                if (answer === 'a') global.isAutoApproveAll = true;
                 else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
             }
 
             const content = fs.readFileSync(args.file_path, 'utf8');
-            
+
             // Tự động nhận diện chuẩn ngắt dòng gốc của file (Windows CRLF hay Linux LF)
             const isCRLF = content.includes('\r\n');
             const lineEnding = isCRLF ? '\r\n' : '\n';
-            
+
             let lines = content.split(/\r?\n/);
             const totalLines = lines.length;
 
@@ -133,7 +157,7 @@ export default {
 
             // Xử lý mã nguồn mới (AI thường sinh code chuẩn \n)
             let newLines = args.replace_string ? args.replace_string.split(/\r?\n/) : [];
-            
+
             // Clean up: Phòng hờ AI "bắt chước" gắn cả prefix số dòng vào output
             newLines = newLines.map(line => line.replace(/^\d+\s*\|\s?/, ''));
 
@@ -157,9 +181,34 @@ export default {
         },
         handler: async (args) => {
             if (!global.isAutoApproveAll) {
-                console.log(`\n\x1b[41m\x1b[37m ⚠️ AI YÊU CẦU TẠO/GHI ĐÈ FILE \x1b[0m\n📁 Đường dẫn : \x1b[36m${args.file_path}\x1b[0m`);
-                const answer = await global.askPermission(`👉 Cho phép ghi đè toàn bộ file này? [y/a/n] : `);
-                if (answer === 'a') global.isAutoApproveAll = true; else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
+                // 1. Lấy đuôi mở rộng của file để highlight đúng ngôn ngữ (vd: .py, .js)
+                const ext = args.file_path.split('.').pop() || 'javascript';
+
+                // 2. Highlight code
+                const highlightedCode = args.content
+                    ? highlight(args.content, { language: ext, ignoreIllegals: true })
+                    : chalk.gray.italic('// Bỏ trống (File rỗng)');
+
+                // 3. Xây dựng nội dung Box
+                const promptContent = `
+${chalk.bold.yellow('📂 File :')} ${chalk.cyan(args.file_path)}
+${chalk.bold.green('✨ Nội dung sẽ GHI ĐÈ / TẠO MỚI:')}
+${chalk.gray('----------------------------------------')}
+${highlightedCode}
+${chalk.gray('----------------------------------------')}
+`;
+                // 4. In ra Boxen
+                console.log(boxen(promptContent, {
+                    title: chalk.bold.redBright(' ⚠️ YÊU CẦU TẠO / GHI ĐÈ TOÀN BỘ FILE '),
+                    titleAlignment: 'center',
+                    padding: 1,
+                    borderColor: 'yellow',
+                    borderStyle: 'round'
+                }));
+
+                const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép tạo/ghi đè file này? [y: Yes / a: Yes to All / n: No] : `));
+                if (answer === 'a') global.isAutoApproveAll = true;
+                else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
             }
             fs.writeFileSync(args.file_path, args.content, 'utf8');
             return { message: `Đã tạo/ghi đè thành công vào ${args.file_path}` };

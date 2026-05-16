@@ -11,11 +11,16 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@inquirer/prompts": "^8.4.3",
+    "boxen": "^8.0.1",
+    "chalk": "^5.6.2",
+    "cli-highlight": "^2.1.11",
     "cloakbrowser": "^0.3.28",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "fuse.js": "^7.3.0",
     "js-yaml": "^4.1.1",
+    "ora": "^9.4.0",
     "playwright-core": "^1.60.0"
   }
 }

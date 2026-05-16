@@ -5,7 +5,10 @@ import path from 'path';
 import readline from 'readline';
 import yaml from 'js-yaml';
 import Fuse from 'fuse.js';
-
+import { select } from '@inquirer/prompts';
+import chalk from 'chalk';
+import boxen from 'boxen';
+import ora from 'ora';
 
 import { fileURLToPath, pathToFileURL } from 'url';
 const __filename = fileURLToPath(import.meta.url);
@@ -29,20 +32,47 @@ async function loadProviderConfig() {
         if (fs.existsSync(configPath)) {
             providerConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         } else {
-            console.warn('[Node] ⚠️ config.json không tồn tại, dùng mặc định Gemini Studio.');
             providerConfig = { activeProvider: 'gemini-studio', providers: {} };
         }
     } catch (err) {
-        console.error('[Node] ❌ Lỗi đọc config.json:', err.message);
         providerConfig = { activeProvider: 'gemini-studio', providers: {} };
     }
 
-    const providerName = providerConfig.activeProvider || 'gemini-studio';
-    const providerSettings = providerConfig.providers?.[providerName] || {};
+    // --- BẮT ĐẦU PHẦN UI MENU ---
+    console.clear();
+    console.log(boxen(chalk.bold.cyan('🚀 BRIDGE SERVER AGENT V2.0'), {
+        padding: 1,
+        margin: 1,
+        borderStyle: 'double',
+        borderColor: 'cyan',
+        textAlignment: 'center'
+    }));
+
+    const providersList = Object.keys(providerConfig.providers || {}).filter(k => providerConfig.providers[k].enabled !== false);
+    let selectedProviderName = providerConfig.activeProvider || 'gemini-studio';
+
+    if (providersList.length > 1) {
+        selectedProviderName = await select({
+            message: chalk.bold.white('Hãy chọn AI Provider để làm việc:'),
+            choices: providersList.map(p => ({
+                name: chalk.yellow(providerConfig.providers[p].name) + chalk.gray(` (${providerConfig.providers[p].model || 'Mặc định'})`),
+                value: p,
+                description: chalk.italic(providerConfig.providers[p].description || '')
+            })),
+            default: providerConfig.activeProvider
+        });
+
+        // Lưu lại lựa chọn
+        providerConfig.activeProvider = selectedProviderName;
+        fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
+    }
+    // --- KẾT THÚC PHẦN UI MENU ---
+
+    const providerSettings = providerConfig.providers?.[selectedProviderName] || {};
 
     try {
         const providerMap = {
-            'gemini-studio': './providers/gemini-studio.js', // Phải có đuôi .js
+            'gemini-studio': './providers/gemini-studio.js',
             'openai': './providers/openai.js',
             'openai-compatible': './providers/openai.js',
             'claude': './providers/claude.js',
@@ -50,7 +80,7 @@ async function loadProviderConfig() {
             'gemini-api': './providers/gemini-api.js',
         };
 
-        const adapterPath = providerMap[providerName];
+        const adapterPath = providerMap[selectedProviderName];
         if (!adapterPath) {
             const module = await import('./providers/gemini-studio.js');
             const GeminiStudio = module.default;
@@ -60,9 +90,9 @@ async function loadProviderConfig() {
             const ProviderClass = module.default;
             activeProvider = new ProviderClass(providerSettings);
         }
-        console.log(`[Node] 🔌 Provider: \x1b[35m${activeProvider.getDisplayName()}\x1b[0m`);
+        console.log(`\n🔌 Provider đang chạy: ${chalk.bold.green(activeProvider.getDisplayName())}\n`);
     } catch (err) {
-        console.error(`[Node] ❌ Lỗi nạp provider:`, err.message);
+        console.error(chalk.red(`❌ Lỗi nạp provider:`), err.message);
     }
 }
 
@@ -113,16 +143,16 @@ global.askPermission = function (query) {
 }
 function resetSystem() {
     console.log(`\n\n\x1b[41m\x1b[37m 🔄 ĐANG RESET LẠI HỆ THỐNG... \x1b[0m`);
-    
+
     // Đã xóa các biến taskQueue và currentTaskPromise của bản Extension cũ
-    
+
     global.isAutoApproveAll = false;
     if (global.pendingPromptResolve) {
         // Trả lời 'n' (No) cho bất kỳ prompt nào đang treo chờ user gõ y/n
         global.pendingPromptResolve('n');
         global.pendingPromptResolve = null;
     }
-    
+
     console.log(`\x1b[32m[Node] 🟢 Reset thành công! Đã hủy câu hỏi đang chờ và tắt Yes-To-All.\x1b[0m\n`);
 }
 
@@ -256,9 +286,12 @@ const activeStreams = new Map();
 // 🔧 HELPER: Chạy Skill cho API Provider (dùng chung logic permission)
 // =================================================================
 async function executeSkillForProvider(functionName, funcArgs) {
-    console.log(`\n[Node] ⚙️ AI yêu cầu chạy hàm: [${functionName}]`);
-    if (functionName !== 'execute_terminal_command' && !functionName.startsWith('workflow_') && functionName !== 'get_os_context') {
-        console.log(`[Node] 📦 Tham số:`, funcArgs);
+    console.log(`\n[Node] ⚙️ AI yêu cầu chạy hàm: ${chalk.bold.yellow(functionName)}`);
+
+    // Tắt in raw object đối với các hàm đã có UI đẹp
+    const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines', 'get_os_context'];
+    if (!silentFunctions.includes(functionName) && !functionName.startsWith('workflow_')) {
+        console.log(chalk.gray(`[Node] 📦 Tham số:`), funcArgs);
     }
 
     const skill = SKILL_REGISTRY[functionName];
@@ -355,7 +388,7 @@ app.post('/api/provider/switch', (req, res) => {
     const configPath = path.join(__dirname, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
     // Reload provider
-     loadProviderConfig();
+    loadProviderConfig();
     res.json({ success: true, message: `Đã chuyển sang provider: ${activeProvider.getDisplayName()}` });
 });
 
@@ -379,7 +412,7 @@ app.post('/api/config', (req, res) => {
     fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
 
     // Reload active provider
-     loadProviderConfig();
+    loadProviderConfig();
     res.json({ success: true, message: 'Cấu hình đã được lưu thành công' });
 });
 // =================================================================
@@ -414,12 +447,26 @@ app.post('/v1/chat/completions', async (req, res) => {
         res.setHeader('Connection', 'keep-alive');
     }
 
+    let spinner = null;
+    if (!stream) {
+        spinner = ora({
+            text: chalk.yellow(`AI đang phân tích và suy nghĩ...`),
+            spinner: 'dots'
+        }).start();
+    }
+
     try {
-        // GỌI THẲNG PROVIDER (Lúc này hàm chat() của gemini-studio.js sẽ tự mở Trình duyệt)
         const resultText = await activeProvider.chat({
             messages: enrichedMessages,
             skillRegistry: SKILL_REGISTRY,
-            executeSkill: executeSkillForProvider,
+            executeSkill: async (funcName, args) => {
+                // Tạm dừng spinner khi cần in Box hỏi người dùng
+                if (spinner) spinner.stop();
+                const res = await executeSkillForProvider(funcName, args);
+                // Sau khi chạy skill xong, bật lại spinner
+                if (spinner) spinner.start(chalk.yellow(`Đang xử lý kết quả của ${funcName}...`));
+                return res;
+            },
             systemPrompt: systemPrompt,
             maxSteps: 15,
             onStreamChunk: stream ? (chunk) => {
@@ -431,7 +478,8 @@ app.post('/v1/chat/completions', async (req, res) => {
             } : null
         });
 
-        // Kết thúc trả lời
+        if (spinner) spinner.succeed(chalk.green('AI đã trả lời xong!'));
+
         if (stream) {
             res.write('data: [DONE]\n\n');
             res.end();
@@ -439,7 +487,8 @@ app.post('/v1/chat/completions', async (req, res) => {
             res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
         }
     } catch (error) {
-        console.error(`[Node] ❌ Lỗi xử lý:`, error.message);
+        if (spinner) spinner.fail(chalk.red('Đã xảy ra lỗi!'));
+        console.error(chalk.red(`[Node] ❌ Lỗi xử lý:`), error.message);
         if (stream) {
             res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[LỖI: ${error.message}]` }, finish_reason: "stop" }] })}\n\n`);
             res.write('data: [DONE]\n\n');

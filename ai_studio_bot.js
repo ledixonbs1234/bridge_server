@@ -220,7 +220,6 @@ class AIStudioBot {
     }
 
     async waitForResponse(onStreamChunk) {
-        console.log("[Browser] Đang đợi AI phản hồi...");
 
         let lastExtractedLength = 0;
         let stableCount = 0;
@@ -302,7 +301,6 @@ class AIStudioBot {
         });
     }
     async submitFunctionResponse(responseString) {
-        console.log("[Browser] Điền kết quả Function vào UI...");
         const valueToSet = typeof responseString === 'string' ? responseString : JSON.stringify(responseString);
 
         // 1. Điền dữ liệu và đánh dấu đang xử lý
@@ -321,7 +319,6 @@ class AIStudioBot {
             inputField.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
         }, valueToSet);
 
-        console.log("[Browser] Đang chờ nút Send (Function) sáng lên...");
 
         try {
             // 2. Chờ nút mở khóa
@@ -347,7 +344,6 @@ class AIStudioBot {
             }, { timeout: 10000 });
 
             // 3. Chờ thêm 1.5s cho UI ổn định
-            console.log("[Browser] Nút đã sáng, chờ thêm 1.5s trước khi bấm...");
             await this.page.waitForTimeout(1500);
 
             // 4. Click và ĐÁNH DẤU CHẾT (data-answered)

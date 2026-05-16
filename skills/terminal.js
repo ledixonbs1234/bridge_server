@@ -1,6 +1,7 @@
 import { exec, spawn } from 'child_process';
 import os from 'os';
-
+import boxen from 'boxen';
+import chalk from 'chalk';
 export default {
     "execute_terminal_command": {
         description: "Thực thi lệnh Terminal/CMD. Đây là lệnh quyền lực nhất.",
@@ -22,16 +23,27 @@ export default {
             const isBackground = args.is_background || false;
 
             if (!global.isAutoApproveAll) {
-                console.log(`\n\x1b[41m\x1b[37m ⚠️ AI YÊU CẦU CHẠY LỆNH TERMINAL \x1b[0m`);
-                console.log(`📁 Thư mục : \x1b[36m${cwd}\x1b[0m`);
-                console.log(`💻 Lệnh    : \x1b[33m${command}\x1b[0m ${isBackground ? '\x1b[35m(BACKGROUND)\x1b[0m' : ''}`);
+                const cmdText = isBackground 
+                    ? chalk.magenta(command) + chalk.bgMagenta.white(' BACKGROUND PROCESS ')
+                    : chalk.yellow(command);
 
-                const answer = await global.askPermission(`👉 Cho phép chạy? [y: Yes / a: Yes to All / n: No] : `);
+                const promptContent = `
+${chalk.bold.cyan('📁 Thư mục :')} ${cwd}
+${chalk.bold.cyan('💻 Lệnh    :')} ${cmdText}
+`;
+                console.log(boxen(promptContent, {
+                    title: chalk.bold.redBright(' ⚠️ YÊU CẦU CHẠY TERMINAL '),
+                    padding: 1,
+                    borderColor: 'blue',
+                    borderStyle: 'round'
+                }));
+
+                const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép chạy lệnh này? [y: Yes / a: Yes to All / n: No] : `));
 
                 if (answer === 'a') { global.isAutoApproveAll = true; } 
                 else if (answer !== 'y') { throw new Error("PERMISSION_DENIED: Người dùng đã từ chối."); }
             } else {
-                console.log(`\n[Node] ⚡ Auto-running: \x1b[33m${command}\x1b[0m`);
+                console.log(`\n⚡ ${chalk.gray('Auto-running:')} ${chalk.yellow(command)}`);
             }
 
             // XỬ LÝ CHẠY NGẦM VÀ AUTO-PING (Dành cho Dev Server)
