@@ -1,7 +1,7 @@
-const { exec } = require('child_process');
-const fs = require('fs');
+import { exec } from 'child_process';
+import fs from 'fs';
 
-module.exports = {
+export default {
     "graphify_ingest": {
         description: "[SKILL ĐẶC BIỆT] Xây dựng Knowledge Graph cho toàn bộ dự án bằng Graphify.",
         parameters: {

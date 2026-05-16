@@ -1,7 +1,12 @@
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-module.exports = {
+// Fix lỗi __dirname trong ES Module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default {
     "memorize_lesson": {
         description: "[QUAN TRỌNG] Gọi hàm này NGAY LẬP TỨC khi bạn vừa giải quyết xong một lỗi khó, hoặc khi người dùng nhắc nhở bạn một thói quen (VD: dùng pnpm thay vì npm). Khắc sâu bài học để lần sau không mắc lại.",
         parameters: {

@@ -1,8 +1,8 @@
-const { exec } = require('child_process');
-const util = require('util');
+import { exec } from 'child_process';
+import util from 'util';
 const execPromise = util.promisify(exec);
 
-module.exports = {
+export default {
     "git_create_checkpoint": {
         description: "[CỰC KỲ QUAN TRỌNG] Tạo một điểm neo an toàn (Snapshot) cho toàn bộ code. BẮT BUỘC gọi hàm này TRƯỚC KHI sửa đổi logic phức tạp, xóa code, hoặc sửa nhiều file cùng lúc.",
         parameters: {

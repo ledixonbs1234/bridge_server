@@ -1,48 +1,60 @@
-/**
- * GeminiStudioProvider - Adapter cho Chrome Extension (Giữ nguyên logic cũ)
- * 
- * Provider này KHÔNG gọi API trực tiếp.
- * Nó dùng cơ chế task queue + Chrome Extension polling:
- *   1. Server đẩy prompt vào taskQueue
- *   2. Chrome Extension poll GET /api/task để lấy task
- *   3. Extension inject prompt vào AI Studio, lấy response
- *   4. Extension gửi kết quả về POST /api/result
- * 
- * Cơ chế function calling cũng do Extension xử lý (ReAct loop trong background.js)
- * Server chỉ đóng vai trò chạy skill khi Extension gọi POST /api/execute-function.
- * 
- * => Provider này đặc biệt vì nó KHÔNG tự xử lý chat, mà chỉ đánh dấu 
- *    cho server biết phải dùng flow cũ (task queue).
- */
-
-const BaseProvider = require('./base-provider');
+import BaseProvider from './base-provider.js'; // Chú ý: Trong ESM bắt buộc phải có đuôi .js
+import aiStudioBot from '../ai_studio_bot.js';
 
 class GeminiStudioProvider extends BaseProvider {
     constructor(config) {
         super(config);
-        this.name = config.name || 'Gemini Studio (Chrome Extension)';
-        this.isExtensionBased = true; // Flag đặc biệt cho server biết dùng flow cũ
+        this.name = config.name || 'Gemini Studio (CloakBrowser)';
+        this.isExtensionBased = false; // Đổi thành false! Server tự xử lý 100%
     }
 
-    /**
-     * Gemini Studio KHÔNG tự chat. Nó dùng task queue.
-     * Method này sẽ không bao giờ được gọi trực tiếp.
-     * Server sẽ kiểm tra `isExtensionBased` và dùng flow taskQueue thay thế.
-     */
     async chat(options) {
-        throw new Error(
-            'GeminiStudioProvider không hỗ trợ chat() trực tiếp. ' +
-            'Server phải dùng flow taskQueue + Chrome Extension polling.'
-        );
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15 } = options;
+        // 1. Chắc chắn Browser đã mở
+        await aiStudioBot.init();
+        // 2. Gom message cuối cùng (Text + Context)
+        const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
+
+        let compiledPrompt = systemPrompt ? `[HƯỚNG DẪN HỆ THỐNG]\n${systemPrompt}\n\n` : "";
+        compiledPrompt += `[YÊU CẦU NGƯỜI DÙNG]\n${lastUserMessage}`;
+
+        // 3. Gửi Prompt vào trình duyệt
+        await aiStudioBot.sendPrompt(compiledPrompt);
+
+        // 4. Vòng lặp Agent (Chờ text hoặc Function Call)
+        let stepCount = 0;
+        while (stepCount <= maxSteps) {
+            stepCount++;
+            // Lắng nghe kết quả từ trình duyệt (DOM)
+            const result = await aiStudioBot.waitForResponse(onStreamChunk);
+
+            if (result.type === 'function_call') {
+                console.log(`[${this.name}] ⚙️ AI gọi hàm: [${result.functionName}]`);
+
+                let funcResultString = "";
+                try {
+                    const funcRes = await executeSkill(result.functionName, result.arguments);
+                    funcResultString = typeof funcRes === 'object' ? JSON.stringify(funcRes) : String(funcRes);
+                } catch (err) {
+                    funcResultString = JSON.stringify({ status: "error", error_message: err.message });
+                }
+
+                // Điền kết quả chạy hàm vào giao diện trình duyệt
+                await aiStudioBot.submitFunctionResponse(funcResultString);
+                continue; // Quay lại đầu vòng lặp để đợi AI phản hồi tiếp
+            }
+
+            if (result.type === 'text') {
+                console.log(`[${this.name}] ✅ Hoàn thành sau ${stepCount} bước.`);
+                return result.data.markdown || result.data.text;
+            }
+        }
+         return '[Lỗi: Quá giới hạn vòng lặp Function Calling]';
     }
 
     async healthCheck() {
-        // Không thể kiểm tra Extension từ server side
-        return { 
-            ready: true, 
-            message: 'Gemini Studio sẵn sàng (cần bật Bridge Mode trên Chrome Extension)' 
-        };
+        return { ready: true, message: 'CloakBrowser đã tích hợp!' };
     }
 }
 
-module.exports = GeminiStudioProvider;
+export default GeminiStudioProvider;

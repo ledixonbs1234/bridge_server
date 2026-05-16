@@ -1,7 +1,12 @@
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-module.exports = {
+// Fix lỗi __dirname trong ES Module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export default {
     "create_pipeline_plan": {
         description: "[QUAN TRỌNG] Lập kế hoạch Pipeline. BẮT BUỘC dùng công cụ này ĐẦU TIÊN khi người dùng giao một task lớn, phức tạp. Phân chia task thành các Stages (giai đoạn) và Steps (bước) giống như Harness CI/CD.",
         parameters: {

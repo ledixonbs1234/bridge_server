@@ -1,6 +1,6 @@
-const os = require('os');
+import os from 'os';
 
-module.exports = {
+export default {
     "get_os_context": {
         description: "Lấy thông tin hệ điều hành (Windows/macOS/Linux), thư mục hiện hành và thư mục home. Hãy dùng lệnh này để biết mình đang ở đâu và viết lệnh Terminal cho đúng.",
         handler: async () => {

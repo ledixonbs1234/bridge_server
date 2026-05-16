@@ -1,7 +1,7 @@
-const { exec, spawn } = require('child_process');
-const os = require('os');
+import { exec, spawn } from 'child_process';
+import os from 'os';
 
-module.exports = {
+export default {
     "execute_terminal_command": {
         description: "Thực thi lệnh Terminal/CMD. Đây là lệnh quyền lực nhất.",
         parameters: {
