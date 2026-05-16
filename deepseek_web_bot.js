@@ -19,11 +19,10 @@ class DeepSeekWebBot {
         if (this.isReady) return;
         console.log("[DeepSeek Web] Đang khởi động CloakBrowser...");
         
-        // Sử dụng chung profile với các AI khác để giữ session đăng nhập
         const profilePath = path.join(__dirname, 'profile', 'Profile_Xon_Pro_All'); 
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
-            headless: false, // Để false để bạn có thể xem bot chạy (và tự quét mã QR/Login lần đầu nếu cần)
+            headless: false, 
             viewport: { width: 1280, height: 720 },
             args: ['--disable-blink-features=AutomationControlled']
         });
@@ -32,8 +31,10 @@ class DeepSeekWebBot {
         console.log("[DeepSeek Web] Mở chat.deepseek.com...");
         await this.page.goto('https://chat.deepseek.com/', { waitUntil: 'domcontentloaded' });
         
-        // Đợi ô input xuất hiện (dấu hiệu đã login thành công)
-        await this.page.waitForSelector('textarea#chat-input', { timeout: 60000 });
+        await this.page.waitForFunction(() => {
+            return !!(document.querySelector('textarea[name="search"]') || document.querySelector('textarea'));
+        }, { timeout: 60000 });
+        
         console.log("[DeepSeek Web] ✅ Đã vào được màn hình chat DeepSeek!");
         this.isReady = true;
     }
@@ -45,36 +46,59 @@ class DeepSeekWebBot {
         if (!this.isReady) await this.init();
         console.log(`[DeepSeek Web] Đang nhập dữ liệu (${promptText.length} ký tự)...`);
 
-        const inputSelector = 'textarea#chat-input';
-        await this.page.waitForSelector(inputSelector);
-
-        // Click, bôi đen toàn bộ và xóa nội dung cũ
-        await this.page.click(inputSelector);
-        await this.page.evaluate(() => document.execCommand('selectAll', false, null));
-        await this.page.evaluate(() => document.execCommand('delete', false, null));
-
-        // Điền text mới bằng cách mô phỏng Paste để nhập nhanh và không bị lỗi DOM
+        // BƯỚC 1: ĐIỀN TEXT BẰNG "NATIVE SETTER HACK" (Bypass React)
         await this.page.evaluate((text) => {
-            const el = document.querySelector('textarea#chat-input');
-            el.value = text;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
+            // Kích hoạt DeepThink
+            const d = Array.from(document.querySelectorAll('div[role="button"]')).find(e => e.innerText && e.innerText.includes('DeepThink'));
+            if (d && d.getAttribute('aria-pressed') !== 'true') {
+                d.click();
+                console.log("✅ Đã bật DeepThink");
+            }
+
+            const t = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
+            if (t) {
+                t.focus();
+                
+                // 🔥 MAGIC HACK: Lấy bộ Setter gốc của HTMLTextAreaElement
+                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
+                
+                // Gọi setter để ép giá trị vào DOM (Vượt mặt bộ chặn của React)
+                nativeInputValueSetter.call(t, text);
+                
+                // Kích hoạt các sự kiện để React cập nhật State và làm sáng nút Send
+                t.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+                t.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+                
+                // Thao tác làm mất focus rồi focus lại giúp framework nhận diện 100%
+                t.blur();
+                t.focus();
+            }
         }, promptText);
 
+        // Chờ 500ms cho UI của React render lại (đổi aria-disabled sang false)
         await this.page.waitForTimeout(500);
 
-        // Bấm nút gửi (DeepSeek thường có một nút div[role="button"] chứa icon gửi)
+        // BƯỚC 2: TÌM VÀ CLICK NÚT GỬI (Dựa vào aria-disabled)
         await this.page.evaluate(() => {
-            // Nút Send thường không có aria-disabled="true" khi có text
-            const sendBtn = document.querySelector('div[role="button"].ds-icon-button:not([aria-disabled="true"]):has(svg)');
+            // Tìm tất cả các nút có class .ds-icon-button
+            const buttons = Array.from(document.querySelectorAll('div[role="button"].ds-icon-button'));
+            
+            // Tìm nút Send: Phải có aria-disabled="false" và chứa icon SVG (loại trừ các nút khác)
+            const sendBtn = buttons.find(el => el.getAttribute('aria-disabled') === 'false' && el.innerHTML.includes('<svg'));
+
             if (sendBtn) {
                 sendBtn.click();
+                console.log("🖱️ Đã click nút Gửi!");
             } else {
-                // Fallback: Gửi bằng phím Enter nếu không tìm thấy nút
-                const el = document.querySelector('textarea#chat-input');
-                el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, composed: true }));
+                console.log("⌨️ Không tìm thấy nút Gửi sáng, ép gửi bằng phím Enter!");
+                const t = document.querySelector('textarea[name="search"]') || document.querySelector('textarea');
+                if (t) {
+                    t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                }
             }
         });
-        console.log("[DeepSeek Web] Đã bấm gửi!");
+
+        console.log("[DeepSeek Web] Đã phát lệnh gửi!");
     }
 
     // ==========================================
@@ -83,49 +107,53 @@ class DeepSeekWebBot {
     async waitForResponse(onStreamChunk) {
         let lastLength = 0;
         let stableCount = 0;
-        const STABLE_THRESHOLD = 15; // Khoảng 4.5 giây không có text mới là coi như AI đã gõ xong
+        const STABLE_THRESHOLD = 15; 
 
         return new Promise((resolve) => {
             const pollInterval = setInterval(async () => {
                 try {
                     const state = await this.page.evaluate(() => {
                         // Nút Stop xuất hiện đồng nghĩa với việc AI đang chạy
-                        // (Thường là một button có chứa từ 'stop' hoặc icon stop)
-                        const isGenerating = !!document.querySelector('.ds-icon-button:has(svg rect), .ds-icon-button:has(svg stop)');
+                        const isGenerating = !!Array.from(document.querySelectorAll('div[role="button"]')).find(e => e.innerText && e.innerText.includes('Stop'));
 
                         // Lấy block chat cuối cùng của Assistant
-                        const chatBlocks = document.querySelectorAll('.ds-markdown.ds-markdown--block');
-                        if (chatBlocks.length === 0) return { type: 'waiting' };
+                        let text = '';
                         
-                        const lastBlock = chatBlocks[chatBlocks.length - 1];
-                        const text = lastBlock.innerText || '';
+                        const chatBlocks = document.querySelectorAll('.ds-markdown.ds-markdown--block');
+                        if (chatBlocks.length > 0) {
+                            text = chatBlocks[chatBlocks.length - 1].innerText || '';
+                        } else {
+                            const a = Array.from(document.querySelectorAll('div')).findLast(e => 
+                                e.innerText && e.innerText.length > 50 && 
+                                !e.innerText.includes('New chat') && 
+                                !e.innerText.includes('DeepSeek AI Assistant')
+                            );
+                            if (a) text = a.innerText;
+                        }
                         
                         return { type: 'streaming', text, isGenerating };
                     });
 
                     if (state.type === 'streaming') {
                         if (state.text.length > lastLength) {
-                            // Có nội dung mới đang sinh ra
                             const chunk = state.text.substring(lastLength);
-                            if (onStreamChunk) onStreamChunk(chunk); // Đẩy stream ra Server
+                            if (onStreamChunk) onStreamChunk(chunk); 
                             lastLength = state.text.length;
-                            stableCount = 0; // Reset đếm ổn định
+                            stableCount = 0; 
                         } else if (!state.isGenerating) {
-                            // Text không dài thêm VÀ nút Stop đã biến mất
                             stableCount++;
                             if (stableCount >= STABLE_THRESHOLD) {
                                 clearInterval(pollInterval);
                                 resolve({ type: 'text', text: state.text });
                             }
                         } else {
-                             // Text đang khựng lại suy nghĩ nhưng nút Stop vẫn còn
                              stableCount = 0;
                         }
                     }
                 } catch (e) {
-                    // Lỗi DOM tạm thời, bỏ qua và đợi chu kỳ quét tiếp theo
+                    // DOM lỗi tạm thời
                 }
-            }, 300); // Quét DOM mỗi 300ms
+            }, 300);
         });
     }
 }

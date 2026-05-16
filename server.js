@@ -10,13 +10,23 @@ import chalk from 'chalk';
 import boxen from 'boxen';
 import ora from 'ora';
 import { marked } from 'marked';
-import { markedTerminal } from 'marked-terminal'; // API chuẩn mới xuất dạng object
+import { markedTerminal } from 'marked-terminal';
 import TerminalRenderer from 'marked-terminal';
-
-
 import { fileURLToPath, pathToFileURL } from 'url';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// =================================================================
+// 🛡️ XỬ LÝ LỖI CTRL+C KHI ĐANG NHẬP (INQUIRER EXIT PROMPT ERROR)
+// =================================================================
+process.on('unhandledRejection', (reason) => {
+    if (reason && (reason.name === 'ExitPromptError' || (reason.message && reason.message.includes('force closed')))) {
+        console.log(chalk.gray('\nGoodbye! 👋\n'));
+        process.exit(0);
+    }
+    console.error('Unhandled Rejection:', reason);
+});
 
 const app = express();
 app.use(cors());
@@ -29,6 +39,7 @@ const EXTENSION_PORT = 54321;
 // =================================================================
 let activeProvider = null;
 let providerConfig = {};
+
 // Cấu hình Render Markdown cực đẹp cho Terminal
 marked.setOptions({
     renderer: new TerminalRenderer({
@@ -38,21 +49,19 @@ marked.setOptions({
     })
 });
 
-// Cấu hình Render Markdown cực đẹp cho Terminal
 marked.use(markedTerminal({
     reflowText: true,
     width: process.stdout.columns || 80,
     unescape: true,
-    // --- BẮT ĐẦU TUỲ CHỈNH UI CHUẨN IDE ---
-    heading: chalk.bold.greenBright,               // Tiêu đề xanh sáng
-    firstHeading: chalk.bold.cyanBright.underline, // Tiêu đề H1 gạch chân
-    strong: chalk.bold.cyan,                       // Chữ in đậm màu Cyan
-    em: chalk.italic.yellow,                       // Chữ in nghiêng màu Vàng
-    codespan: chalk.bgGray.whiteBright,            // Bôi đen nền xám cho Code Inline (giống hệt Discord/Slack)
-    blockquote: chalk.gray.italic,                 // Trích dẫn màu xám
+    heading: chalk.bold.greenBright,
+    firstHeading: chalk.bold.cyanBright.underline,
+    strong: chalk.bold.cyan,
+    em: chalk.italic.yellow,
+    codespan: chalk.bgGray.whiteBright,
+    blockquote: chalk.gray.italic,
     listitem: chalk.white,
     tableOptions: {
-        chars: { // Bo góc bảng cực đẹp
+        chars: {
             'top': '═' , 'top-mid': '╤' , 'top-left': '╔' , 'top-right': '╗',
             'bottom': '═' , 'bottom-mid': '╧' , 'bottom-left': '╚' , 'bottom-right': '╝',
             'left': '║' , 'left-mid': '╟' , 'mid': '─' , 'mid-mid': '┼',
@@ -60,7 +69,7 @@ marked.use(markedTerminal({
         }
     }
 }));
-// Thêm tham số showMenu = false để mặc định bỏ qua giao diện chọn AI
+
 async function loadProviderConfig(showMenu = false) {
     const configPath = path.join(__dirname, 'config.json');
     try {
@@ -76,79 +85,84 @@ async function loadProviderConfig(showMenu = false) {
     const providersList = Object.keys(providerConfig.providers || {});
     let selectedProviderName = providerConfig.activeProvider || 'deepseek-web';
 
-    // CHỈ HIỆN MENU CHỌN KHI: Bấm Ctrl+P (showMenu=true) HOẶC chưa có AI nào trong config
     if ((showMenu || !providerConfig.providers[selectedProviderName]) && providersList.length > 0) {
         console.clear();
         console.log(boxen(chalk.bold.cyan('🚀 BRIDGE SERVER AGENT V2.0\n') + chalk.gray('Smarter & Modern Terminal UI'), {
             padding: 1, margin: 1, borderStyle: 'double', borderColor: 'cyan', textAlignment: 'center'
         }));
 
-        selectedProviderName = await select({
-            message: chalk.bold.white('🤖 Hãy chọn AI Provider để làm việc:'),
-            choices: providersList.map(p => ({
-                name: chalk.yellow(providerConfig.providers[p].name) + chalk.gray(` (${providerConfig.providers[p].model || 'Mặc định'})`),
-                value: p,
-                description: chalk.italic(providerConfig.providers[p].description || '')
-            })),
-            default: providerConfig.activeProvider,
-        });
+        try {
+            selectedProviderName = await select({
+                message: chalk.bold.white('🤖 Hãy chọn AI Provider để làm việc:'),
+                choices: providersList.map(p => ({
+                    name: chalk.yellow(providerConfig.providers[p].name) + chalk.gray(` (${providerConfig.providers[p].model || 'Mặc định'})`),
+                    value: p,
+                    description: chalk.italic(providerConfig.providers[p].description || '')
+                })),
+                default: providerConfig.activeProvider,
+            });
 
-        providerConfig.activeProvider = selectedProviderName;
+            providerConfig.activeProvider = selectedProviderName;
 
-        // --- CHỌN MODEL THÔNG MINH ---
-        if (selectedProviderName !== 'gemini-studio' && selectedProviderName !== 'deepseek-web') {
-            const providerData = providerConfig.providers[selectedProviderName];
-            let modelChoices = [];
+            if (selectedProviderName !== 'gemini-studio' && selectedProviderName !== 'deepseek-web') {
+                const providerData = providerConfig.providers[selectedProviderName];
+                let modelChoices = [];
 
-            if (selectedProviderName === 'openai') {
-                modelChoices = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-preview', 'o1-mini'];
-            } else if (selectedProviderName === 'gemini-api') {
-                modelChoices = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'];
-            } else if (selectedProviderName === 'claude') {
-                modelChoices = ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'];
-            } else if (selectedProviderName === 'ollama') {
-                try {
-                    const baseUrl = (providerData.baseUrl || 'http://localhost:11434').replace(/\/$/, '');
-                    const res = await fetch(`${baseUrl}/api/tags`);
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data.models && data.models.length > 0) {
-                            modelChoices = data.models.map(m => m.name);
+                if (selectedProviderName === 'openai') {
+                    modelChoices = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-preview', 'o1-mini'];
+                } else if (selectedProviderName === 'gemini-api') {
+                    modelChoices = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+                } else if (selectedProviderName === 'claude') {
+                    modelChoices = ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'];
+                } else if (selectedProviderName === 'ollama') {
+                    try {
+                        const baseUrl = (providerData.baseUrl || 'http://localhost:11434').replace(/\/$/, '');
+                        const res = await fetch(`${baseUrl}/api/tags`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data.models && data.models.length > 0) {
+                                modelChoices = data.models.map(m => m.name);
+                            }
                         }
-                    }
-                } catch (e) { }
-                const defaultOllama = ['llama3.1', 'qwen2.5', 'mistral', 'codellama'];
-                modelChoices = [...new Set([...modelChoices, ...defaultOllama])];
-            } else if (selectedProviderName === 'openai-compatible') {
-                modelChoices = ['deepseek-chat', 'deepseek-reasoner', 'llama3-70b-8192', 'mixtral-8x7b-32768'];
-            }
-
-            modelChoices.push('Khác... (Nhập tay)');
-
-            if (modelChoices.length > 0) {
-                let selectedModel = await select({
-                    message: chalk.bold.white(`⚙️  Chọn Model cho ${providerData.name}:`),
-                    choices: modelChoices.map(m => ({
-                        name: m === providerData.model ? `${chalk.green(m)} (Đang dùng)` : chalk.cyan(m),
-                        value: m
-                    })),
-                    default: modelChoices.includes(providerData.model) ? providerData.model : 'Khác... (Nhập tay)',
-                    loop: false
-                });
-
-                if (selectedModel === 'Khác... (Nhập tay)') {
-                    selectedModel = await input({
-                        message: chalk.bold.yellow('✍️  Nhập tên model tùy chỉnh:'),
-                        default: providerData.model || ''
-                    });
+                    } catch (e) { }
+                    const defaultOllama = ['llama3.1', 'qwen2.5', 'mistral', 'codellama'];
+                    modelChoices = [...new Set([...modelChoices, ...defaultOllama])];
+                } else if (selectedProviderName === 'openai-compatible') {
+                    modelChoices = ['deepseek-chat', 'deepseek-reasoner', 'llama3-70b-8192', 'mixtral-8x7b-32768'];
                 }
-                if (selectedModel) { providerConfig.providers[selectedProviderName].model = selectedModel; }
+
+                modelChoices.push('Khác... (Nhập tay)');
+
+                if (modelChoices.length > 0) {
+                    let selectedModel = await select({
+                        message: chalk.bold.white(`⚙️  Chọn Model cho ${providerData.name}:`),
+                        choices: modelChoices.map(m => ({
+                            name: m === providerData.model ? `${chalk.green(m)} (Đang dùng)` : chalk.cyan(m),
+                            value: m
+                        })),
+                        default: modelChoices.includes(providerData.model) ? providerData.model : 'Khác... (Nhập tay)',
+                        loop: false
+                    });
+
+                    if (selectedModel === 'Khác... (Nhập tay)') {
+                        selectedModel = await input({
+                            message: chalk.bold.yellow('✍️  Nhập tên model tùy chỉnh:'),
+                            default: providerData.model || ''
+                        });
+                    }
+                    if (selectedModel) { providerConfig.providers[selectedProviderName].model = selectedModel; }
+                }
             }
+        } catch (error) {
+            if (error.name === 'ExitPromptError' || (error.message && error.message.includes('force closed'))) {
+                console.log(chalk.gray('\nGoodbye! 👋\n'));
+                process.exit(0);
+            }
+            throw error;
         }
-        // Lưu lại toàn bộ cấu hình mới
+
         fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
     } else {
-        // NẾU CHẠY MẶC ĐỊNH, CHỈ IN CÁI BẢNG HEADER CHỨ KHÔNG HỎI GÌ THÊM
         console.clear();
         console.log(boxen(chalk.bold.cyan('🚀 BRIDGE SERVER AGENT V2.0\n') + chalk.gray('Smarter & Modern Terminal UI'), {
             padding: 1, margin: 1, borderStyle: 'double', borderColor: 'cyan', textAlignment: 'center'
@@ -178,8 +192,6 @@ async function loadProviderConfig(showMenu = false) {
             activeProvider = new ProviderClass(providerSettings);
         }
         console.log(`\n🔌 Provider đang chạy: ${chalk.bold.green(activeProvider.getDisplayName())}\n`);
-
-        // Khôi phục lại bàn phím phòng trường hợp Inquirer khóa luồng
         process.stdin.resume();
     } catch (err) {
         console.error(chalk.red(`❌ Lỗi nạp provider:`), err.message);
@@ -187,17 +199,25 @@ async function loadProviderConfig(showMenu = false) {
 }
 
 await loadProviderConfig();
+
 // =================================================================
 // 🛡️ HỆ THỐNG BẢO MẬT (Đã thiết kế lại dùng Inquirer)
 // =================================================================
 global.isAutoApproveAll = false;
 
 global.askPermission = async function (query) {
-    // Dùng inpupt của Inquirer thay vì bắt phím ngầm
-    const answer = await input({
-        message: query
-    });
-    return answer.toLowerCase().trim();
+    try {
+        const answer = await input({
+            message: query
+        });
+        return answer.toLowerCase().trim();
+    } catch (error) {
+        if (error.name === 'ExitPromptError' || (error.message && error.message.includes('force closed'))) {
+            console.log(chalk.gray('\n[Hệ thống] Đã hủy thao tác.'));
+            process.exit(0);
+        }
+        return 'n'; // Từ chối nếu gặp lỗi khác
+    }
 }
 
 function resetSystem() {
@@ -214,7 +234,6 @@ async function loadSkills() {
     let totalHardSkills = 0;
     let totalSoftSkills = 0;
 
-    // 1. NẠP HARD SKILLS (Các file .js từ thư mục /skills)
     const skillsDir = path.join(__dirname, 'skills');
     if (!fs.existsSync(skillsDir)) {
         fs.mkdirSync(skillsDir);
@@ -222,10 +241,9 @@ async function loadSkills() {
         const files = fs.readdirSync(skillsDir).filter(f => f.endsWith('.js'));
         for (const file of files) {
             try {
-                // Windows cần convert path sang URL để import động
                 const fileUrl = pathToFileURL(path.join(skillsDir, file)).href;
                 const pluginModule = await import(fileUrl);
-                const plugin = pluginModule.default; // Lấy từ export default
+                const plugin = pluginModule.default;
 
                 for (const [skillName, skillDef] of Object.entries(plugin)) {
                     SKILL_REGISTRY[skillName] = skillDef;
@@ -237,7 +255,6 @@ async function loadSkills() {
         }
     }
 
-    // 2. NẠP SOFT SKILLS (Các file SKILL.md từ thư mục /agent_skills)
     const agentSkillsDir = path.join(__dirname, 'agent_skills');
     if (!fs.existsSync(agentSkillsDir)) {
         fs.mkdirSync(agentSkillsDir);
@@ -245,28 +262,21 @@ async function loadSkills() {
     } else {
         const folders = fs.readdirSync(agentSkillsDir);
         folders.forEach(folder => {
-            // Bỏ qua nếu là file, chỉ xét thư mục
             if (!fs.statSync(path.join(agentSkillsDir, folder)).isDirectory()) return;
 
             const skillFilePath = path.join(agentSkillsDir, folder, 'SKILL.md');
             if (fs.existsSync(skillFilePath)) {
                 try {
                     const content = fs.readFileSync(skillFilePath, 'utf8');
-
-                    // [ĐÃ SỬA LỖI REGEX Ở ĐÂY] 
-                    // Regex mới bỏ qua các dòng comment của agentskill.sh ở đầu file
                     const match = content.match(/(?:^|\n)---\s*\n([\s\S]*?)\n---\s*(?:\n|$)([\s\S]*)/);
 
                     if (match) {
-                        const yamlData = yaml.load(match[1]); // Parse cấu hình YAML
-                        const markdownBody = match[2].trim(); // Parse nội dung Markdown bên dưới
+                        const yamlData = yaml.load(match[1]); 
+                        const markdownBody = match[2].trim(); 
 
-                        // Lấy tên từ file yaml hoặc lấy tên thư mục
                         const rawName = yamlData.name || folder;
-                        // Chuyển dấu gạch ngang thành gạch dưới (chuẩn hàm của AI)
                         const skillName = rawName.replace(/-/g, '_');
 
-                        // Đăng ký Tool Ảo cho AI
                         SKILL_REGISTRY[`workflow_${skillName}`] = {
                             description: `[HƯỚNG DẪN QUY TRÌNH] ${yamlData.description || 'Quy trình thực hiện'}. Gọi hàm này ĐẦU TIÊN (không cần tham số) để đọc sổ tay hướng dẫn trước khi làm nhiệm vụ.`,
                             handler: async () => {
@@ -296,7 +306,6 @@ await loadSkills();
 // =================================================================
 // 🌐 API CHO EXTENSION LÀM VIỆC
 // =================================================================
-
 app.get('/api/skills', (req, res) => {
     const declarations = Object.keys(SKILL_REGISTRY).map(key => {
         const decl = {
@@ -310,13 +319,12 @@ app.get('/api/skills', (req, res) => {
     });
     res.json(declarations);
 });
+
 app.get('/api/system-prompt', (req, res) => {
     const promptPath = path.join(__dirname, 'system_prompt.md');
     try {
         if (fs.existsSync(promptPath)) {
             let content = fs.readFileSync(promptPath, 'utf8');
-            // Ghi chú: Ký ức động (Dynamic Memory) sẽ được tiêm trực tiếp vào từng câu chat 
-            // ở API /v1/chat/completions thay vì nạp cứng vào System Prompt.
             res.json({ success: true, prompt: content });
         } else {
             res.json({ success: false, error: "File system_prompt.md không tồn tại." });
@@ -326,17 +334,9 @@ app.get('/api/system-prompt', (req, res) => {
     }
 });
 
-// =================================================================
-// 🚀 REAL STREAMING LOGIC
-// =================================================================
 const activeStreams = new Map();
 
-// =================================================================
-// 🔧 HELPER: Chạy Skill cho API Provider (dùng chung logic permission)
-// =================================================================
 async function executeSkillForProvider(functionName, funcArgs) {
-
-    // Tắt in raw object đối với các hàm đã có UI đẹp
     const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines', 'get_os_context'];
     if (!silentFunctions.includes(functionName) && !functionName.startsWith('workflow_')) {
         console.log(chalk.gray(`[Node] 📦 Tham số:`), funcArgs);
@@ -360,9 +360,6 @@ async function executeSkillForProvider(functionName, funcArgs) {
     }
 }
 
-// =================================================================
-// 🧠 HELPER: Dynamic Contextual Memory (Trí nhớ động phân cấp)
-// =================================================================
 function recallMemory(lastUserMessage, allMessagesContext = "") {
     const memoryDir = path.join(__dirname, '.agent_memory');
     if (!fs.existsSync(memoryDir)) return "";
@@ -370,22 +367,19 @@ function recallMemory(lastUserMessage, allMessagesContext = "") {
     let injectedContext = "\n\n[HỆ THỐNG TRÍ NHỚ (CONTEXTUAL MEMORY)]:\nLưu ý: Đây là những nguyên tắc bắt buộc từ người dùng. Hãy áp dụng ngay:\n";
     let hasMemory = false;
 
-    // 1. GLOBAL RULES (Luôn luôn nạp - Giống biến môi trường Global)
     const globalFile = path.join(memoryDir, 'rules', 'rules_global.md');
     if (fs.existsSync(globalFile)) {
         injectedContext += `\n--- QUY TẮC CHUNG ---\n${fs.readFileSync(globalFile, 'utf8')}\n`;
         hasMemory = true;
     }
 
-    // 2. SITUATIONAL RULES (Chỉ nạp khi nhắc trúng từ khóa - Giống Environment Variables)
     const rulesDir = path.join(memoryDir, 'rules');
     if (fs.existsSync(rulesDir)) {
         const ruleFiles = fs.readdirSync(rulesDir).filter(f => f.endsWith('.md') && f !== 'rules_global.md');
         const searchSpace = (lastUserMessage + " " + allMessagesContext).toLowerCase();
 
         for (const file of ruleFiles) {
-            const keyword = file.replace('.md', ''); // Ví dụ: 'react.md' -> 'react'
-            // Chỉ tiêm bộ nhớ nếu user nhắc đến từ khóa (vd: react, sql, css)
+            const keyword = file.replace('.md', ''); 
             if (searchSpace.includes(keyword)) {
                 injectedContext += `\n--- QUY TẮC CHO [${keyword.toUpperCase()}] ---\n${fs.readFileSync(path.join(rulesDir, file), 'utf8')}\n`;
                 hasMemory = true;
@@ -393,7 +387,6 @@ function recallMemory(lastUserMessage, allMessagesContext = "") {
         }
     }
 
-    // 3. EPISODIC MEMORY (RAG: Thuật toán tìm lỗi cũ của bạn)
     const episodicFile = path.join(memoryDir, 'episodic.json');
     if (fs.existsSync(episodicFile)) {
         try {
@@ -412,9 +405,7 @@ function recallMemory(lastUserMessage, allMessagesContext = "") {
 
     return hasMemory ? injectedContext : "";
 }
-// =================================================================
-// 📡 API: Provider Info & Health Check
-// =================================================================
+
 app.get('/api/provider', (req, res) => {
     res.json({
         active: providerConfig.activeProvider,
@@ -430,11 +421,9 @@ app.post('/api/provider/switch', (req, res) => {
     if (!providerConfig.providers?.[provider]) {
         return res.status(400).json({ error: `Provider "${provider}" không tồn tại trong config.json` });
     }
-    // Ghi lại config
     providerConfig.activeProvider = provider;
     const configPath = path.join(__dirname, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
-    // Reload provider
     loadProviderConfig();
     res.json({ success: true, message: `Đã chuyển sang provider: ${activeProvider.getDisplayName()}` });
 });
@@ -458,13 +447,10 @@ app.post('/api/config', (req, res) => {
     const configPath = path.join(__dirname, 'config.json');
     fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
 
-    // Reload active provider
     loadProviderConfig();
     res.json({ success: true, message: 'Cấu hình đã được lưu thành công' });
 });
-// =================================================================
-// 🚀 MAIN ENDPOINT: /v1/chat/completions (ĐÃ FIX CHO CLOAKBROWSER)
-// =================================================================
+
 app.post('/v1/chat/completions', async (req, res) => {
     const { messages, stream } = req.body;
     const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
@@ -473,7 +459,6 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()}`);
 
-    // Ghép bộ nhớ (Memory) vào tin nhắn cuối cùng của user
     const enrichedMessages = messages.map(m => {
         if (m.role === 'user' && m.content === lastUserMessage && injectedMemory) {
             return { ...m, content: m.content + injectedMemory };
@@ -481,7 +466,6 @@ app.post('/v1/chat/completions', async (req, res) => {
         return m;
     });
 
-    // Đọc system prompt
     let systemPrompt = "";
     const promptPath = path.join(__dirname, 'system_prompt.md');
     if (fs.existsSync(promptPath)) {
@@ -507,10 +491,8 @@ app.post('/v1/chat/completions', async (req, res) => {
             messages: enrichedMessages,
             skillRegistry: SKILL_REGISTRY,
             executeSkill: async (funcName, args) => {
-                // Tạm dừng spinner khi cần in Box hỏi người dùng
                 if (spinner) spinner.stop();
                 const res = await executeSkillForProvider(funcName, args);
-                // Sau khi chạy skill xong, bật lại spinner
                 if (spinner) spinner.start(chalk.yellow(`Đang xử lý kết quả của ${funcName}...`));
                 return res;
             },
@@ -551,7 +533,6 @@ app.listen(EXTENSION_PORT, () => {
     console.log(`=================================================`);
     console.log(`🔌 Active Provider: ${chalk.green(activeProvider.getDisplayName())}`);
 
-    // Thêm dòng hiển thị thông tin Model
     if (activeProvider.model) {
         console.log(`🧠 Model Đang Dùng: ${chalk.cyan(activeProvider.model)}`);
     }
@@ -559,6 +540,7 @@ app.listen(EXTENSION_PORT, () => {
     console.log("⌨️ MẸO: Gõ lệnh trực tiếp vào ô chat để ra lệnh cho AI");
     console.log(`=================================================\n`);
 });
+
 // =================================================================
 // 💬 TERMINAL UI - PHASE 4.1 (OPENCODE + MARKDOWN HOT-SWAP)
 // =================================================================
@@ -574,11 +556,21 @@ async function startTerminalChatLoop() {
     console.log(OC_MUTED(`\n  B R I D G E  S E R V E R\n`));
 
     while (true) {
-       console.log(chalk.gray('  Ask anything...')); // In gợi ý ở dòng trên
-        const userText = await input({
-            message: OC_BLUE('▌ '),
-            theme: { prefix: '' }
-        });
+        console.log(chalk.gray('  Ask anything...')); 
+        
+        let userText;
+        try {
+            userText = await input({
+                message: OC_BLUE('▌ '),
+                theme: { prefix: '' }
+            });
+        } catch (error) {
+            if (error.name === 'ExitPromptError' || (error.message && error.message.includes('force closed'))) {
+                console.log(OC_MUTED('\nGoodbye! 👋\n'));
+                process.exit(0);
+            }
+            continue; // Nếu gặp lỗi khác, chạy lại vòng lặp
+        }
 
         const text = userText.trim();
         if (!text) continue;
@@ -609,7 +601,6 @@ async function startTerminalChatLoop() {
         let spinner = ora({ text: OC_MUTED.italic('Starting build...'), spinner: 'dots' }).start();
         let isThinkingMode = false;
 
-        // BIẾN ĐẾM TỌA ĐỘ ĐỂ HOT-SWAP MARKDOWN
         let printedRows = 0;
         let currentLineLen = 0;
         const terminalCols = process.stdout.columns || 80;
@@ -637,11 +628,9 @@ async function startTerminalChatLoop() {
                     if (chunk.includes('<think>')) { isThinkingMode = true; process.stdout.write(OC_THINK.italic('Thinking:\n')); return; }
                     if (chunk.includes('</think>')) { isThinkingMode = false; process.stdout.write('\n\n'); return; }
 
-                    // In text thô ra màn hình
                     const textToPrint = isThinkingMode ? OC_MUTED.italic(chunk) : OC_TEXT(chunk);
                     process.stdout.write(textToPrint);
 
-                    // Toán học: Đếm số lượng dòng Terminal đã bị chiếm dụng
                     const rawChunk = chunk.replace(/\x1b\[[0-9;]*m/g, '');
                     for (let i = 0; i < rawChunk.length; i++) {
                         if (rawChunk[i] === '\n') {
@@ -658,37 +647,26 @@ async function startTerminalChatLoop() {
             if (isFirstChunk) spinner.stop();
             const cleanResponseForHistory = fullAiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
-          // =======================================================
-            // 🪄 MAGIC HOT-SWAP: XÓA CHỮ THÔ VÀ BƠM MARKDOWN VÀO
-            // =======================================================
-            
-            // 1. Dọn dẹp rác Markdown do AI sinh lỗi & Làm đẹp List
             let polishedMarkdown = cleanResponseForHistory
-                .replace(/^\s*\*\s/gm, '- ') // Ép mọi dấu * ở đầu dòng thành dấu - (chuẩn Markdown list)
-                .replace(/```[a-z]*\n/g, '\n'); // Hỗ trợ dọn dẹp các block code lỗi
+                .replace(/^\s*\*\s/gm, '- ') 
+                .replace(/```[a-z]*\n/g, '\n'); 
 
-            // 2. Hàm in ra terminal kết hợp tô màu dấu chấm tròn
             const printBeautiful = (text) => {
                 let parsedText = marked.parse(text).trim();
-                // Tự động đổi các dấu gạch đầu dòng mặc định thành dấu chấm tròn (•) màu Cyan cực đẹp
                 parsedText = parsedText.replace(/^\s*-\s/gm, chalk.cyan('  • '));
                 console.log(parsedText);
             };
 
-            // 3. Logic xuất ra màn hình (Giữ nguyên thuật toán đếm dòng của bạn)
             if (printedRows > 0 && printedRows < terminalRowsMax - 3) {
-                // Xóa text thô
                 process.stdout.write(`\r\x1b[${printedRows}A\x1b[0J`);
                 printBeautiful(polishedMarkdown);
             } else if (printedRows > 0) {
-                // Nếu tràn màn hình, in tiếp ở dưới
                 console.log(OC_MUTED(`\n\n--- Formatting Markdown ---\n`));
                 printBeautiful(polishedMarkdown);
             } else if (polishedMarkdown) {
                 printBeautiful(polishedMarkdown);
             }
 
-            // THANH TRẠNG THÁI
             const endTime = Date.now();
             const duration = ((endTime - startTime) / 1000).toFixed(1);
             const modelName = activeProvider.model || 'Agent';
@@ -705,7 +683,6 @@ async function startTerminalChatLoop() {
     }
 }
 
-// 7. Kích hoạt vòng lặp chat sau khi server đã Listen thành công (delay nhẹ 500ms)
 setTimeout(() => {
     startTerminalChatLoop();
-}, 500)
+}, 500);
