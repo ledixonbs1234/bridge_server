@@ -31,13 +31,46 @@ class AIStudioBot {
     }
 
     // ==========================================
-    // HÀM MỚI: CÀI ĐẶT MÔI TRƯỜNG NHƯ EXTENSION CŨ
+    // CÀI ĐẶT MÔI TRƯỜNG VÀ TỰ ĐỘNG PHỤC HỒI KHI BỊ RESET
     // ==========================================
     async setupAgentEnvironment(systemPrompt, functionDeclarationsStr, thinkingLevel = "High") {
         if (!this.isReady) await this.init();
-        console.log("[Browser] ⚡ Đang kiểm tra và cài đặt môi trường Agent...");
 
-        // Chạy script trực tiếp trong trình duyệt (sử dụng lại chính logic DOM an toàn của bạn)
+        // --- BƯỚC 1: KIỂM TRA NHANH DOM XEM CÓ BỊ MẤT CẤU HÌNH KHÔNG ---
+        const isEnvLost = await this.page.evaluate((lvl) => {
+            // Kiểm tra nút Function Calling có bị tắt không
+            let fcToggle = null;
+            const switches = document.querySelectorAll('button[role="switch"]');
+            for (const btn of switches) {
+                const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
+                if (ariaLabel.includes('function calling')) { fcToggle = btn; break; }
+                const row = btn.closest('div, mat-list-item, ms-prompt-run-settings-row');
+                if (row && row.textContent.includes('Function calling')) { fcToggle = btn; break; }
+            }
+
+            // Nếu có nút toggle mà nó đang OFF -> Chắc chắn đã bị reset do đổi model/refresh
+            if (fcToggle && fcToggle.getAttribute('aria-checked') !== 'true') return true;
+
+            // Kiểm tra Thinking Level có bị sai lệch không
+            const lvlBtn = document.querySelector('mat-select[aria-label="Thinking Level"], ms-thinking-level-setting mat-select');
+            if (lvlBtn && !lvlBtn.textContent.includes(lvl)) return true;
+
+            return false; // Môi trường vẫn an toàn
+        }, thinkingLevel);
+
+        // --- BƯỚC 2: XỬ LÝ NẾU MÔI TRƯỜNG BỊ RESET ---
+        if (isEnvLost) {
+            console.log("\x1b[33m[Browser] ⚠️ Phát hiện AI Studio bị reset (do đổi Model hoặc F5). Đang cấu hình lại...\x1b[0m");
+            // Reset toàn bộ cờ để bắt buộc cài lại
+            this.setupFlags = { system: false, functions: false, thinking: false };
+        } else if (this.setupFlags.system && this.setupFlags.functions && this.setupFlags.thinking) {
+            // Nếu mọi thứ đều ổn định và đã được cài đặt -> Thoát sớm để tiết kiệm 3-4 giây
+            return;
+        }
+
+        console.log("[Browser] ⚡ Đang tiến hành cài đặt môi trường Agent...");
+
+        // --- BƯỚC 3: CHẠY SCRIPT CÀI ĐẶT (Giữ nguyên logic an toàn của bạn) ---
         await this.page.evaluate(async ({ sys, fc, lvl, flags }) => {
             const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -54,86 +87,63 @@ class AIStudioBot {
                         if (nativeSetter) nativeSetter.call(ta, sys);
                         else ta.value = sys;
 
-                        // Bổ sung dispatch cả change event để Angular nhận diện dữ liệu đã hoàn tất
                         ta.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
                         ta.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
                         await sleep(300);
                     }
 
-                    // Tắt dialog: Khôi phục lại logic tìm nút X như trong content.js
                     let closeBtn = document.querySelector('mat-dialog-container [id^="mat-mdc-dialog-title"] button');
                     if (!closeBtn) {
                         const dialogBtns = document.querySelectorAll('mat-dialog-container button');
                         for (const b of dialogBtns) {
                             const icon = b.querySelector('mat-icon');
                             if (icon && icon.textContent.toLowerCase().includes('close')) {
-                                closeBtn = b;
-                                break;
+                                closeBtn = b; break;
                             }
                         }
                     }
 
-                    if (closeBtn) {
-                        // Ưu tiên click nút X
-                        closeBtn.click();
-                    } else {
-                        // Fallback: Dispatch Escape (Thêm composed: true để xuyên qua Shadow DOM)
-                        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, composed: true }));
-                    }
+                    if (closeBtn) closeBtn.click();
+                    else document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, composed: true }));
                     await sleep(500);
                 }
             }
 
-           if (fc && !flags.functions) {
-                // --- BƯỚC 1: TÌM ĐÚNG NÚT TOGGLE CỦA FUNCTION CALLING ---
+            // 2. Cài đặt Function Calling
+            if (fc && !flags.functions) {
                 let fcToggle = null;
                 const switches = document.querySelectorAll('button[role="switch"]');
                 for (const btn of switches) {
                     const ariaLabel = (btn.getAttribute('aria-label') || '').toLowerCase();
-                    if (ariaLabel.includes('function calling')) {
-                        fcToggle = btn; break;
-                    }
-                    // Kiểm tra element cha (dòng chứa nó) xem có chữ "Function calling" không
+                    if (ariaLabel.includes('function calling')) { fcToggle = btn; break; }
                     const row = btn.closest('div, mat-list-item, ms-prompt-run-settings-row');
-                    if (row && row.textContent.includes('Function calling')) {
-                        fcToggle = btn; break;
-                    }
+                    if (row && row.textContent.includes('Function calling')) { fcToggle = btn; break; }
                 }
 
-                // Bật toggle nếu đang tắt
                 if (fcToggle && fcToggle.getAttribute('aria-checked') !== 'true') {
                     fcToggle.click();
                     await sleep(500);
                 }
 
-                // --- BƯỚC 2: TÌM ĐÚNG NÚT EDIT CỦA FUNCTION CALLING ---
                 let editBtn = document.querySelector('button[aria-label="Edit function declarations"], .edit-function-declarations-button');
                 if (!editBtn) {
                     const allBtns = document.querySelectorAll('button, span.text-button, a');
                     for (const b of allBtns) {
                         if (b.textContent.trim().toLowerCase() === 'edit') {
                             const row = b.closest('div, mat-list-item, ms-prompt-run-settings-row');
-                            if (row && row.textContent.includes('Function calling')) {
-                                editBtn = b; break;
-                            }
+                            if (row && row.textContent.includes('Function calling')) { editBtn = b; break; }
                         }
                     }
                 }
 
-                // --- BƯỚC 3: MỞ BẢNG CODE VÀ ĐIỀN JSON ---
                 if (editBtn) {
                     editBtn.click();
                     await sleep(800);
 
-                    // Chuyển sang tab Code Editor
                     const tabs = document.querySelectorAll('mat-dialog-container div[role="tab"]');
                     const codeTab = Array.from(tabs).find(el => el.textContent.includes('Code Editor'));
-                    if (codeTab) {
-                        codeTab.click();
-                        await sleep(400);
-                    }
+                    if (codeTab) { codeTab.click(); await sleep(400); }
 
-                    // Điền JSON
                     const ta = document.querySelector('mat-dialog-container textarea');
                     if (ta) {
                         const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set;
@@ -143,7 +153,6 @@ class AIStudioBot {
                         await sleep(300);
                     }
 
-                    // Bấm Save
                     const saveBtn = Array.from(document.querySelectorAll('mat-dialog-actions button')).find(b => b.textContent.toLowerCase().includes('save') || b.classList.contains('ms-button-primary'));
                     if (saveBtn) saveBtn.click();
                     await sleep(500);
@@ -160,17 +169,14 @@ class AIStudioBot {
                     await sleep(600);
                     const options = document.querySelectorAll('mat-option');
                     for (const opt of options) {
-                        if (opt.textContent.trim() === lvl) {
-                            opt.click();
-                            break;
-                        }
+                        if (opt.textContent.trim() === lvl) { opt.click(); break; }
                     }
                     await sleep(500);
                 }
             }
         }, { sys: systemPrompt, fc: functionDeclarationsStr, lvl: thinkingLevel, flags: this.setupFlags });
 
-        // Cập nhật cờ để các lượt chat sau không cần click lại mất thời gian
+        // Cập nhật cờ để các lượt chat sau không cần click lại
         this.setupFlags.system = true;
         this.setupFlags.functions = true;
         this.setupFlags.thinking = true;
@@ -228,7 +234,7 @@ class AIStudioBot {
                         const runBtn = document.querySelector('ms-run-button button, button[aria-label*="Run"], button[aria-label*="Stop"]');
                         const isStopState = runBtn && (runBtn.textContent.toLowerCase().includes('stop') || runBtn.getAttribute('aria-label')?.toLowerCase().includes('stop'));
                         // Kiểm tra xem có đang đòi chạy Function không
-                        const activeFuncInput = document.querySelector('input[placeholder*="function"]:not([data-submitting]), input[placeholder*="response"]:not([data-submitting])');
+                        const activeFuncInput = document.querySelector('input[placeholder*="function"]:not([data-submitting]):not([data-answered]):not([disabled]), input[placeholder*="response"]:not([data-submitting]):not([data-answered]):not([disabled])');
                         if (activeFuncInput) {
                             const container = activeFuncInput.closest('ms-function-call-chunk, ms-tool-call, ms-chat-turn') || document.body;
                             let rawText = container.textContent || '';
@@ -299,12 +305,13 @@ class AIStudioBot {
         console.log("[Browser] Điền kết quả Function vào UI...");
         const valueToSet = typeof responseString === 'string' ? responseString : JSON.stringify(responseString);
 
+        // 1. Điền dữ liệu và đánh dấu đang xử lý
         await this.page.evaluate((val) => {
-            const inputField = document.querySelector('input[placeholder*="function"]:not([data-submitting-done]), input[placeholder*="response"]:not([data-submitting-done])');
+            const inputField = document.querySelector('input[placeholder*="function"]:not([data-submitting]):not([data-answered]), input[placeholder*="response"]:not([data-submitting]):not([data-answered])');
             if (!inputField) return;
 
+            // Đánh dấu là đang submit để hàm waitForResponse không bắt nhầm
             inputField.setAttribute('data-submitting', 'true');
-            inputField.setAttribute('data-submitting-done', 'true');
 
             const nativeInputSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
             if (nativeInputSetter) nativeInputSetter.call(inputField, val);
@@ -314,24 +321,85 @@ class AIStudioBot {
             inputField.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
         }, valueToSet);
 
-        await this.page.waitForTimeout(1000);
+        console.log("[Browser] Đang chờ nút Send (Function) sáng lên...");
 
+        try {
+            // 2. Chờ nút mở khóa
+            await this.page.waitForFunction(() => {
+                const inputField = document.querySelector('input[data-submitting="true"]');
+                if (!inputField) return false;
+                
+                const container = inputField.closest('form, ms-function-call-chunk, ms-chat-turn');
+                if (!container) return false;
 
-        // Bấm send function
-        await this.page.evaluate(() => {
-            const inputField = document.querySelector('input[data-submitting="true"]');
-            const turnBlock = inputField.closest('ms-chat-turn, ms-function-call-chunk, .model-turn, div.chunk');
-            if (turnBlock) {
-                const buttons = turnBlock.querySelectorAll('button');
+                const buttons = container.querySelectorAll('button');
                 for (const btn of buttons) {
-                    if (btn.textContent.toLowerCase().includes('send') || btn.getAttribute('aria-label')?.toLowerCase().includes('send')) {
-                        btn.removeAttribute('disabled');
+                    const isSendBtn = btn.textContent.toLowerCase().includes('send') || 
+                                      (btn.getAttribute('aria-label') || '').toLowerCase().includes('send') ||
+                                      btn.type === 'submit';
+                    if (isSendBtn) {
+                        const isAriaDisabled = btn.getAttribute('aria-disabled') === 'true';
+                        const isNativeDisabled = btn.disabled || btn.hasAttribute('disabled');
+                        return !isAriaDisabled && !isNativeDisabled;
+                    }
+                }
+                return false;
+            }, { timeout: 10000 });
+
+            // 3. Chờ thêm 1.5s cho UI ổn định
+            console.log("[Browser] Nút đã sáng, chờ thêm 1.5s trước khi bấm...");
+            await this.page.waitForTimeout(1500);
+
+            // 4. Click và ĐÁNH DẤU CHẾT (data-answered)
+            await this.page.evaluate(() => {
+                const inputField = document.querySelector('input[data-submitting="true"]');
+                if (!inputField) return;
+                const container = inputField.closest('form, ms-function-call-chunk, ms-chat-turn');
+                if (!container) return;
+
+                const buttons = container.querySelectorAll('button');
+                for (const btn of buttons) {
+                    const isSendBtn = btn.textContent.toLowerCase().includes('send') || 
+                                      (btn.getAttribute('aria-label') || '').toLowerCase().includes('send') ||
+                                      btn.type === 'submit';
+                    if (isSendBtn) {
                         btn.click();
+                        // Thay vì remove, ta đổi state thành answered để block hoàn toàn
+                        inputField.setAttribute('data-answered', 'true');
+                        inputField.removeAttribute('data-submitting');
                         break;
                     }
                 }
-            }
-        });
+            });
+            console.log("[Browser] ✅ Đã bấm Send trả kết quả Function!");
+
+        } catch (error) {
+            console.warn("[Browser] ⚠️ Nút Send không tự sáng. Đang ép buộc (force) click...");
+            await this.page.waitForTimeout(1500); 
+
+            await this.page.evaluate(() => {
+                const inputField = document.querySelector('input[data-submitting="true"]');
+                if(!inputField) return;
+                const container = inputField.closest('form, ms-function-call-chunk, ms-chat-turn');
+                if (container) {
+                    const buttons = container.querySelectorAll('button');
+                    for (const btn of buttons) {
+                        const isSendBtn = btn.textContent.toLowerCase().includes('send') || 
+                                          (btn.getAttribute('aria-label') || '').toLowerCase().includes('send') ||
+                                          btn.type === 'submit';
+                        if (isSendBtn) {
+                            btn.removeAttribute('disabled');
+                            btn.setAttribute('aria-disabled', 'false');
+                            btn.click();
+                            
+                            inputField.setAttribute('data-answered', 'true');
+                            inputField.removeAttribute('data-submitting');
+                            break;
+                        }
+                    }
+                }
+            });
+        }
     }
 }
 
