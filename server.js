@@ -27,32 +27,29 @@ const EXTENSION_PORT = 54321;
 let activeProvider = null;
 let providerConfig = {};
 
-async function loadProviderConfig() {
+// Thêm tham số showMenu = false để mặc định bỏ qua giao diện chọn AI
+async function loadProviderConfig(showMenu = false) {
     const configPath = path.join(__dirname, 'config.json');
     try {
         if (fs.existsSync(configPath)) {
             providerConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         } else {
-            providerConfig = { activeProvider: 'gemini-studio', providers: {} };
+            providerConfig = { activeProvider: 'deepseek-web', providers: {} };
         }
     } catch (err) {
-        providerConfig = { activeProvider: 'gemini-studio', providers: {} };
+        providerConfig = { activeProvider: 'deepseek-web', providers: {} };
     }
 
-   // --- BẮT ĐẦU PHẦN UI MENU ---
-    console.clear();
-    console.log(boxen(chalk.bold.cyan('🚀 BRIDGE SERVER AGENT V2.0\n') + chalk.gray('Smarter & Modern Terminal UI'), {
-        padding: 1,
-        margin: 1,
-        borderStyle: 'double',
-        borderColor: 'cyan',
-        textAlignment: 'center'
-    }));
+    const providersList = Object.keys(providerConfig.providers || {});
+    let selectedProviderName = providerConfig.activeProvider || 'deepseek-web';
 
-        const providersList = Object.keys(providerConfig.providers || {});
-    let selectedProviderName = providerConfig.activeProvider || 'gemini-studio';
+    // CHỈ HIỆN MENU CHỌN KHI: Bấm Ctrl+P (showMenu=true) HOẶC chưa có AI nào trong config
+    if ((showMenu || !providerConfig.providers[selectedProviderName]) && providersList.length > 0) {
+        console.clear();
+        console.log(boxen(chalk.bold.cyan('🚀 BRIDGE SERVER AGENT V2.0\n') + chalk.gray('Smarter & Modern Terminal UI'), {
+            padding: 1, margin: 1, borderStyle: 'double', borderColor: 'cyan', textAlignment: 'center'
+        }));
 
-    if (providersList.length > 0) {
         selectedProviderName = await select({
             message: chalk.bold.white('🤖 Hãy chọn AI Provider để làm việc:'),
             choices: providersList.map(p => ({
@@ -63,75 +60,72 @@ async function loadProviderConfig() {
             default: providerConfig.activeProvider,
         });
 
-        // Tạm lưu provider được chọn
         providerConfig.activeProvider = selectedProviderName;
-    }
 
-    // --- BƯỚC THÊM: CHỌN MODEL THÔNG MINH ---
-    if (selectedProviderName !== 'gemini-studio') {
-        const providerData = providerConfig.providers[selectedProviderName];
-        let modelChoices = [];
-        
-        if (selectedProviderName === 'openai') {
-            modelChoices = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-preview', 'o1-mini'];
-        } else if (selectedProviderName === 'gemini-api') {
-            modelChoices = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'];
-        } else if (selectedProviderName === 'claude') {
-            modelChoices = ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'];
-        } else if (selectedProviderName === 'ollama') {
-            // Tính năng thông minh: Tự động gọi API Ollama để liệt kê model máy đang có
-            try {
-                const baseUrl = (providerData.baseUrl || 'http://localhost:11434').replace(/\/$/, '');
-                const res = await fetch(`${baseUrl}/api/tags`);
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.models && data.models.length > 0) {
-                        modelChoices = data.models.map(m => m.name);
+        // --- CHỌN MODEL THÔNG MINH ---
+        if (selectedProviderName !== 'gemini-studio' && selectedProviderName !== 'deepseek-web') {
+            const providerData = providerConfig.providers[selectedProviderName];
+            let modelChoices = [];
+
+            if (selectedProviderName === 'openai') {
+                modelChoices = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-preview', 'o1-mini'];
+            } else if (selectedProviderName === 'gemini-api') {
+                modelChoices = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+            } else if (selectedProviderName === 'claude') {
+                modelChoices = ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'];
+            } else if (selectedProviderName === 'ollama') {
+                try {
+                    const baseUrl = (providerData.baseUrl || 'http://localhost:11434').replace(/\/$/, '');
+                    const res = await fetch(`${baseUrl}/api/tags`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.models && data.models.length > 0) {
+                            modelChoices = data.models.map(m => m.name);
+                        }
                     }
-                }
-            } catch (e) {
-                // Bỏ qua nếu Ollama đang tắt
+                } catch (e) { }
+                const defaultOllama = ['llama3.1', 'qwen2.5', 'mistral', 'codellama'];
+                modelChoices = [...new Set([...modelChoices, ...defaultOllama])];
+            } else if (selectedProviderName === 'openai-compatible') {
+                modelChoices = ['deepseek-chat', 'deepseek-reasoner', 'llama3-70b-8192', 'mixtral-8x7b-32768'];
             }
-            const defaultOllama = ['llama3.1', 'qwen2.5', 'mistral', 'codellama'];
-            modelChoices = [...new Set([...modelChoices, ...defaultOllama])];
-        } else if (selectedProviderName === 'openai-compatible') {
-            modelChoices = ['deepseek-chat', 'deepseek-reasoner', 'llama3-70b-8192', 'mixtral-8x7b-32768'];
-        }
 
-        modelChoices.push('Khác... (Nhập tay)');
+            modelChoices.push('Khác... (Nhập tay)');
 
-        if (modelChoices.length > 0) {
-            let selectedModel = await select({
-                message: chalk.bold.white(`⚙️  Chọn Model cho ${providerData.name}:`),
-                choices: modelChoices.map(m => ({
-                    name: m === providerData.model ? `${chalk.green(m)} (Đang dùng)` : chalk.cyan(m),
-                    value: m
-                })),
-                default: modelChoices.includes(providerData.model) ? providerData.model : 'Khác... (Nhập tay)',
-                loop: false
-            });
-
-            if (selectedModel === 'Khác... (Nhập tay)') {
-                selectedModel = await input({
-                    message: chalk.bold.yellow('✍️  Nhập tên model tùy chỉnh:'),
-                    default: providerData.model || ''
+            if (modelChoices.length > 0) {
+                let selectedModel = await select({
+                    message: chalk.bold.white(`⚙️  Chọn Model cho ${providerData.name}:`),
+                    choices: modelChoices.map(m => ({
+                        name: m === providerData.model ? `${chalk.green(m)} (Đang dùng)` : chalk.cyan(m),
+                        value: m
+                    })),
+                    default: modelChoices.includes(providerData.model) ? providerData.model : 'Khác... (Nhập tay)',
+                    loop: false
                 });
-            }
 
-            if (selectedModel) {
-                providerConfig.providers[selectedProviderName].model = selectedModel;
+                if (selectedModel === 'Khác... (Nhập tay)') {
+                    selectedModel = await input({
+                        message: chalk.bold.yellow('✍️  Nhập tên model tùy chỉnh:'),
+                        default: providerData.model || ''
+                    });
+                }
+                if (selectedModel) { providerConfig.providers[selectedProviderName].model = selectedModel; }
             }
         }
+        // Lưu lại toàn bộ cấu hình mới
+        fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
+    } else {
+        // NẾU CHẠY MẶC ĐỊNH, CHỈ IN CÁI BẢNG HEADER CHỨ KHÔNG HỎI GÌ THÊM
+        console.clear();
+        console.log(boxen(chalk.bold.cyan('🚀 BRIDGE SERVER AGENT V2.0\n') + chalk.gray('Smarter & Modern Terminal UI'), {
+            padding: 1, margin: 1, borderStyle: 'double', borderColor: 'cyan', textAlignment: 'center'
+        }));
     }
-
-    // Lưu lại toàn bộ cấu hình (kể cả provider và model mới chọn)
-    fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
-    // --- KẾT THÚC PHẦN UI MENU ---
 
     const providerSettings = providerConfig.providers?.[selectedProviderName] || {};
-
     try {
         const providerMap = {
+            'deepseek-web': './providers/deepseek-web.js',
             'gemini-studio': './providers/gemini-studio.js',
             'openai': './providers/openai.js',
             'openai-compatible': './providers/openai.js',
@@ -142,15 +136,18 @@ async function loadProviderConfig() {
 
         const adapterPath = providerMap[selectedProviderName];
         if (!adapterPath) {
-            const module = await import('./providers/gemini-studio.js');
-            const GeminiStudio = module.default;
-            activeProvider = new GeminiStudio(providerSettings);
+            const module = await import('./providers/deepseek-web.js');
+            const DeepSeekProvider = module.default;
+            activeProvider = new DeepSeekProvider(providerSettings);
         } else {
             const module = await import(adapterPath);
             const ProviderClass = module.default;
             activeProvider = new ProviderClass(providerSettings);
         }
         console.log(`\n🔌 Provider đang chạy: ${chalk.bold.green(activeProvider.getDisplayName())}\n`);
+        
+        // Khôi phục lại bàn phím phòng trường hợp Inquirer khóa luồng
+        process.stdin.resume();
     } catch (err) {
         console.error(chalk.red(`❌ Lỗi nạp provider:`), err.message);
     }
@@ -162,14 +159,13 @@ await loadProviderConfig();
 // 🛡️ HỆ THỐNG BẢO MẬT & ĐIỀU KHIỂN BẰNG BÀN PHÍM
 // LƯU Ý: Biến global để các file Plugin trong thư mục /skills có thể gọi được
 // =================================================================
-global.isAutoApproveAll = false;
 global.pendingPromptResolve = null;
-
+// Khôi phục (resume) lại luồng stdin vì Inquirer có thể đã pause nó sau khi chọn Model xong
+process.stdin.resume();
 readline.emitKeypressEvents(process.stdin);
 if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
 }
-
 process.stdin.on('keypress', (str, key) => {
     if (key.ctrl && key.name === 'c') {
         console.log('\n\x1b[31m[Node] Đã tắt Server.\x1b[0m');
@@ -177,6 +173,14 @@ process.stdin.on('keypress', (str, key) => {
     }
     if (key.ctrl && key.name === 'r') {
         resetSystem();
+        return;
+    }
+    // THÊM ĐOẠN NÀY ĐỂ BẤM CTRL+P MỞ MENU CHỌN AI
+    if (key.ctrl && key.name === 'p') {
+        (async () => {
+            await loadProviderConfig(true); // Truyền true để bung Menu
+            console.log(`\n⚡ Hệ thống đã sẵn sàng với AI mới!`);
+        })();
         return;
     }
     if (global.pendingPromptResolve) {
@@ -563,12 +567,12 @@ app.listen(EXTENSION_PORT, () => {
     console.log(`\n🚀 Bridge Server Agent đang chạy ở http://localhost:${EXTENSION_PORT}`);
     console.log(`=================================================`);
     console.log(`🔌 Active Provider: ${chalk.green(activeProvider.getDisplayName())}`);
-    
+
     // Thêm dòng hiển thị thông tin Model
     if (activeProvider.model) {
         console.log(`🧠 Model Đang Dùng: ${chalk.cyan(activeProvider.model)}`);
     }
-    
-    console.log(`⌨️  PHÍM TẮT: [Ctrl+R] Reset | [Ctrl+C] Tắt | [y/n/a] Đồng ý lệnh`);
+
+    console.log(`⌨️  PHÍM TẮT: [Ctrl+P] Đổi AI | [Ctrl+R] Reset | [Ctrl+C] Tắt | [y/n/a] Đồng ý lệnh`);
     console.log(`=================================================\n`);
 });
