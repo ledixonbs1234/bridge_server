@@ -1,36 +1,49 @@
 ---
 name: dom-controller-protocol
-description: Đọc hướng dẫn này khi người dùng yêu cầu điều khiển trình duyệt (điền form, bấm nút, lấy dữ liệu, thao tác web chat).
+description: Đọc hướng dẫn này khi người dùng yêu cầu điều khiển trình duyệt. Cung cấp kỹ năng chọn Selector kháng Refresh (bền vững) và tự động thử lại khi lỗi.
 ---
 
 # QUY TRÌNH ĐIỀU KHIỂN DOM & BÁO CÁO KẾT QUẢ
 
-Bạn có công cụ `dynamic_browser_controller`. Công cụ này giữ trình duyệt mở liên tục. Đối với các tác vụ phức tạp (như nhắn tin cho AI khác, checkout giỏ hàng), bạn BẮT BUỘC phải gọi công cụ này nhiều lần theo từng bước (Step-by-step).
+Bạn có công cụ `dynamic_browser_controller`. Công cụ này giữ trình duyệt mở liên tục để bạn thực hiện từng bước (Step-by-step).
+
+## 🛡️ KỸ NĂNG CHỌN SELECTOR BỀN VỮNG (KHÁNG REFRESH)
+Các trang web hiện đại (React/Vue/Tailwind) thường tạo ra các Class động (VD: `_27c9245`, `ds-scroll-area`). Nếu dùng class này, khi người dùng F5 tải lại trang, code sẽ lỗi ngay lập tức.
+**BẮT BUỘC TUÂN THỦ:**
+- **TUYỆT ĐỐI KHÔNG DÙNG CLASS VÀ ID** (VD: `.btn-submit`, `#input-123`).
+- **ƯU TIÊN 1:** Dùng Attribute Selector tĩnh như `[placeholder*="Nhắn tin"]`, `[aria-label="Gửi"]`, `[name="email"]`, `[role="button"]`.
+- **ƯU TIÊN 2 (Cho nút bấm):** Dùng text trong Playwright (VD: Gọi target là `text="Suy Nghĩ Sâu"`).
+
+## 🔄 KỸ NĂNG TỰ ĐỘNG THỬ LẠI (AUTO-RETRY)
+Nếu bạn gọi `fill` hoặc `click` mà công cụ trả về báo lỗi "Không tìm thấy target", BẠN KHÔNG ĐƯỢC BÁO LỖI CHO NGƯỜI DÙNG NGAY. Hãy làm theo vòng lặp tự sửa lỗi:
+1. **Bình tĩnh nhận lỗi:** Hệ thống gợi ý bạn gọi lại `inspect_dom`.
+2. **Hành động:** Gọi ngay `action="inspect_dom"` để chụp lại cây DOM hiện tại (vì giao diện có thể đã bị thay đổi sau khi nhập liệu).
+3. **Thử lại:** Gọi lại lệnh `click` hoặc `fill` với một Selector mới tìm được.
 
 ## 🔀 LUỒNG THỰC THI CHUẨN
-1. **Bước 1 (Mở trang):** Gọi `action="goto"` với URL tương ứng.
-2. **Bước 2 (Dò tìm Selector):** ĐỪNG ĐOÁN MÒ CSS SELECTOR! Hãy gọi `action="inspect_dom"` để hệ thống trả về danh sách các phần tử tương tác (button, input, textarea) đang có mặt trên trang.
-3. **Bước 3 (Tương tác):** 
-   - Dùng `action="fill"` với Selector tìm được để điền text.
-   - Dùng `action="click"` để bấm nút (VD: Bấm nút Gửi/Send).
-4. **Bước 4 (Trích xuất / Chờ đợi):** 
-   - Nếu trang web cần thời gian để gen dữ liệu (như DeepSeek/ChatGPT đang gõ câu trả lời), hãy dùng `action="run_js"` và viết mã JS có chứa `await new Promise(r => setTimeout(r, 5000));` để chờ, sau đó `return document.querySelector('...').innerText;` để lấy kết quả.
-5. **Bước 5 (Đóng):** Gọi `action="close"` để dọn dẹp.
+1. Mở trang: `action="goto"`.
+2. Khảo sát: `action="inspect_dom"` (LUÔN GỌI ĐỂ TÌM ATTRIBUTE ỔN ĐỊNH).
+3. Tương tác: `action="fill"` hoặc `click`.
+4. Trích xuất/Chờ đợi: Dùng `action="run_js"` với `await new Promise(r => setTimeout(r, 5000));` để chờ AI web gõ xong, sau đó dùng `document.querySelector` để return kết quả về.
 
-## 📝 QUY TẮC BÁO CÁO CHO NGƯỜI DÙNG (QUAN TRỌNG)
-Sau khi thực hiện THÀNH CÔNG toàn bộ yêu cầu, câu trả lời cuối cùng của bạn gửi cho người dùng **BẮT BUỘC** phải có cấu trúc sau:
+## 📝 QUY TẮC BÁO CÁO JAVASCRIPT CHO USER
+Sau khi thành công, bạn phải báo cáo mã Vanilla JS để người dùng tự copy và chạy lại được ở F12 Console. Đoạn code này **BẮT BUỘC KHÔNG DÙNG CLASS ĐỘNG**.
 
-1. **Trạng thái:** Thành công hay Thất bại (Kèm theo kết quả lấy được nếu có).
-2. **Mã JavaScript tương đương:** Liệt kê các lệnh JavaScript thuần (Vanilla JS) có thể dùng để thực hiện lại thao tác này trên Console của trình duyệt. 
-
-*Ví dụ báo cáo chuẩn:*
-"Tôi đã gửi tin nhắn thành công và lấy được kết quả: [Nội dung AI trả lời].
-Dưới đây là các lệnh JavaScript tương đương tôi đã sử dụng:
+*Ví dụ báo cáo xuất sắc:*
+"Tôi đã gửi tin nhắn thành công. Dưới đây là mã JS bền vững kháng F5 để bạn dùng lại:
 ```javascript
-// Điền nội dung
-document.querySelector('#chat-input').value = 'Nội dung tin nhắn';
-document.querySelector('#chat-input').dispatchEvent(new Event('input', { bubbles: true }));
+// 1. Điền text (Tìm qua placeholder vì nó cố định)
+const textarea = document.querySelector('textarea[placeholder*="Nhắn tin cho DeepSeek"]'); 
+if (textarea) {
+    textarea.value = 'Nội dung tin nhắn'; 
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
 
-// Bấm nút gửi
-document.querySelector('.send-button-class').click();
+// 2. Click nút DeepThink (Tìm bằng cách dò Text vì class bị đổi liên tục)
+const deepBtn = Array.from(document.querySelectorAll('div[role="button"], button')).find(el => el.innerText.includes('Suy Nghĩ Sâu'));
+if (deepBtn) deepBtn.click();
+
+// 3. Click nút Gửi (Tìm bằng aria-label hoặc tooltip cố định)
+const sendBtn = document.querySelector('[aria-label="Gửi"]');
+if (sendBtn) sendBtn.click();
 ```"

@@ -14,7 +14,7 @@ let activePage = null;
 
 export default {
     "dynamic_browser_controller": {
-        description: "[TRÌNH ĐIỀU KHIỂN DOM] Dùng để mở web, tương tác (click, điền text) và trích xuất dữ liệu. LƯU Ý: Tool này giữ trình duyệt MỞ LIÊN TỤC. Bạn phải làm TỪNG BƯỚC: 1. goto -> 2. inspect_dom -> 3. fill/click -> 4. run_js (để lấy kết quả).",
+        description: "[TRÌNH ĐIỀU KHIỂN DOM] Dùng để thao tác web. QUAN TRỌNG: KHÔNG DÙNG CLASS VÀ ID ĐỘNG ĐỂ TRÁNH LỖI KHI REFRESH. Hãy dùng Attribute (placeholder, aria-label, role). Nếu bị lỗi 'Không tìm thấy target', hãy tự động gọi lại inspect_dom để tìm Selector mới.",
         parameters: {
             type: "object",
             properties: {
@@ -23,34 +23,32 @@ export default {
                     enum: ["goto", "inspect_dom", "click", "fill", "run_js", "close"],
                     description: "Hành động cần làm."
                 },
-                target: { type: "string", description: "URL (nếu goto), hoặc CSS Selector (nếu click, fill, wait)" },
+                target: { type: "string", description: "URL (nếu goto), hoặc CSS Selector/Text (nếu click, fill). VD: [placeholder='Tìm kiếm'] hoặc text='Suy Nghĩ Sâu'." },
                 value: { type: "string", description: "Nội dung chữ cần nhập (nếu fill)" },
-                js_code: { type: "string", description: "Mã JavaScript thuần tuý để chạy trên page (chỉ dùng cho action 'run_js'). Vui lòng viết code có lệnh 'return ...' để lấy kết quả." }
+                js_code: { type: "string", description: "Mã JS thuần tuý để chạy ngầm trên page (chỉ dùng cho action 'run_js'). Có return để lấy kết quả." }
             },
             required: ["action"]
         },
         handler: async (args) => {
             const { action, target, value, js_code } = args;
 
-            // In log ra Terminal cho User thấy
+            // In log ra Terminal cho User
             let logMsg = chalk.cyan(`Action: ${action}`);
             if (target) logMsg += ` | Target: ${chalk.yellow(target)}`;
             if (value) logMsg += ` | Value: ${chalk.green(value)}`;
-            
             console.log(boxen(logMsg, { title: chalk.bold.blue(' 🌐 BROWSER CONTROLLER '), padding: 1, borderColor: 'blue' }));
 
             try {
                 // 1. KHỞI TẠO NẾU CHƯA CÓ
                 if (!activeContext || !activePage || activePage.isClosed()) {
                     if (action !== "goto") throw new Error("Trình duyệt chưa mở. Bạn phải gọi action='goto' đầu tiên.");
-                    
                     const profilePath = path.join(__dirname, '..', 'profile', 'Profile_Automator');
                     if (!fs.existsSync(profilePath)) fs.mkdirSync(profilePath, { recursive: true });
 
                     console.log("[Browser] Đang khởi động trình duyệt ảo...");
                     activeContext = await launchPersistentContext({
                         userDataDir: profilePath,
-                        headless: false, // Để hiển thị cho bạn xem nó tự gõ chữ
+                        headless: false, 
                         viewport: { width: 1280, height: 720 },
                         args: ['--disable-blink-features=AutomationControlled']
                     });
@@ -61,39 +59,67 @@ export default {
                 switch (action) {
                     case "goto":
                         await activePage.goto(target, { waitUntil: 'domcontentloaded', timeout: 30000 });
-                        await activePage.waitForTimeout(2000); // Chờ SPA render
+                        await activePage.waitForTimeout(2000); // Chờ SPA render DOM
                         return { status: "success", message: `Đã mở trang: ${target}` };
 
                     case "inspect_dom":
-                        // Trả về cây DOM rút gọn (chỉ lấy input, button, a, textarea) để AI biết CSS Selector
+                        // THUẬT TOÁN BẮT LƯỚI DOM (Bỏ qua Class & ID động)
                         const domTree = await activePage.evaluate(() => {
-                            const elements = document.querySelectorAll('input, textarea, button, a[href], [role="button"]');
+                            const elements = document.querySelectorAll('input, textarea, button, a[href], [role="button"], [role="switch"], [role="tab"], [tabindex="0"]');
                             return Array.from(elements).map(el => {
-                                let identifier = el.id ? `#${el.id}` : (el.className ? `.${el.className.split(' ').join('.')}` : el.tagName.toLowerCase());
-                                return `<${el.tagName.toLowerCase()} selector="${identifier}" aria-label="${el.getAttribute('aria-label')||''}" placeholder="${el.getAttribute('placeholder')||''}">${el.innerText?.substring(0,20) || ''}</>`;
-                            }).filter(e => !e.includes('style') && !e.includes('script')).slice(0, 50); // Lấy tối đa 50 phần tử
+                                const tag = el.tagName.toLowerCase();
+                                let attrs = [];
+                                
+                                // Chỉ bắt các thuộc tính nhận diện TĨNH (Kháng Refresh)
+                                ['name', 'type', 'placeholder', 'aria-label', 'role', 'title', 'data-testid'].forEach(attr => {
+                                    if (el.hasAttribute(attr)) attrs.push(`${attr}="${el.getAttribute(attr)}"`);
+                                });
+                                
+                                const text = (el.innerText || el.textContent || '').trim().substring(0, 30).replace(/\n/g, ' ');
+                                const attrStr = attrs.length > 0 ? ' ' + attrs.join(' ') : '';
+                                return `<${tag}${attrStr}>${text}</${tag}>`;
+                            })
+                            .filter(e => !e.match(/<[a-z]+><\/[a-z]+>/)) // Loại bỏ các thẻ rỗng tuếch không có info gì
+                            .slice(0, 50); 
                         });
-                        return { status: "success", elements: domTree };
+                        return { 
+                            status: "success", 
+                            elements: [...new Set(domTree)], // Lọc trùng
+                            tip: "GỢI Ý SELECTOR: Hãy dùng [placeholder='...'] hoặc [aria-label='...']. Tuyệt đối không dùng class/id. Nếu phải bấm nút, hãy truyền target là: text='Nội dung chữ trên nút'" 
+                        };
 
                     case "fill":
-                        await activePage.waitForSelector(target, { timeout: 10000 });
-                        // Dùng native fill của Playwright để trigger đúng sự kiện React/Vue
-                        await activePage.fill(target, value);
-                        return { status: "success", message: `Đã điền "${value}" vào ${target}` };
+                        try {
+                            await activePage.waitForSelector(target, { timeout: 8000 });
+                            await activePage.fill(target, value);
+                            return { status: "success", message: `Đã điền "${value}" vào ${target}` };
+                        } catch (e) {
+                            return { 
+                                status: "error", 
+                                error_message: `Lỗi: Không tìm thấy ${target}`, 
+                                suggestion: "MẸO TỰ SỬA LỖI: Selector này không tồn tại hoặc đã bị ẩn. ĐỪNG BỎ CUỘC! Hãy gọi lại 'inspect_dom' ngay lập tức để đọc lại cây DOM mới nhất và tìm Attribute khác!" 
+                            };
+                        }
 
                     case "click":
-                        await activePage.waitForSelector(target, { timeout: 10000 });
-                        await activePage.click(target);
-                        return { status: "success", message: `Đã click vào ${target}` };
+                        try {
+                            await activePage.waitForSelector(target, { timeout: 8000 });
+                            await activePage.click(target);
+                            return { status: "success", message: `Đã click vào ${target}` };
+                        } catch (e) {
+                            return { 
+                                status: "error", 
+                                error_message: `Lỗi: Không tìm thấy ${target}`, 
+                                suggestion: "MẸO TỰ SỬA LỖI: Nút bấm có thể bị chặn hoặc đổi tên. Hãy gọi lại 'inspect_dom' để đọc DOM hiện tại và thử click bằng Selector khác." 
+                            };
+                        }
 
                     case "run_js":
-                        // Chạy mã JS tuỳ chỉnh của AI và trả về kết quả
                         const jsResult = await activePage.evaluate(async (code) => {
-                            // Tạo một async function động từ chuỗi code
                             const asyncFn = new Function(`return (async () => { ${code} })()`);
                             return await asyncFn();
                         }, js_code);
-                        return { status: "success", result: jsResult, executed_js: js_code };
+                        return { status: "success", result: jsResult };
 
                     case "close":
                         if (activeContext) await activeContext.close();
@@ -106,7 +132,7 @@ export default {
                 }
 
             } catch (err) {
-                return { status: "error", error_message: err.message, suggestion: "Có thể CSS Selector bị sai hoặc trang chưa load kịp. Hãy dùng 'inspect_dom' để lấy đúng Selector." };
+                return { status: "error", error_message: err.message };
             }
         }
     }
