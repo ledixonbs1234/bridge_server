@@ -1,39 +1,33 @@
 {
+  "pipeline_name": "Tự động hóa chat với DeepSeek",
   "stages": [
     {
+      "name": "Chuẩn bị và Điều hướng",
       "steps": [
         {
-          "task": "Chạy npm start để xem ứng dụng có lỗi không",
-          "tool": "execute_terminal_command",
+          "task": "Truy cập trang DeepSeek và kiểm tra cấu trúc DOM",
+          "tool": "dynamic_browser_controller",
           "status": "PENDING"
         }
       ],
-      "name": "Khởi động ứng dụng",
-      "status": "FAILED",
-      "notes": "npm start thất bại vì không có script 'start' trong package.json."
+      "status": "DONE",
+      "notes": "Đã truy cập và kiểm tra DOM thành công. Cần người dùng cung cấp nội dung để chat."
     },
     {
-      "name": "Kiểm tra lỗi và Fix",
+      "name": "Tương tác với AI (Sau khi có nội dung từ người dùng)",
       "steps": [
         {
-          "tool": "replace_by_lines",
-          "task": "Phân tích lỗi (nếu có) và sửa code theo chuẩn Function Components",
+          "task": "Bật DeepThink, điền tin nhắn và gửi",
+          "tool": "dynamic_browser_controller",
+          "status": "PENDING"
+        },
+        {
+          "task": "Chờ phản hồi và trích xuất kết quả",
+          "tool": "dynamic_browser_controller",
           "status": "PENDING"
         }
       ],
-      "status": "PENDING"
-    },
-    {
-      "steps": [
-        {
-          "tool": "execute_terminal_command",
-          "task": "Chạy lại ứng dụng để đảm bảo hết lỗi",
-          "status": "PENDING"
-        }
-      ],
-      "name": "Xác nhận",
       "status": "PENDING"
     }
-  ],
-  "pipeline_name": "Fix React App Error"
+  ]
 }
