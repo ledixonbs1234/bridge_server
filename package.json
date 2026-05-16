@@ -20,6 +20,7 @@
     "express": "^5.2.1",
     "fuse.js": "^7.3.0",
     "js-yaml": "^4.1.1",
+    "jsonrepair": "^3.14.0",
     "marked": "^18.0.3",
     "marked-terminal": "^7.3.0",
     "ora": "^9.4.0",

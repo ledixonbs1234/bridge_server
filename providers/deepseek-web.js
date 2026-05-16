@@ -1,5 +1,6 @@
 import BaseProvider from './base-provider.js';
 import deepseekBot from '../deepseek_web_bot.js';
+import { jsonrepair } from 'jsonrepair';
 
 class DeepseekWebProvider extends BaseProvider {
     constructor(config) {
@@ -30,7 +31,11 @@ Nếu bạn cần chạy một công cụ để lấy thông tin, BẠN PHẢI T
   "args": { "tên_tham_số": "giá_trị" }
 }
 </tool_call>
-Hệ thống sẽ chạy và trả kết quả lại cho bạn để bạn suy nghĩ tiếp.`;
+Hệ thống sẽ chạy và trả kết quả lại cho bạn để bạn suy nghĩ tiếp.
+QUAN TRỌNG:
+- Mọi ký tự xuống dòng trong JSON phải escape bằng \n
+- Mọi dấu " bên trong string phải escape bằng \"
+- Khi ghi source code dài, ưu tiên dùng content_base64`;
 
         return toolText;
     }
@@ -47,7 +52,7 @@ Hệ thống sẽ chạy và trả kết quả lại cho bạn để bạn suy n
         // Đếm xem trong lịch sử có bao nhiêu tin nhắn của user
         // ---------------------------------------------------------
         const userMessagesCount = messages.filter(m => m.role === 'user').length;
-       const isFirstTurn = userMessagesCount <= 1 && !this.hasInitializedChat;
+        const isFirstTurn = userMessagesCount <= 1 && !this.hasInitializedChat;
 
         let finalPrompt = "";
 
@@ -63,7 +68,7 @@ Hệ thống sẽ chạy và trả kết quả lại cho bạn để bạn suy n
             finalPrompt += `[USER REQUEST]\n${lastUserMessage}`;
 
             // Đánh dấu là đã tạo chat để các tin nhắn sau dù mảng có bị ngắn lại cũng không bị reset
-            this.hasInitializedChat = true; 
+            this.hasInitializedChat = true;
         } else {
             // TỪ LẦN CHAT THỨ 2: Chỉ gửi duy nhất câu hỏi của user 
             // (Vì AI đã đọc và nhớ System/Tools ở các tin nhắn phía trên trình duyệt rồi)
