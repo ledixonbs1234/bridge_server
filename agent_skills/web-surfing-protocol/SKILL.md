@@ -10,9 +10,9 @@ Bạn được trang bị 2 công cụ làm việc với Web: `web_markdown_read
 - Nếu bạn CHỈ CẦN tìm kiếm Google, tra cứu lỗi hoặc đọc bài viết/tài liệu -> **BẮT BUỘC dùng `web_markdown_reader`**. Công cụ này sẽ loại bỏ toàn bộ mã HTML rác, trả về văn bản Markdown, giúp bạn tránh bị đầy bộ nhớ.
 - Chỉ khi nào trang web YÊU CẦU TƯƠNG TÁC (ví dụ: đăng nhập, nhấn nút Submit, trang web React bị ẩn nội dung) -> Bạn mới được phép dùng `browser_action`.
 
-## 2. QUY TRÌNH ĐỌC TÀI LIỆU & TÌM KIẾM (Bằng web_markdown_reader)
-- **Tìm kiếm thông tin:** Gọi `web_markdown_reader` với `action="search_web"` và `query="từ khóa cần tìm"`. (Kết quả sẽ trả về dạng Markdown của Google Search).
-- **Đọc nội dung trang:** Gọi `web_markdown_reader` với `action="read_url"` và `query="https://link-trang-can-doc.com"`.
+## 2. QUY TRÌNH ĐỌC TÀI LIỆU (Bằng web_markdown_reader)
+- **Đọc nội dung trang:** Gọi công cụ `web_markdown_reader` và truyền vào tham số `url="https://link-trang-can-doc.com"`.
+*(Lưu ý: Không hỗ trợ tự động tìm kiếm Google, bạn chỉ được phép truyền một URL hợp lệ).*
 
 ## 3. QUY TRÌNH TƯƠNG TÁC GIAO DIỆN (Bằng browser_action)
 Chỉ dùng quy trình 3 bước này khi cần bấm/điền giao diện tĩnh:

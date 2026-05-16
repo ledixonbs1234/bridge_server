@@ -1,4 +1,9 @@
 import { launchPersistentContext } from "cloakbrowser";
+import path from 'path';
+import { fileURLToPath } from 'url';
+// Fix lỗi __dirname trong ES Module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 class AIStudioBot {
     constructor() {
         this.context = null;
@@ -12,10 +17,10 @@ class AIStudioBot {
         if (this.isReady) return;
 
         console.log("[Browser] Đang khởi động CloakBrowser...");
-        const profilePath = './profile/Profile_Xon_Pro_All'; // Dùng chung profile có sẵn
+        const profilePath = path.join(__dirname, 'profile', 'Profile_Xon_Pro_All'); 
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
-            headless: false, // Lần đầu để false để login Google, sau login xong có thể đổi thành true
+            headless: false,
             viewport: { width: 1280, height: 720 },
             args: ['--disable-blink-features=AutomationControlled']
         });
@@ -325,15 +330,15 @@ class AIStudioBot {
             await this.page.waitForFunction(() => {
                 const inputField = document.querySelector('input[data-submitting="true"]');
                 if (!inputField) return false;
-                
+
                 const container = inputField.closest('form, ms-function-call-chunk, ms-chat-turn');
                 if (!container) return false;
 
                 const buttons = container.querySelectorAll('button');
                 for (const btn of buttons) {
-                    const isSendBtn = btn.textContent.toLowerCase().includes('send') || 
-                                      (btn.getAttribute('aria-label') || '').toLowerCase().includes('send') ||
-                                      btn.type === 'submit';
+                    const isSendBtn = btn.textContent.toLowerCase().includes('send') ||
+                        (btn.getAttribute('aria-label') || '').toLowerCase().includes('send') ||
+                        btn.type === 'submit';
                     if (isSendBtn) {
                         const isAriaDisabled = btn.getAttribute('aria-disabled') === 'true';
                         const isNativeDisabled = btn.disabled || btn.hasAttribute('disabled');
@@ -355,9 +360,9 @@ class AIStudioBot {
 
                 const buttons = container.querySelectorAll('button');
                 for (const btn of buttons) {
-                    const isSendBtn = btn.textContent.toLowerCase().includes('send') || 
-                                      (btn.getAttribute('aria-label') || '').toLowerCase().includes('send') ||
-                                      btn.type === 'submit';
+                    const isSendBtn = btn.textContent.toLowerCase().includes('send') ||
+                        (btn.getAttribute('aria-label') || '').toLowerCase().includes('send') ||
+                        btn.type === 'submit';
                     if (isSendBtn) {
                         btn.click();
                         // Thay vì remove, ta đổi state thành answered để block hoàn toàn
@@ -371,23 +376,23 @@ class AIStudioBot {
 
         } catch (error) {
             console.warn("[Browser] ⚠️ Nút Send không tự sáng. Đang ép buộc (force) click...");
-            await this.page.waitForTimeout(1500); 
+            await this.page.waitForTimeout(1500);
 
             await this.page.evaluate(() => {
                 const inputField = document.querySelector('input[data-submitting="true"]');
-                if(!inputField) return;
+                if (!inputField) return;
                 const container = inputField.closest('form, ms-function-call-chunk, ms-chat-turn');
                 if (container) {
                     const buttons = container.querySelectorAll('button');
                     for (const btn of buttons) {
-                        const isSendBtn = btn.textContent.toLowerCase().includes('send') || 
-                                          (btn.getAttribute('aria-label') || '').toLowerCase().includes('send') ||
-                                          btn.type === 'submit';
+                        const isSendBtn = btn.textContent.toLowerCase().includes('send') ||
+                            (btn.getAttribute('aria-label') || '').toLowerCase().includes('send') ||
+                            btn.type === 'submit';
                         if (isSendBtn) {
                             btn.removeAttribute('disabled');
                             btn.setAttribute('aria-disabled', 'false');
                             btn.click();
-                            
+
                             inputField.setAttribute('data-answered', 'true');
                             inputField.removeAttribute('data-submitting');
                             break;

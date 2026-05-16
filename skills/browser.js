@@ -4,33 +4,25 @@ const execPromise = util.promisify(exec);
 
 export default {
      web_markdown_reader: {
-        description: "[ƯU TIÊN DÙNG - TIẾT KIỆM TOKEN] Trích xuất nội dung văn bản của một trang web hoặc tìm kiếm web, trả về định dạng Markdown sạch. Dùng công cụ này thay vì 'browser_action' khi bạn chỉ cần đọc thông tin.",
+        description: "[ƯU TIÊN DÙNG - TIẾT KIỆM TOKEN] Trích xuất nội dung văn bản của một trang web, trả về định dạng Markdown sạch. Dùng công cụ này thay vì 'browser_action' khi bạn chỉ cần đọc thông tin từ một link cụ thể.",
         parameters: {
             type: "object",
             properties: {
-                action: {
+                url: {
                     type: "string",
-                    enum: ["read_url", "search_web"],
-                    description: "Dùng 'read_url' để đọc nội dung 1 trang web. Dùng 'search_web' để tìm kiếm Google."
-                },
-                query: {
-                    type: "string",
-                    description: "URL (nếu action='read_url') hoặc từ khóa tìm kiếm (nếu action='search_web')."
+                    description: "Đường dẫn URL của trang web cần đọc."
                 }
             },
-            required: ["action", "query"]
+            required: ["url"]
         },
         handler: async (args) => {
-            const { action, query } = args;
-            // API của Jina: 's.jina.ai' dành cho Google Search, 'r.jina.ai' dành cho đọc Web
-            const prefix = action === "read_url" ? "https://r.jina.ai/" : "https://s.jina.ai/";
-            const target = action === "search_web" ? encodeURIComponent(query) : query;
-            const url = `${prefix}${target}`;
+            const { url } = args;
+            const targetUrl = `https://r.jina.ai/${url}`;
             
-            console.log(`\n[Jina Web] Fetching: ${url}`);
+            console.log(`\n[Jina Web] Fetching: ${targetUrl}`);
             try {
                 // Fetch API mặc định của NodeJS 18+
-                const response = await fetch(url, {
+                const response = await fetch(targetUrl, {
                     headers: {
                         'Accept': 'text/plain',
                         'X-Retain-Images': 'none' // Chặn Image URLs để tiết kiệm Token
@@ -47,7 +39,7 @@ export default {
                     ? markdown.substring(0, MAX_CHARS) + "\n\n...[Trang quá dài, đã cắt bớt một phần]" 
                     : markdown;
             } catch (err) {
-                throw new Error(`Lỗi đọc/search web: ${err.message}`);
+                throw new Error(`Lỗi đọc web: ${err.message}`);
             }
         }
     },
