@@ -5,10 +5,11 @@ import path from 'path';
 import readline from 'readline';
 import yaml from 'js-yaml';
 import Fuse from 'fuse.js';
-import { select } from '@inquirer/prompts';
+import { select, input } from '@inquirer/prompts';
 import chalk from 'chalk';
 import boxen from 'boxen';
 import ora from 'ora';
+
 
 import { fileURLToPath, pathToFileURL } from 'url';
 const __filename = fileURLToPath(import.meta.url);
@@ -38,9 +39,9 @@ async function loadProviderConfig() {
         providerConfig = { activeProvider: 'gemini-studio', providers: {} };
     }
 
-    // --- BẮT ĐẦU PHẦN UI MENU ---
+   // --- BẮT ĐẦU PHẦN UI MENU ---
     console.clear();
-    console.log(boxen(chalk.bold.cyan('🚀 BRIDGE SERVER AGENT V2.0'), {
+    console.log(boxen(chalk.bold.cyan('🚀 BRIDGE SERVER AGENT V2.0\n') + chalk.gray('Smarter & Modern Terminal UI'), {
         padding: 1,
         margin: 1,
         borderStyle: 'double',
@@ -48,24 +49,83 @@ async function loadProviderConfig() {
         textAlignment: 'center'
     }));
 
-    const providersList = Object.keys(providerConfig.providers || {}).filter(k => providerConfig.providers[k].enabled !== false);
+        const providersList = Object.keys(providerConfig.providers || {});
     let selectedProviderName = providerConfig.activeProvider || 'gemini-studio';
 
-    if (providersList.length > 1) {
+    if (providersList.length > 0) {
         selectedProviderName = await select({
-            message: chalk.bold.white('Hãy chọn AI Provider để làm việc:'),
+            message: chalk.bold.white('🤖 Hãy chọn AI Provider để làm việc:'),
             choices: providersList.map(p => ({
                 name: chalk.yellow(providerConfig.providers[p].name) + chalk.gray(` (${providerConfig.providers[p].model || 'Mặc định'})`),
                 value: p,
                 description: chalk.italic(providerConfig.providers[p].description || '')
             })),
-            default: providerConfig.activeProvider
+            default: providerConfig.activeProvider,
         });
 
-        // Lưu lại lựa chọn
+        // Tạm lưu provider được chọn
         providerConfig.activeProvider = selectedProviderName;
-        fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
     }
+
+    // --- BƯỚC THÊM: CHỌN MODEL THÔNG MINH ---
+    if (selectedProviderName !== 'gemini-studio') {
+        const providerData = providerConfig.providers[selectedProviderName];
+        let modelChoices = [];
+        
+        if (selectedProviderName === 'openai') {
+            modelChoices = ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo', 'o1-preview', 'o1-mini'];
+        } else if (selectedProviderName === 'gemini-api') {
+            modelChoices = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+        } else if (selectedProviderName === 'claude') {
+            modelChoices = ['claude-3-7-sonnet-20250219', 'claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022', 'claude-3-opus-20240229'];
+        } else if (selectedProviderName === 'ollama') {
+            // Tính năng thông minh: Tự động gọi API Ollama để liệt kê model máy đang có
+            try {
+                const baseUrl = (providerData.baseUrl || 'http://localhost:11434').replace(/\/$/, '');
+                const res = await fetch(`${baseUrl}/api/tags`);
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.models && data.models.length > 0) {
+                        modelChoices = data.models.map(m => m.name);
+                    }
+                }
+            } catch (e) {
+                // Bỏ qua nếu Ollama đang tắt
+            }
+            const defaultOllama = ['llama3.1', 'qwen2.5', 'mistral', 'codellama'];
+            modelChoices = [...new Set([...modelChoices, ...defaultOllama])];
+        } else if (selectedProviderName === 'openai-compatible') {
+            modelChoices = ['deepseek-chat', 'deepseek-reasoner', 'llama3-70b-8192', 'mixtral-8x7b-32768'];
+        }
+
+        modelChoices.push('Khác... (Nhập tay)');
+
+        if (modelChoices.length > 0) {
+            let selectedModel = await select({
+                message: chalk.bold.white(`⚙️  Chọn Model cho ${providerData.name}:`),
+                choices: modelChoices.map(m => ({
+                    name: m === providerData.model ? `${chalk.green(m)} (Đang dùng)` : chalk.cyan(m),
+                    value: m
+                })),
+                default: modelChoices.includes(providerData.model) ? providerData.model : 'Khác... (Nhập tay)',
+                loop: false
+            });
+
+            if (selectedModel === 'Khác... (Nhập tay)') {
+                selectedModel = await input({
+                    message: chalk.bold.yellow('✍️  Nhập tên model tùy chỉnh:'),
+                    default: providerData.model || ''
+                });
+            }
+
+            if (selectedModel) {
+                providerConfig.providers[selectedProviderName].model = selectedModel;
+            }
+        }
+    }
+
+    // Lưu lại toàn bộ cấu hình (kể cả provider và model mới chọn)
+    fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
     // --- KẾT THÚC PHẦN UI MENU ---
 
     const providerSettings = providerConfig.providers?.[selectedProviderName] || {};
@@ -502,7 +562,13 @@ app.post('/v1/chat/completions', async (req, res) => {
 app.listen(EXTENSION_PORT, () => {
     console.log(`\n🚀 Bridge Server Agent đang chạy ở http://localhost:${EXTENSION_PORT}`);
     console.log(`=================================================`);
-    console.log(`🔌 Active Provider: ${activeProvider.getDisplayName()}`);
+    console.log(`🔌 Active Provider: ${chalk.green(activeProvider.getDisplayName())}`);
+    
+    // Thêm dòng hiển thị thông tin Model
+    if (activeProvider.model) {
+        console.log(`🧠 Model Đang Dùng: ${chalk.cyan(activeProvider.model)}`);
+    }
+    
     console.log(`⌨️  PHÍM TẮT: [Ctrl+R] Reset | [Ctrl+C] Tắt | [y/n/a] Đồng ý lệnh`);
     console.log(`=================================================\n`);
 });
