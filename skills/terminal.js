@@ -2,6 +2,7 @@ import { exec, spawn } from 'child_process';
 import os from 'os';
 import boxen from 'boxen';
 import chalk from 'chalk';
+
 export default {
     "execute_terminal_command": {
         description: "Thực thi lệnh Terminal/CMD. Đây là lệnh quyền lực nhất.",
@@ -13,23 +14,38 @@ export default {
                 is_background: { 
                     type: "boolean", 
                     description: "BẮT BUỘC ĐẶT LÀ TRUE nếu lệnh là chạy server (VD: npm run dev, npm start, node server.js)." 
+                },
+                functionality: { 
+                    type: "string", 
+                    description: "Chức năng của lệnh này (lệnh này sẽ thực hiện việc gì)." 
+                },
+                purpose: { 
+                    type: "string", 
+                    description: "Mục đích (vì sao phải chạy lệnh này trong ngữ cảnh hiện tại)." 
                 }
             },
-            required: ["command"]
+            required: ["command", "functionality", "purpose"] // Ép buộc AI luôn phải giải thích
         },
         handler: async (args) => {
             const command = args.command;
             const cwd = args.working_directory || os.homedir();
             const isBackground = args.is_background || false;
+            
+            // Nhận 2 tham số mới từ AI
+            const functionality = args.functionality || "Không có mô tả chức năng";
+            const purpose = args.purpose || "Không có mô tả mục đích";
 
             if (!global.isAutoApproveAll) {
                 const cmdText = isBackground 
                     ? chalk.magenta(command) + chalk.bgMagenta.white(' BACKGROUND PROCESS ')
                     : chalk.yellow(command);
 
+                // Cập nhật lại Box thông báo để thêm chức năng và mục đích
                 const promptContent = `
 ${chalk.bold.cyan('📁 Thư mục :')} ${cwd}
 ${chalk.bold.cyan('💻 Lệnh    :')} ${cmdText}
+${chalk.bold.green('🔧 Chức năng:')} ${functionality}
+${chalk.bold.green('🎯 Mục đích :')} ${purpose}
 `;
                 console.log(boxen(promptContent, {
                     title: chalk.bold.redBright(' ⚠️ YÊU CẦU CHẠY TERMINAL '),
