@@ -57,11 +57,20 @@ class DeepSeekWebBot {
         }
     }
 
-    // ==========================================
+   // ==========================================
     // 2. GỬI TIN NHẮN (PROMPT INJECTION)
     // ==========================================
     async sendPrompt(promptText) {
         if (!this.isReady) await this.init();
+
+        // 🔥 FIX VÒNG LẶP: Đánh dấu tất cả tin AI trên màn hình hiện tại là "Đã Cũ"
+        // Để hàm waitForResponse không bao giờ đọc lại tin cũ chứa <tool_call>
+        await this.page.evaluate(() => {
+            document.querySelectorAll('.ds-assistant-message-main-content:not([data-ai-read="true"])').forEach(el => {
+                el.setAttribute('data-ai-read', 'true');
+            });
+        });
+
         console.log(`[DeepSeek Web] Đang nhập dữ liệu (${promptText.length} ký tự)...`);
 
         // BƯỚC 1: ĐIỀN TEXT BẰNG "NATIVE SETTER HACK" (Bypass React)
@@ -127,7 +136,7 @@ class DeepSeekWebBot {
         await this.page.waitForTimeout(500);
     }
 
-    // ==========================================
+ // ==========================================
     // 3. ĐỌC KẾT QUẢ TRẢ VỀ (CHỜ AI SINH TEXT)
     // ==========================================
     async waitForResponse(onStreamChunk) {
@@ -144,18 +153,25 @@ class DeepSeekWebBot {
 
                         let text = '';
 
-                        // 2. TÌM CHÍNH XÁC TIN NHẮN CỦA AI BẰNG CLASS MỚI CỦA DEEPSEEK
-                        // Class này CHỈ bọc phần trả lời chính thức của AI, bỏ qua suy nghĩ (DeepThink) và tin nhắn User
-                        const chatBlocks = document.querySelectorAll('.ds-assistant-message-main-content');
+                        // 2. TÌM CHÍNH XÁC TIN NHẮN MỚI NHẤT (Chưa bị hàm sendPrompt đánh dấu là "đã đọc")
+                        const chatBlocks = document.querySelectorAll('.ds-assistant-message-main-content:not([data-ai-read="true"])');
 
                         if (chatBlocks.length > 0) {
-                            // Luôn lấy block cuối cùng (tin nhắn mới nhất AI đang gõ)
                             text = chatBlocks[chatBlocks.length - 1].innerText || '';
+                            return { type: 'streaming', text, isGenerating };
                         }
-
-                        return { type: 'streaming', text, isGenerating };
+                        
+                        // Nếu mảng chatBlocks = 0, nghĩa là hệ thống Web chưa render kịp tin nhắn mới -> Đợi tiếp
+                        return { type: 'waiting', isGenerating };
                     });
 
+                    // Nếu DOM chưa kịp vẽ tin mới, skip không làm gì cả
+                    if (state.type === 'waiting') {
+                        stableCount = 0;
+                        return;
+                    }
+
+                    // Nếu tin nhắn mới đã nhú lên, bắt đầu lấy chữ
                     if (state.type === 'streaming') {
                         if (state.text.length > lastLength) {
                             const chunk = state.text.substring(lastLength);
