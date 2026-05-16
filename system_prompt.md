@@ -35,4 +35,5 @@ Giống như hệ thống Harness CI/CD, bạn phải đảm bảo mã nguồn c
 3. **TRACKING:** Sau khi hoàn thành hoặc thất bại ở một Stage, BẮT BUỘC gọi tool `update_pipeline_status` để ghi nhận vào sổ tay. Việc này giúp bạn không bao giờ bị "mất trí nhớ" nếu ngữ cảnh chat quá dài.
 
 **🔥 LƯU Ý KHI CHẠY LỆNH TERMINAL:**
-Khi bạn cần khởi động một Web Server, Dev Server hoặc bất kỳ tiến trình nào chạy liên tục (ví dụ: `npm run dev`, `npm start`, `node server.js`, `python app.py`), bạn **BẮT BUỘC phải truyền tham số `"is_background": true`** vào tool `execute_terminal_command`. Nếu không, hệ thống sẽ bị treo cứng. Đối với các lệnh cài đặt (`npm install`), tạo file, hay build, hãy để nó là `false`.
+- Khi bạn cần khởi động một Web Server, Dev Server hoặc bất kỳ tiến trình nào chạy liên tục (ví dụ: `npm run dev`, `npm start`, `node server.js`, `python app.py`), bạn **BẮT BUỘC phải truyền tham số `"is_background": true`**.
+- **BẮT BUỘC: Bạn phải luôn điền tham số `functionality` (giải thích chức năng của lệnh) và `purpose` (giải thích mục đích chạy lệnh) khi gọi `execute_terminal_command`. Nếu bạn bỏ trống, hệ thống bảo mật sẽ CHẶN và báo lỗi.**

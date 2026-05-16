@@ -81,5 +81,13 @@
     ],
     "situation": "Yêu cầu viết hàm đảo ngược chuỗi tiếng Việt và chạy trên Windows Terminal.",
     "solution": "Sử dụng sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8') để tránh lỗi font/encoding khi in tiếng Việt ra terminal và dùng s[::-1] để đảo ngược chuỗi."
+  },
+  {
+    "id": "1778939778596",
+    "date": "2026-05-16T13:56:18.596Z"
+  },
+  {
+    "id": "1778939782617",
+    "date": "2026-05-16T13:56:22.617Z"
   }
 ]

@@ -10,6 +10,7 @@ import chalk from 'chalk';
 import boxen from 'boxen';
 import ora from 'ora';
 import { marked } from 'marked';
+import { markedTerminal } from 'marked-terminal'; // API chuẩn mới xuất dạng object
 import TerminalRenderer from 'marked-terminal';
 
 
@@ -36,6 +37,29 @@ marked.setOptions({
         unescape: true
     })
 });
+
+// Cấu hình Render Markdown cực đẹp cho Terminal
+marked.use(markedTerminal({
+    reflowText: true,
+    width: process.stdout.columns || 80,
+    unescape: true,
+    // --- BẮT ĐẦU TUỲ CHỈNH UI CHUẨN IDE ---
+    heading: chalk.bold.greenBright,               // Tiêu đề xanh sáng
+    firstHeading: chalk.bold.cyanBright.underline, // Tiêu đề H1 gạch chân
+    strong: chalk.bold.cyan,                       // Chữ in đậm màu Cyan
+    em: chalk.italic.yellow,                       // Chữ in nghiêng màu Vàng
+    codespan: chalk.bgGray.whiteBright,            // Bôi đen nền xám cho Code Inline (giống hệt Discord/Slack)
+    blockquote: chalk.gray.italic,                 // Trích dẫn màu xám
+    listitem: chalk.white,
+    tableOptions: {
+        chars: { // Bo góc bảng cực đẹp
+            'top': '═' , 'top-mid': '╤' , 'top-left': '╔' , 'top-right': '╗',
+            'bottom': '═' , 'bottom-mid': '╧' , 'bottom-left': '╚' , 'bottom-right': '╝',
+            'left': '║' , 'left-mid': '╟' , 'mid': '─' , 'mid-mid': '┼',
+            'right': '║' , 'right-mid': '╢' , 'middle': '│' 
+        }
+    }
+}));
 // Thêm tham số showMenu = false để mặc định bỏ qua giao diện chọn AI
 async function loadProviderConfig(showMenu = false) {
     const configPath = path.join(__dirname, 'config.json');
@@ -634,20 +658,34 @@ async function startTerminalChatLoop() {
             if (isFirstChunk) spinner.stop();
             const cleanResponseForHistory = fullAiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
-            // =======================================================
+          // =======================================================
             // 🪄 MAGIC HOT-SWAP: XÓA CHỮ THÔ VÀ BƠM MARKDOWN VÀO
             // =======================================================
+            
+            // 1. Dọn dẹp rác Markdown do AI sinh lỗi & Làm đẹp List
+            let polishedMarkdown = cleanResponseForHistory
+                .replace(/^\s*\*\s/gm, '- ') // Ép mọi dấu * ở đầu dòng thành dấu - (chuẩn Markdown list)
+                .replace(/```[a-z]*\n/g, '\n'); // Hỗ trợ dọn dẹp các block code lỗi
+
+            // 2. Hàm in ra terminal kết hợp tô màu dấu chấm tròn
+            const printBeautiful = (text) => {
+                let parsedText = marked.parse(text).trim();
+                // Tự động đổi các dấu gạch đầu dòng mặc định thành dấu chấm tròn (•) màu Cyan cực đẹp
+                parsedText = parsedText.replace(/^\s*-\s/gm, chalk.cyan('  • '));
+                console.log(parsedText);
+            };
+
+            // 3. Logic xuất ra màn hình (Giữ nguyên thuật toán đếm dòng của bạn)
             if (printedRows > 0 && printedRows < terminalRowsMax - 3) {
-                // Nếu text đủ ngắn nằm trọn trong 1 màn hình -> Lùi cursor lên và xóa sạch
+                // Xóa text thô
                 process.stdout.write(`\r\x1b[${printedRows}A\x1b[0J`);
-                console.log(marked(cleanResponseForHistory).trim());
+                printBeautiful(polishedMarkdown);
             } else if (printedRows > 0) {
-                // Nếu text quá dài (tràn màn hình), lùi cursor sẽ làm lỗi UI. Ta in cách điệu ở dưới.
+                // Nếu tràn màn hình, in tiếp ở dưới
                 console.log(OC_MUTED(`\n\n--- Formatting Markdown ---\n`));
-                console.log(marked(cleanResponseForHistory).trim());
-            } else if (cleanResponseForHistory) {
-                // Trường hợp AI trả lời quá nhanh (không kịp đếm)
-                console.log(marked(cleanResponseForHistory).trim());
+                printBeautiful(polishedMarkdown);
+            } else if (polishedMarkdown) {
+                printBeautiful(polishedMarkdown);
             }
 
             // THANH TRẠNG THÁI

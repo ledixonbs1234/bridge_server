@@ -17,24 +17,27 @@ export default {
                 },
                 functionality: {
                     type: "string",
-                    description: "Chức năng của lệnh này (lệnh này sẽ thực hiện việc gì)."
+                    description: "BẮT BUỘC VIẾT BẰNG TIẾNG VIỆT: Chức năng của lệnh này (lệnh này sẽ thực hiện việc gì)."
                 },
                 purpose: {
                     type: "string",
-                    description: "Mục đích (vì sao phải chạy lệnh này trong ngữ cảnh hiện tại)."
+                    description: "BẮT BUỘC VIẾT BẰNG TIẾNG VIỆT: Mục đích (vì sao phải chạy lệnh này trong ngữ cảnh hiện tại)."
                 }
             },
-            required: ["command", "functionality", "purpose"] // Ép buộc AI luôn phải giải thích
+            required: ["command", "functionality", "purpose"] 
         },
         handler: async (args) => {
             const command = args.command;
             const cwd = args.working_directory || os.homedir();
             const isBackground = args.is_background || false;
 
-            // Nhận 2 tham số mới từ AI
-            const functionality = args.functionality || "Không có mô tả chức năng";
-            const purpose = args.purpose || "Không có mô tả mục đích";
+            // Ném lỗi ép AI tự gọi lại nếu thiếu tham số
+            if (!args.functionality || !args.purpose) {
+                throw new Error("LỖI NGHIÊM TRỌNG: Bạn ĐÃ QUÊN truyền tham số 'functionality' và 'purpose'. Hệ thống từ chối cấp quyền. Hãy GỌI LẠI LỆNH NÀY và BẮT BUỘC GIẢI THÍCH BẰNG TIẾNG VIỆT!");
+            }
 
+            const functionality = args.functionality;
+            const purpose = args.purpose;
             if (!global.isAutoApproveAll) {
                 const cmdText = isBackground
                     ? chalk.magenta(command) + chalk.bgMagenta.white(' BACKGROUND PROCESS ')
