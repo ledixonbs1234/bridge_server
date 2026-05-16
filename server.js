@@ -457,6 +457,23 @@ app.post('/v1/chat/completions', async (req, res) => {
     const injectedMemory = recallMemory(lastUserMessage);
     const taskId = Date.now().toString();
 
+     // ---- THÊM ĐOẠN XỬ LÝ LỆNH /clear TỪ EXTENSION ----
+    if (lastUserMessage.trim() === '/clear') {
+        if (typeof activeProvider.resetSession === 'function') {
+            activeProvider.resetSession();
+        }
+        const clearMsg = "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";
+        if (stream) {
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: clearMsg }, finish_reason: "stop" }] })}\n\n`);
+            res.write('data: [DONE]\n\n');
+            res.end();
+        } else {
+            res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: clearMsg } }] });
+        }
+        return; // Dừng tại đây, không gọi AI
+    }
+
     console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()}`);
 
     const enrichedMessages = messages.map(m => {
@@ -576,7 +593,12 @@ async function startTerminalChatLoop() {
         if (!text) continue;
 
         if (text === '/exit' || text === '/quit') process.exit(0);
-        if (text === '/clear') { cliChatHistory.length = 0; console.clear(); continue; }
+        if (text === '/clear') { 
+            cliChatHistory.length = 0; 
+            if (typeof activeProvider.resetSession === 'function') activeProvider.resetSession();
+            console.clear(); 
+            continue; 
+        }
         if (text === '/model') { await loadProviderConfig(true); console.clear(); continue; }
         if (text === '/reset') { resetSystem(); continue; }
 

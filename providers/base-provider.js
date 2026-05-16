@@ -63,7 +63,12 @@ class BaseProvider {
     async healthCheck() {
         return { ready: false, message: 'Chưa implement healthCheck()' };
     }
-
+    /**
+         * Reset trạng thái phiên chat (nếu provider cần)
+         */
+    resetSession() {
+        // Mặc định không làm gì, class con sẽ tự ghi đè
+    }
     /**
      * Tên hiển thị cho log
      */

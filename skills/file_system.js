@@ -4,20 +4,55 @@ import os from 'os';
 import boxen from 'boxen';
 import chalk from 'chalk';
 import { highlight } from 'cli-highlight';
+
+/**
+ * Chuẩn hóa path để AI luôn an toàn với JSON:
+ * - normalize path
+ * - chuyển toàn bộ "\" -> "/"
+ */
+function aiSafePath(inputPath) {
+    if (!inputPath || typeof inputPath !== 'string') {
+        throw new Error('Path không hợp lệ');
+    }
+
+    const normalized = path.normalize(inputPath);
+
+    return normalized.replace(/\\/g, '/');
+}
+
+/**
+ * Convert input path từ AI thành path hợp lệ cho OS
+ */
+function resolveUserPath(inputPath) {
+
+    if (!inputPath || typeof inputPath !== 'string') {
+        throw new Error('Path không hợp lệ');
+    }
+
+    // Shortcut desktop
+    if (inputPath.toLowerCase() === 'desktop') {
+        return path.join(os.homedir(), 'Desktop');
+    }
+
+    // AI luôn dùng slash "/"
+    const cleaned = inputPath.replace(/\\/g, '/');
+
+    return path.normalize(cleaned);
+}
 export default {
     "list_directory": {
         description: "Lấy danh sách các tệp và thư mục trong một đường dẫn cụ thể (hỗ trợ đệ quy tối đa 3 tầng). Dùng để xem máy tính đang có gì.",
         parameters: {
             type: "object",
             properties: {
-                path: { type: "string", description: "Đường dẫn tuyệt đối đến thư mục. Dùng 'desktop' để lấy Desktop." },
+                path: { type: "string", description: "Đường dẫn tuyệt đối. LUÔN dùng slash '/' thay vì '\\'. Ví dụ: C:/Users/Xon/Desktop" },
                 depth: { type: "number", description: "Độ sâu muốn xem (tối đa 3)." }
             },
             required: ["path"]
         },
         handler: async (args) => {
-            const targetPath = args.path === "desktop" ? path.join(os.homedir(), 'Desktop') : args.path;
-            if (!fs.existsSync(targetPath)) throw new Error(`Thư mục không tồn tại: ${targetPath}`);
+            const targetPath = args.path === "desktop" ? path.join(os.homedir(), 'Desktop') : resolveUserPath(args.path);
+            if (!fs.existsSync(targetPath)) throw new Error(`Thư mục không tồn tại: ${aiSafePath(targetPath)}`);
 
             const maxDepth = Math.min(args.depth || 1, 3);
 
@@ -30,7 +65,7 @@ export default {
                     const item = {
                         name: entry.name,
                         type: entry.isDirectory() ? 'directory' : 'file',
-                        path: fullPath
+                        path: aiSafePath(fullPath)
                     };
 
                     if (entry.isDirectory() && currentDepth < maxDepth) {
@@ -41,7 +76,7 @@ export default {
                 return result;
             };
 
-            return { path: targetPath, files: getFilesRecursive(targetPath, 1) };
+            return { path: aiSafePath(targetPath), files: getFilesRecursive(targetPath, 1) };
         }
     },
 
@@ -53,14 +88,17 @@ export default {
             required: ["file_path"]
         },
         handler: async (args) => {
-            if (!fs.existsSync(args.file_path)) throw new Error(`File không tồn tại: ${args.file_path}`);
+            const filePath = resolveUserPath(args.file_path);
+            if (!fs.existsSync(filePath)) throw new Error(`File không tồn tại: ${args.file_path}`);
             const content = fs.readFileSync(args.file_path, 'utf8');
             const lines = content.split(/\r?\n/);
 
             // THUẬT TOÁN HARNESS: Đánh số dòng làm mỏ neo
             const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`);
 
-            return { file: args.file_path, total_lines: lines.length, content: numberedLines.join('\n') };
+            return { file: aiSafePath(filePath),
+                total_lines: lines.length,
+                content: numberedLines.join('\n')}
         }
     },
 
@@ -76,8 +114,11 @@ export default {
             required: ["file_path", "start_line", "end_line"]
         },
         handler: async (args) => {
-            if (!fs.existsSync(args.file_path)) throw new Error(`File không tồn tại: ${args.file_path}`);
-            const content = fs.readFileSync(args.file_path, 'utf8');
+            const filePath = resolveUserPath(args.file_path);
+            if (!fs.existsSync(filePath)) {
+                throw new Error(`File không tồn tại: ${aiSafePath(filePath)}`);
+            }
+            const content = fs.readFileSync(filePath, 'utf8');
             const lines = content.split(/\r?\n/);
 
             const start = Math.max(0, args.start_line - 1);
@@ -87,7 +128,7 @@ export default {
             const numberedLines = lines.slice(start, end).map((line, idx) => `${start + idx + 1} | ${line}`);
 
             return {
-                file: args.file_path,
+                file: aiSafePath(filePath),
                 total_lines_in_file: lines.length,
                 showing_lines: `${start + 1} to ${end}`,
                 content: numberedLines.join('\n')
@@ -108,7 +149,11 @@ export default {
             required: ["file_path", "start_line", "end_line", "replace_string"]
         },
         handler: async (args) => {
-            if (!fs.existsSync(args.file_path)) throw new Error(`File không tồn tại: ${args.file_path}`);
+            const filePath = resolveUserPath(args.file_path);
+
+            if (!fs.existsSync(filePath)) {
+                throw new Error(`File không tồn tại: ${aiSafePath(filePath)}`);
+            }
 
             if (!global.isAutoApproveAll) {
                 // 1. Tô màu Code
@@ -139,7 +184,7 @@ ${chalk.gray('----------------------------------------')}
                 else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
             }
 
-            const content = fs.readFileSync(args.file_path, 'utf8');
+            const content = fs.readFileSync(filePath, 'utf8');
 
             // Tự động nhận diện chuẩn ngắt dòng gốc của file (Windows CRLF hay Linux LF)
             const isCRLF = content.includes('\r\n');
@@ -164,8 +209,13 @@ ${chalk.gray('----------------------------------------')}
             // Core Logic: Cắt bỏ dòng cũ, nối dòng mới vào vị trí đó
             lines.splice(start, end - start + 1, ...newLines);
 
-            fs.writeFileSync(args.file_path, lines.join(lineEnding), 'utf8');
-            return { message: `Đã thay thế thành công từ dòng ${args.start_line} đến ${args.end_line} trong ${args.file_path}` };
+            fs.writeFileSync(filePath, lines.join(lineEnding), 'utf8');
+           return {
+                message:
+                    `Đã thay thế thành công từ dòng ` +
+                    `${args.start_line} đến ${args.end_line}`,
+                file: aiSafePath(filePath)
+            };
         }
     },
 
@@ -180,10 +230,11 @@ ${chalk.gray('----------------------------------------')}
             required: ["file_path", "content"]
         },
         handler: async (args) => {
+            const filePath = resolveUserPath(args.file_path);
             if (!global.isAutoApproveAll) {
                 // 1. Lấy đuôi mở rộng của file để highlight đúng ngôn ngữ (vd: .py, .js)
-                const ext = args.file_path.split('.').pop() || 'javascript';
-
+              const ext =
+                    filePath.split('.').pop() || 'javascript';
                 // 2. Highlight code
                 const highlightedCode = args.content
                     ? highlight(args.content, { language: ext, ignoreIllegals: true })
@@ -210,8 +261,15 @@ ${chalk.gray('----------------------------------------')}
                 if (answer === 'a') global.isAutoApproveAll = true;
                 else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
             }
-            fs.writeFileSync(args.file_path, args.content, 'utf8');
-            return { message: `Đã tạo/ghi đè thành công vào ${args.file_path}` };
+           fs.writeFileSync(
+                filePath,
+                args.content,
+                'utf8'
+            );
+           return {
+                message: `Đã ghi file thành công`,
+                file: aiSafePath(filePath)
+            };
         }
     }
 };

@@ -9,8 +9,8 @@ export default {
                 os_platform: os.platform(),
                 os_release: os.release(),
                 architecture: os.arch(),
-                home_directory: os.homedir(),
-                current_working_directory: process.cwd()
+                home_directory: os.homedir().replace(/\\/g, '/'),
+                current_working_directory: process.cwd().replace(/\\/g, '/')
             };
         }
     }
