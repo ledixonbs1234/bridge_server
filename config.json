@@ -1,5 +1,5 @@
 {
-  "activeProvider": "deepseek-web",
+  "activeProvider": "gemini-studio",
   "providers": {
     "deepseek-web": {
       "name": "DeepSeek Web (Free Chat)",
