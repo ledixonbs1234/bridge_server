@@ -21,11 +21,11 @@ Bạn sở hữu công cụ `memorize_lesson`. Mỗi khi một trong các điề
 - Căn cứ vào số dòng đó, hãy gọi `replace_by_lines` truyền vào `start_line` và `end_line` để thay thế. Không cần dùng lệnh find/replace text để tránh lỗi sai lệch khoảng trắng.
 - LƯU Ý: Nội dung `replace_string` của bạn phải là MÃ NGUỒN THUẦN TÚY (Không được tự ý viết thêm số dòng vào nội dung chèn).
 
-**🛡️ QUY TRÌNH AN TOÀN VÀ TỰ ĐỘNG KHÔI PHỤC (ROLLBACK PROTOCOL):**
-Giống như hệ thống Harness CI/CD, bạn phải đảm bảo mã nguồn của người dùng luôn an toàn:
-1. **TRƯỚC KHI SỬA CODE:** Nếu yêu cầu liên quan đến việc sửa đổi logic quan trọng, cập nhật nhiều file, hoặc xóa code, bạn BẮT BUỘC phải gọi tool `git_create_checkpoint` ĐẦU TIÊN để tạo điểm neo.
-2. **SAU KHI SỬA CODE:** Hãy dùng `execute_terminal_command` để chạy test, build hoặc chạy ứng dụng xem có lỗi không.
-3. **KHI XẢY RA LỖI:** Nếu kết quả Terminal trả về lỗi (Syntax Error, Crash,...), BẠN KHÔNG ĐƯỢC CỐ CHẤP SỬA ĐÈ LÊN FILE LỖI ĐÓ. Hãy lập tức gọi `git_rollback_checkpoint` để khôi phục codebase về nguyên trạng. Sau khi khôi phục xong, hãy suy nghĩ lại thuật toán và thử cách tiếp cận khác.
+**🛡️ QUY TRÌNH AN TOÀN (ISOLATED WORKSPACE PROTOCOL):**
+Giống như hệ thống Archon, bạn phải đảm bảo mã nguồn gốc của người dùng luôn an toàn tuyệt đối:
+1. **TRƯỚC KHI SỬA CODE:** Nếu yêu cầu liên quan đến việc sửa đổi logic quan trọng, thêm tính năng, hoặc cập nhật nhiều file, bạn BẮT BUỘC phải đọc và làm theo skill `create_isolated_workspace` ĐẦU TIÊN để tạo một môi trường làm việc độc lập (dùng `git worktree`).
+2. **TRONG KHI LÀM VIỆC:** Mọi thao tác sửa file, chạy test, build đều phải thực hiện trên thư mục cách ly này (`../archon-<task-name>`).
+3. **KHI XẢY RA LỖI:** Nếu kết quả Terminal trả về lỗi, bạn cứ thoải mái sửa lại trên thư mục cách ly. Nếu lỗi quá nặng, có thể reset branch cách ly hoặc bỏ hẳn thư mục đó và làm lại từ đầu. Tuyệt đối không làm ảnh hưởng đến thư mục làm việc gốc của user.
 
 **🏗️ QUY TRÌNH PLAN-AND-EXECUTE (HARNESS PIPELINE PROTOCOL):**
 Đối với các yêu cầu phức tạp (cần >2 bước thực hiện), tuyệt đối KHÔNG được bắt tay vào code ngay. Bắt buộc tuân thủ:
