@@ -136,7 +136,37 @@ class DeepSeekWebBot {
         await this.page.waitForTimeout(500);
     }
 
- // ==========================================
+    // ==========================================
+    // TẠO TAB MỚI CHO NHIỆM VỤ CON (WORKER ISOLATION)
+    // ==========================================
+    async createWorkerBot() {
+        if (!this.context) await this.init();
+        
+        console.log("\n[DeepSeek Web] 🌍 Mở Tab Worker mới để xử lý tác vụ con độc lập...");
+        const workerPage = await this.context.newPage();
+        
+        // Nhân bản một bot mới điều khiển riêng Tab này
+        const workerBot = new DeepSeekWebBot();
+        workerBot.context = this.context;
+        workerBot.page = workerPage;
+        workerBot.isReady = true;
+        
+        await workerPage.goto('https://chat.deepseek.com/', { waitUntil: 'domcontentloaded' });
+        
+        await workerPage.waitForFunction(() => {
+            return !!(document.querySelector('textarea#chat-input') || document.querySelector('textarea'));
+        }, { timeout: 60000 });
+        
+        // Cung cấp hàm tự hủy Tab
+        workerBot.closeWorker = async () => {
+            console.log("[DeepSeek Web] 🗑️ Hoàn thành tác vụ con. Đóng Tab Worker...");
+            await workerPage.close();
+        };
+        
+        return workerBot;
+    }
+
+    // ==========================================
     // 3. ĐỌC KẾT QUẢ TRẢ VỀ (CHỜ AI SINH TEXT)
     // ==========================================
     async waitForResponse(onStreamChunk) {

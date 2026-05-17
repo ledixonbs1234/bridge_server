@@ -24,6 +24,47 @@ export default class WorkflowEngine {
           .run(JSON.stringify(pipeline), status);
     }
 
+    async triggerReflection(pipeline, outcome, error = null) {
+        console.log(chalk.magenta(`\n🧠 Đang tự động kiểm điểm (Auto-Reflection) kết quả thực thi...`));
+        
+        const reflectionPrompt = `
+Bạn là AI Quản lý Quy trình (Harness Critic). Bạn vừa hoàn thành (hoặc thất bại) một Pipeline.
+[MỤC TIÊU BAN ĐẦU]: "${this.globalContext}"
+[KẾT QUẢ]: ${outcome === 'SUCCESS' ? 'Hoàn thành thành công toàn bộ quy trình.' : 'Thất bại giữa chừng.'}
+${error ? `[LỖI GẶP PHẢI]: ${error.message}` : ''}
+
+Nhiệm vụ của bạn:
+1. Đánh giá ngắn gọn những gì đã làm tốt hoặc chưa tốt.
+2. NẾU bạn rút ra được kinh nghiệm quan trọng nào (đặc biệt khi sửa lỗi), HÃY GỌI LỆNH \`memorize_lesson\` để ghi nhớ.
+3. NẾU bạn nhận thấy đây là một quy trình mới và hữu ích có thể dùng lại nhiều lần, HÃY GỌI LỆNH \`synthesize_skill\` để đóng gói nó thành một file SKILL.md.
+NẾU không có gì đáng nhớ, bạn không cần gọi lệnh nào.
+Chỉ trả về đánh giá ngắn gọn của bạn.
+`;
+
+        try {
+            // Cho phép Critic dùng memorize_lesson và synthesize_skill
+            const reflectionSkills = {};
+            if (this.skillRegistry['memorize_lesson']) reflectionSkills['memorize_lesson'] = this.skillRegistry['memorize_lesson'];
+            if (this.skillRegistry['synthesize_skill']) reflectionSkills['synthesize_skill'] = this.skillRegistry['synthesize_skill'];
+
+            const response = await this.provider.chat({
+                messages: [{ role: 'user', content: reflectionPrompt }],
+                skillRegistry: reflectionSkills,
+                executeSkill: async (funcName, args) => {
+                    console.log(chalk.magenta(`\n💡 Auto-Reflection đang gọi Tool: ${funcName}...`));
+                    return await this.executeSkillFn(funcName, args);
+                },
+                systemPrompt: "Bạn là một AI Critic có khả năng tự rút kinh nghiệm. Trả lời cực kỳ ngắn gọn.",
+                maxSteps: 2,
+                isWorker: true
+            });
+
+            console.log(chalk.gray(`[Reflection Output]: ${response}`));
+        } catch (e) {
+            console.error(chalk.red(`[Reflection] Lỗi trong quá trình kiểm điểm:`), e.message);
+        }
+    }
+
     // Hàm chính: Bắt đầu chạy Workflow tự động
     async run() {
         const pipeline = this.getCurrentPipeline();
@@ -100,6 +141,7 @@ Bạn là một AI Worker CHUYÊN THỰC THI LỆNH.
                     step.status = 'FAILED';
                     stage.status = 'FAILED';
                     this.updateStatus(pipeline, 'FAILED');
+                    await this.triggerReflection(pipeline, 'FAILED', error);
                     return; 
                 }
             }
@@ -112,6 +154,7 @@ Bạn là một AI Worker CHUYÊN THỰC THI LỆNH.
 
         // Hoàn tất toàn bộ Pipeline
         this.updateStatus(pipeline, 'DONE');
+        await this.triggerReflection(pipeline, 'SUCCESS');
         console.log(boxen(chalk.bold.green(`🎉 PIPELINE HOÀN TẤT THÀNH CÔNG!`), { padding: 1, borderColor: 'green' }));
     }
 }

@@ -366,7 +366,7 @@ async function executeSkillForProvider(functionName, funcArgs) {
         return JSON.stringify({ status: "error", error_message: error.message, suggestion });
     }
 }
-function recallMemory(lastUserMessage, allMessagesContext = "") {
+async function recallMemory(lastUserMessage, allMessagesContext = "") {
     const memoryDir = path.join(__dirname, '.agent_memory');
     if (!fs.existsSync(memoryDir)) return "";
 
@@ -394,18 +394,50 @@ function recallMemory(lastUserMessage, allMessagesContext = "") {
     }
 
     try {
-        // 1. Chuẩn bị từ khóa cho FTS5 (Bỏ ký tự đặc biệt, lấy chữ và số)
-        const words = (lastUserMessage + " " + allMessagesContext)
-            .replace(/[^\p{L}\p{N}]/gu, ' ')
-            .trim()
-            .split(/\s+/)
-            .filter(w => w.length > 1); // Bỏ các từ quá ngắn
+        let searchTerms = "";
+        try {
+            if (activeProvider && activeProvider.chat) {
+                const prompt = `Từ yêu cầu sau, hãy trích xuất 2-3 từ khóa kỹ thuật hoặc danh từ ĐẶC TRƯNG NHẤT dùng để tìm kiếm lỗi/giải pháp trong cơ sở dữ liệu. Chỉ trả về các từ khóa viết thường, cách nhau bởi khoảng trắng, không giải thích. Yêu cầu: "${lastUserMessage}"`;
+                
+                let keywordResponse = await activeProvider.chat({
+                    messages: [{ role: 'user', content: prompt }],
+                    skillRegistry: {},
+                    executeSkill: async () => {},
+                    systemPrompt: "Bạn là hệ thống trích xuất từ khóa tìm kiếm nội bộ. Chỉ output từ khóa.",
+                    maxSteps: 1,
+                    isWorker: true
+                });
+                
+                keywordResponse = keywordResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+                
+                const words = keywordResponse.replace(/[^\p{L}\p{N}]/gu, ' ')
+                    .trim()
+                    .split(/\s+/)
+                    .filter(w => w.length > 1);
 
-        if (words.length > 0) {
-            // Cú pháp FTS5: "word1* AND word2*"
-            const searchTerms = words.join('* OR ') + '*';
+                if (words.length > 0) {
+                    searchTerms = words.join('* OR ') + '*';
+                    console.log(chalk.gray(`\n[Memory] AI Keyword Extraction: "${searchTerms}"`));
+                }
+            }
+        } catch (apiErr) {
+            console.warn("[Memory] Trích xuất từ khóa AI thất bại, dùng fallback.", apiErr.message);
+        }
 
-            // 2. Truy vấn Database
+        // Fallback
+        if (!searchTerms) {
+            const words = (lastUserMessage + " " + allMessagesContext)
+                .replace(/[^\p{L}\p{N}]/gu, ' ')
+                .trim()
+                .split(/\s+/)
+                .filter(w => w.length > 1);
+
+            if (words.length > 0) {
+                searchTerms = words.join('* OR ') + '*';
+            }
+        }
+
+        if (searchTerms) {
             const stmt = db.prepare(`
             SELECT m.situation, m.solution 
             FROM memories_fts f
@@ -478,7 +510,7 @@ app.post('/api/config', (req, res) => {
 app.post('/v1/chat/completions', async (req, res) => {
     const { messages, stream } = req.body;
     const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
-    const injectedMemory = recallMemory(lastUserMessage);
+    const injectedMemory = await recallMemory(lastUserMessage);
     const taskId = Date.now().toString();
 
     // ---- THÊM ĐOẠN XỬ LÝ LỆNH /clear TỪ EXTENSION ----
@@ -642,7 +674,37 @@ async function startTerminalChatLoop() {
 
         cliChatHistory.push({ role: 'user', content: text });
 
-        const injectedMemory = recallMemory(text);
+        // --- CONTEXT COMPACTION ---
+        if (cliChatHistory.length > 15) {
+            console.log(chalk.gray(`\n[Memory] Ngữ cảnh quá dài (${cliChatHistory.length} tin nhắn), đang tự động nén...`));
+            const messagesToCompress = cliChatHistory.slice(0, 10);
+            
+            if (activeProvider) {
+                const prompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` + 
+                               messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
+                
+                try {
+                    let summary = await activeProvider.chat({
+                        messages: [{ role: 'user', content: prompt }],
+                        skillRegistry: {},
+                        executeSkill: async () => {},
+                        systemPrompt: "Bạn là công cụ tóm tắt. Trả về đúng nội dung tóm tắt.",
+                        maxSteps: 1,
+                        isWorker: true
+                    });
+                    summary = summary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+                    
+                    cliChatHistory.splice(0, 10);
+                    cliChatHistory.unshift({ role: 'system', content: `[Tóm tắt bối cảnh cũ]: ${summary}` });
+                    console.log(chalk.green(`[Memory] Nén ngữ cảnh bằng AI thành công! Số tin nhắn hiện tại: ${cliChatHistory.length}`));
+                } catch (err) {
+                    console.warn(chalk.yellow(`[Memory] Lỗi khi nén ngữ cảnh: ${err.message}`));
+                    cliChatHistory.splice(0, 10);
+                }
+            }
+        }
+
+        const injectedMemory = await recallMemory(text);
         const enrichedMessages = [...cliChatHistory];
         if (injectedMemory) enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
 

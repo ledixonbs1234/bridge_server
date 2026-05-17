@@ -41,9 +41,14 @@ QUAN TRỌNG:
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15 } = options;
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker } = options;
 
         await deepseekBot.init();
+        
+        let bot = deepseekBot;
+        if (isWorker) {
+            bot = await deepseekBot.createWorkerBot();
+        }
 
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
 
@@ -56,9 +61,9 @@ QUAN TRỌNG:
 
         let finalPrompt = "";
 
-        if (isFirstTurn) {
+        if (isFirstTurn && !isWorker) {
             // Mở khung chat trắng mới trên trình duyệt
-            await deepseekBot.clickNewChat();
+            await bot.clickNewChat();
 
             // LẦN CHAT ĐẦU TIÊN: Nhồi toàn bộ System Prompt và Hướng dẫn Tool
             console.log(`[DeepSeek Web] 🆕 Bắt đầu phiên chat mới, đang thiết lập System Prompt & Tools...`);
@@ -69,13 +74,19 @@ QUAN TRỌNG:
 
             // Đánh dấu là đã tạo chat để các tin nhắn sau dù mảng có bị ngắn lại cũng không bị reset
             this.hasInitializedChat = true;
+        } else if (isWorker) {
+            // Worker luôn bắt đầu một context trắng hoàn toàn
+            const toolInstructions = this._buildToolInstructions(skillRegistry);
+            finalPrompt = `[SYSTEM INSTRUCTION]\n${systemPrompt}\n\n`;
+            finalPrompt += `[SYSTEM TOOLS]\n${toolInstructions}\n\n`;
+            finalPrompt += `[USER REQUEST]\n${lastUserMessage}`;
         } else {
             // TỪ LẦN CHAT THỨ 2: Chỉ gửi duy nhất câu hỏi của user 
             // (Vì AI đã đọc và nhớ System/Tools ở các tin nhắn phía trên trình duyệt rồi)
             finalPrompt = lastUserMessage;
         }
 
-        await deepseekBot.sendPrompt(finalPrompt);
+        await bot.sendPrompt(finalPrompt);
 
         let stepCount = 0;
 
@@ -83,7 +94,7 @@ QUAN TRỌNG:
             stepCount++;
 
             // Đợi DeepSeek gõ xong
-            const response = await deepseekBot.waitForResponse(onStreamChunk);
+            const response = await bot.waitForResponse(onStreamChunk);
             const content = response.text;
 
             // Dùng Regex để tìm xem DeepSeek có đang gọi tool không
@@ -104,20 +115,28 @@ QUAN TRỌNG:
                     // FEEDBACK: Báo cho DeepSeek biết kết quả để nó làm tiếp
                     const feedbackPrompt = `[KẾT QUẢ TỪ HỆ THỐNG CHO LỆNH ${toolJson.name}]\n${resultString}\n\nDựa vào kết quả này, hãy phân tích và đưa ra câu trả lời cuối cùng, HOẶC tiếp tục gọi <tool_call> nếu cần thêm thông tin.`;
 
-                    await deepseekBot.sendPrompt(feedbackPrompt);
+                    await bot.sendPrompt(feedbackPrompt);
                     continue; // Chờ vòng lặp tiếp theo
 
                 } catch (e) {
                     // Nếu DeepSeek xuất JSON sai cú pháp
                     console.error(`[DeepSeek Web] ❌ DeepSeek sinh sai cú pháp JSON: ${e.message}`);
-                    await deepseekBot.sendPrompt(`Hệ thống lỗi: Cú pháp JSON trong <tool_call> bị sai. Lỗi: ${e.message}. Hãy viết lại <tool_call> cho đúng chuẩn JSON.`);
+                    await bot.sendPrompt(`Hệ thống lỗi: Cú pháp JSON trong <tool_call> bị sai. Lỗi: ${e.message}. Hãy viết lại <tool_call> cho đúng chuẩn JSON.`);
                     continue;
                 }
             }
 
             // Nếu không có <tool_call>, nghĩa là DeepSeek đã trả lời xong
             console.log(`[DeepSeek Web] ✅ Hoàn thành sau ${stepCount} bước.`);
+            
+            if (isWorker && typeof bot.closeWorker === 'function') {
+                await bot.closeWorker();
+            }
             return content;
+        }
+        
+        if (isWorker && typeof bot.closeWorker === 'function') {
+            await bot.closeWorker();
         }
 
         return '[Lỗi: Quá giới hạn vòng lặp Function Calling]';
