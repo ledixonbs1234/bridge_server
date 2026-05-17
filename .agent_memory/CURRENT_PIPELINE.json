@@ -1,33 +1,29 @@
 {
-  "pipeline_name": "Tự động hóa chat với DeepSeek",
+  "pipeline_name": "Tạo hàm tìm số nguyên tố",
   "stages": [
     {
-      "name": "Chuẩn bị và Điều hướng",
+      "name": "Tạo file và viết code",
       "steps": [
         {
-          "task": "Truy cập trang DeepSeek và kiểm tra cấu trúc DOM",
-          "tool": "dynamic_browser_controller",
+          "task": "Tạo file primeCheck.js và viết hàm tìm số nguyên tố từ 1 đến 400",
+          "tool": "write_file",
           "status": "PENDING"
         }
       ],
       "status": "DONE",
-      "notes": "Đã truy cập và kiểm tra DOM thành công. Cần người dùng cung cấp nội dung để chat."
+      "notes": "Đã tạo file primeCheck.js với nội dung tìm số nguyên tố từ 1 đến 400."
     },
     {
-      "name": "Tương tác với AI (Sau khi có nội dung từ người dùng)",
+      "name": "Mở file bằng VS Code",
       "steps": [
         {
-          "task": "Bật DeepThink, điền tin nhắn và gửi",
-          "tool": "dynamic_browser_controller",
-          "status": "PENDING"
-        },
-        {
-          "task": "Chờ phản hồi và trích xuất kết quả",
-          "tool": "dynamic_browser_controller",
+          "task": "Dùng lệnh terminal code để mở file vừa tạo",
+          "tool": "execute_terminal_command",
           "status": "PENDING"
         }
       ],
-      "status": "PENDING"
+      "status": "DONE",
+      "notes": "Đã mở file primeCheck.js trong VS Code thành công."
     }
   ]
 }
