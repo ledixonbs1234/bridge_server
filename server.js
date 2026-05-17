@@ -4,7 +4,6 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import yaml from 'js-yaml';
-import Fuse from 'fuse.js';
 import { select, input } from '@inquirer/prompts';
 import chalk from 'chalk';
 import boxen from 'boxen';
@@ -13,7 +12,8 @@ import { marked } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 import TerminalRenderer from 'marked-terminal';
 import { fileURLToPath, pathToFileURL } from 'url';
-
+import WorkflowEngine from './workflow_engine.js';
+import db from './database.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -62,10 +62,10 @@ marked.use(markedTerminal({
     listitem: chalk.white,
     tableOptions: {
         chars: {
-            'top': '═' , 'top-mid': '╤' , 'top-left': '╔' , 'top-right': '╗',
-            'bottom': '═' , 'bottom-mid': '╧' , 'bottom-left': '╚' , 'bottom-right': '╝',
-            'left': '║' , 'left-mid': '╟' , 'mid': '─' , 'mid-mid': '┼',
-            'right': '║' , 'right-mid': '╢' , 'middle': '│' 
+            'top': '═', 'top-mid': '╤', 'top-left': '╔', 'top-right': '╗',
+            'bottom': '═', 'bottom-mid': '╧', 'bottom-left': '╚', 'bottom-right': '╝',
+            'left': '║', 'left-mid': '╟', 'mid': '─', 'mid-mid': '┼',
+            'right': '║', 'right-mid': '╢', 'middle': '│'
         }
     }
 }));
@@ -271,8 +271,8 @@ async function loadSkills() {
                     const match = content.match(/(?:^|\n)---\s*\n([\s\S]*?)\n---\s*(?:\n|$)([\s\S]*)/);
 
                     if (match) {
-                        const yamlData = yaml.load(match[1]); 
-                        const markdownBody = match[2].trim(); 
+                        const yamlData = yaml.load(match[1]);
+                        const markdownBody = match[2].trim();
 
                         const rawName = yamlData.name || folder;
                         const skillName = rawName.replace(/-/g, '_');
@@ -336,6 +336,7 @@ app.get('/api/system-prompt', (req, res) => {
 
 const activeStreams = new Map();
 
+// Thay đổi hàm executeSkillForProvider:
 async function executeSkillForProvider(functionName, funcArgs) {
     const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines', 'get_os_context'];
     if (!silentFunctions.includes(functionName) && !functionName.startsWith('workflow_')) {
@@ -344,22 +345,27 @@ async function executeSkillForProvider(functionName, funcArgs) {
 
     const skill = SKILL_REGISTRY[functionName];
     if (!skill) {
-        return JSON.stringify({ status: "error", error_message: `Function '${functionName}' is not defined in system.` });
+        return JSON.stringify({ status: "error", error_message: `Function '${functionName}' is not defined.` });
     }
 
     try {
         const result = await skill.handler(funcArgs);
+
+       if (functionName === 'create_pipeline_plan') {
+            console.log(chalk.blue(`\n[Node] ⚙️ Kế hoạch đã được duyệt. Đang đóng luồng Chat để chuyển giao cho Engine...`));
+            return "__HANDOVER_TO_ENGINE__"; // Trả thẳng chuỗi này về cho hàm chat()
+        }
+
         return JSON.stringify({ status: "success", data: result });
     } catch (error) {
+        // ... (Giữ nguyên logic báo lỗi cũ của bạn) ...
         console.error(`[Node] ❌ Lỗi khi chạy hàm:`, error.message);
         let suggestion = "Vui lòng kiểm tra lại tham số.";
-        if (error.message.includes("không tồn tại")) suggestion = "Hãy dùng list_directory để kiểm tra thư mục trước.";
+        if (error.message.includes("không tồn tại")) suggestion = "Hãy dùng list_directory để kiểm tra...";
         if (error.message.includes("PERMISSION_DENIED")) suggestion = "Người dùng đã từ chối lệnh này.";
-        if (error.message.includes("search_string")) suggestion = "Đoạn code tìm không khớp. Hãy đọc lại file rồi thử lại.";
         return JSON.stringify({ status: "error", error_message: error.message, suggestion });
     }
 }
-
 function recallMemory(lastUserMessage, allMessagesContext = "") {
     const memoryDir = path.join(__dirname, '.agent_memory');
     if (!fs.existsSync(memoryDir)) return "";
@@ -379,7 +385,7 @@ function recallMemory(lastUserMessage, allMessagesContext = "") {
         const searchSpace = (lastUserMessage + " " + allMessagesContext).toLowerCase();
 
         for (const file of ruleFiles) {
-            const keyword = file.replace('.md', ''); 
+            const keyword = file.replace('.md', '');
             if (searchSpace.includes(keyword)) {
                 injectedContext += `\n--- QUY TẮC CHO [${keyword.toUpperCase()}] ---\n${fs.readFileSync(path.join(rulesDir, file), 'utf8')}\n`;
                 hasMemory = true;
@@ -387,20 +393,38 @@ function recallMemory(lastUserMessage, allMessagesContext = "") {
         }
     }
 
-    const episodicFile = path.join(memoryDir, 'episodic.json');
-    if (fs.existsSync(episodicFile)) {
-        try {
-            const memories = JSON.parse(fs.readFileSync(episodicFile, 'utf8'));
-            if (memories.length > 0) {
-                const fuse = new Fuse(memories, { keys: ['tags', 'situation'], threshold: 0.4 });
-                const results = fuse.search(lastUserMessage).slice(0, 2);
-                if (results.length > 0) {
-                    injectedContext += "\n--- BÀI HỌC TỪ LỖI TRONG QUÁ KHỨ ---\n";
-                    injectedContext += results.map(r => `- Vấn đề: "${r.item.situation}" -> Xử lý: "${r.item.solution}"`).join('\n');
-                    hasMemory = true;
-                }
+    try {
+        // 1. Chuẩn bị từ khóa cho FTS5 (Bỏ ký tự đặc biệt, lấy chữ và số)
+        const words = (lastUserMessage + " " + allMessagesContext)
+            .replace(/[^\p{L}\p{N}]/gu, ' ')
+            .trim()
+            .split(/\s+/)
+            .filter(w => w.length > 1); // Bỏ các từ quá ngắn
+
+        if (words.length > 0) {
+            // Cú pháp FTS5: "word1* AND word2*"
+            const searchTerms = words.join('* OR ') + '*';
+
+            // 2. Truy vấn Database
+            const stmt = db.prepare(`
+            SELECT m.situation, m.solution 
+            FROM memories_fts f
+            JOIN memories m ON f.rowid = m.rowid
+            WHERE memories_fts MATCH ?
+            ORDER BY rank
+            LIMIT 2
+        `);
+
+            const results = stmt.all(searchTerms);
+
+            if (results.length > 0) {
+                injectedContext += "\n--- BÀI HỌC TỪ LỖI TRONG QUÁ KHỨ ---\n";
+                injectedContext += results.map(r => `- Vấn đề: "${r.situation}" -> Xử lý: "${r.solution}"`).join('\n');
+                hasMemory = true;
             }
-        } catch (e) { console.warn("[Node] Lỗi đọc episodic memory:", e.message); }
+        }
+    } catch (e) {
+        console.warn("[Node] Lỗi truy vấn bộ nhớ DB:", e.message);
     }
 
     return hasMemory ? injectedContext : "";
@@ -457,7 +481,7 @@ app.post('/v1/chat/completions', async (req, res) => {
     const injectedMemory = recallMemory(lastUserMessage);
     const taskId = Date.now().toString();
 
-     // ---- THÊM ĐOẠN XỬ LÝ LỆNH /clear TỪ EXTENSION ----
+    // ---- THÊM ĐOẠN XỬ LÝ LỆNH /clear TỪ EXTENSION ----
     if (lastUserMessage.trim() === '/clear') {
         if (typeof activeProvider.resetSession === 'function') {
             activeProvider.resetSession();
@@ -533,7 +557,17 @@ app.post('/v1/chat/completions', async (req, res) => {
             res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
         }
     } catch (error) {
-        if (spinner) spinner.fail(chalk.red('Đã xảy ra lỗi!'));
+        if (spinner) spinner.stop(); // Stop thay vì fail
+
+        if (error.message.includes("__HANDOVER_TO_ENGINE__")) {
+             if (stream) {
+                 res.write('data: [DONE]\n\n');
+                 res.end();
+             } else {
+                 res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: "Đã chuyển giao cho Workflow Engine." } }] });
+             }
+             return;
+        }
         console.error(chalk.red(`[Node] ❌ Lỗi xử lý:`), error.message);
         if (stream) {
             res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[LỖI: ${error.message}]` }, finish_reason: "stop" }] })}\n\n`);
@@ -573,8 +607,8 @@ async function startTerminalChatLoop() {
     console.log(OC_MUTED(`\n  B R I D G E  S E R V E R\n`));
 
     while (true) {
-        console.log(chalk.gray('  Ask anything...')); 
-        
+        console.log(chalk.gray('  Ask anything...'));
+
         let userText;
         try {
             userText = await input({
@@ -593,11 +627,11 @@ async function startTerminalChatLoop() {
         if (!text) continue;
 
         if (text === '/exit' || text === '/quit') process.exit(0);
-        if (text === '/clear') { 
-            cliChatHistory.length = 0; 
+        if (text === '/clear') {
+            cliChatHistory.length = 0;
             if (typeof activeProvider.resetSession === 'function') activeProvider.resetSession();
-            console.clear(); 
-            continue; 
+            console.clear();
+            continue;
         }
         if (text === '/model') { await loadProviderConfig(true); console.clear(); continue; }
         if (text === '/reset') { resetSystem(); continue; }
@@ -629,7 +663,7 @@ async function startTerminalChatLoop() {
         const terminalRowsMax = process.stdout.rows || 24;
 
         try {
-            await activeProvider.chat({
+            const chatResult = await activeProvider.chat({
                 messages: enrichedMessages,
                 skillRegistry: SKILL_REGISTRY,
                 executeSkill: async (funcName, args) => {
@@ -637,7 +671,9 @@ async function startTerminalChatLoop() {
                     spinner.stop();
                     console.log(`\n${OC_THINK.italic('Action:')} ${OC_MUTED.italic(`Executing ${funcName}...`)}\n`);
                     const res = await executeSkillForProvider(funcName, args);
-                    spinner = ora({ text: OC_MUTED.italic(`Evaluating output...`), spinner: 'dots' }).start();
+                    if (res !== "__HANDOVER_TO_ENGINE__") {
+                        spinner = ora({ text: OC_MUTED.italic(`Evaluating output...`), spinner: 'dots' }).start();
+                    }
                     isFirstChunk = true;
                     return res;
                 },
@@ -667,11 +703,18 @@ async function startTerminalChatLoop() {
             });
 
             if (isFirstChunk) spinner.stop();
+            if (chatResult === "__HANDOVER_TO_ENGINE__" || fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
+                const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text);
+                await engine.run(); // Block Terminal chờ Engine chạy xong
+                
+                console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal."));
+                continue; // Quay lại đầu vòng lặp để gõ câu lệnh mới
+            }
             const cleanResponseForHistory = fullAiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
             let polishedMarkdown = cleanResponseForHistory
-                .replace(/^\s*\*\s/gm, '- ') 
-                .replace(/```[a-z]*\n/g, '\n'); 
+                .replace(/^\s*\*\s/gm, '- ')
+                .replace(/```[a-z]*\n/g, '\n');
 
             const printBeautiful = (text) => {
                 let parsedText = marked.parse(text).trim();
@@ -689,6 +732,16 @@ async function startTerminalChatLoop() {
                 printBeautiful(polishedMarkdown);
             }
 
+            // XỬ LÝ NẾU CÓ TÍN HIỆU TỪ PIPELINE
+            if (fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
+                const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text); // 'text' chính là câu hỏi của user
+                await engine.run(); // AWAIT ở đây sẽ block terminal, không cho nó hiện dấu nháy lên
+                
+                // Sau khi Engine xong, tiếp tục vòng lặp để chat tiếp
+                console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal."));
+                continue; 
+            }
+
             const endTime = Date.now();
             const duration = ((endTime - startTime) / 1000).toFixed(1);
             const modelName = activeProvider.model || 'Agent';
@@ -698,7 +751,15 @@ async function startTerminalChatLoop() {
             cliChatHistory.push({ role: 'assistant', content: cleanResponseForHistory });
 
         } catch (error) {
-            spinner.stop();
+           spinner.stop();
+            
+            // Xử lý cướp quyền (Không in lỗi đỏ, chỉ thoát vòng lặp lặng lẽ)
+            if (error.message.includes("__HANDOVER_TO_ENGINE__")) {
+                // Đừng làm gì cả, Workflow Engine đã tiếp quản ở background
+                return; // Thoát hẳn 1 lượt chat
+            }
+
+            // Các lỗi khác thì in bình thường
             console.error(chalk.red(`\n❌ Error: ${error.message}\n`));
             cliChatHistory.pop();
         }

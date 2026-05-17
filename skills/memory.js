@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
+import db from '../database.js';
 // Fix lỗi __dirname trong ES Module
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,34 +29,22 @@ export default {
             required: ["tags", "situation", "solution"]
         },
         handler: async (args) => {
-            const memoryDir = path.join(__dirname, '..', '.agent_memory');
-            const memoryFile = path.join(memoryDir, 'episodic.json');
+            const id = Date.now().toString();
+            const date = new Date().toISOString();
+            
+            // Chuyển mảng tags thành chuỗi JSON để lưu vào DB
+            const tagsJson = JSON.stringify(args.tags || []);
 
-            // Tạo thư mục nếu chưa có
-            if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true });
+            // Lưu vào SQLite
+            const stmt = db.prepare(`
+                INSERT INTO memories (id, date, tags, situation, solution) 
+                VALUES (?, ?, ?, ?, ?)
+            `);
+            
+            stmt.run(id, date, tagsJson, args.situation, args.solution);
 
-            // Đọc não bộ hiện tại
-            let memories = [];
-            if (fs.existsSync(memoryFile)) {
-                try {
-                    memories = JSON.parse(fs.readFileSync(memoryFile, 'utf8'));
-                } catch (e) { memories = []; }
-            }
-
-            // Ghi nhớ bài học mới
-            const newMemory = {
-                id: Date.now().toString(),
-                date: new Date().toISOString(),
-                tags: args.tags,
-                situation: args.situation,
-                solution: args.solution
-            };
-
-            memories.push(newMemory);
-            fs.writeFileSync(memoryFile, JSON.stringify(memories, null, 2), 'utf8');
-
-            console.log(`\n[🧠 Memory] AI vừa học được bài học mới: [${args.tags.join(', ')}]`);
-            return { status: "success", message: "Đã khắc sâu vào bộ nhớ cục bộ." };
+            console.log(`\n[🧠 Memory] AI vừa ghi nhớ vào Database: [${(args.tags || []).join(', ')}]`);
+            return { status: "success", message: "Đã khắc sâu vào Database cục bộ." };
         }
     },
     "memorize_rule": {

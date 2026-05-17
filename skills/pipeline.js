@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
+import db from '../database.js';
 // Fix lỗi __dirname trong ES Module
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,7 +26,10 @@ export default {
                                 items: {
                                     type: "object",
                                     properties: {
-                                        task: { type: "string", description: "Mô tả công việc" },
+                                       task: { 
+                                            type: "string", 
+                                            description: "Mô tả công việc (BẮT BUỘC: Nếu công việc liên quan đến file/terminal, phải ghi rõ ĐƯỜNG DẪN THƯ MỤC TUYỆT ĐỐI. VD: 'Khởi tạo npm tại C:/Users/Xon/Desktop/test')" 
+                                        },
                                         tool: { type: "string", description: "Tên skill dự kiến sử dụng (VD: read_file, execute_terminal_command)" }
                                     },
                                     required: ["task", "tool"]
@@ -42,7 +45,7 @@ export default {
         handler: async (args) => {
             const memoryDir = path.join(process.cwd(), '.agent_memory');
             const planFile = path.join(memoryDir, 'CURRENT_PIPELINE.json');
-            
+
             if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true });
 
             // Khởi tạo trạng thái mặc định
@@ -71,49 +74,13 @@ export default {
             }
 
             // Lưu kế hoạch vào bộ nhớ
-            fs.writeFileSync(planFile, JSON.stringify(args, null, 2), 'utf8');
-            return { 
-                status: "success", 
-                message: "Pipeline đã được người dùng PHÊ DUYỆT. Hãy bắt đầu thực thi Stage 1 ngay bây giờ. Nhớ gọi update_pipeline_status sau mỗi Stage." 
+            const stmt = db.prepare(`INSERT OR REPLACE INTO pipelines (id, name, status, data) VALUES (?, ?, ?, ?)`);
+            stmt.run('CURRENT', args.pipeline_name, 'IN_PROGRESS', JSON.stringify(args));
+            return {
+                status: "success",
+                message: "Pipeline đã được người dùng PHÊ DUYỆT. Hãy bắt đầu thực thi Stage 1 ngay bây giờ. Nhớ gọi update_pipeline_status sau mỗi Stage."
             };
         }
     },
 
-    "update_pipeline_status": {
-        description: "Đánh dấu tiến độ của Pipeline (DONE hoặc FAILED cho từng Stage) để AI không bị quên mình đang làm tới đâu.",
-        parameters: {
-            type: "object",
-            properties: {
-                stage_index: { type: "number", description: "Vị trí của Stage vừa làm xong (bắt đầu từ 0)" },
-                status: { type: "string", enum: ["IN_PROGRESS", "DONE", "FAILED"] },
-                notes: { type: "string", description: "Ghi chú thêm (VD: Kết quả thu được, hoặc lý do fail)" }
-            },
-            required: ["stage_index", "status"]
-        },
-        handler: async (args) => {
-            const planFile = path.join(__dirname, '..', '.agent_memory', 'CURRENT_PIPELINE.json');
-            if (!fs.existsSync(planFile)) throw new Error("Không có Pipeline nào đang chạy.");
-
-            const plan = JSON.parse(fs.readFileSync(planFile, 'utf8'));
-            if (args.stage_index < 0 || args.stage_index >= plan.stages.length) {
-                throw new Error("stage_index không hợp lệ.");
-            }
-
-            // Cập nhật trạng thái
-            plan.stages[args.stage_index].status = args.status;
-            if (args.notes) plan.stages[args.stage_index].notes = args.notes;
-
-            // Đổi màu log dựa trên status
-            const color = args.status === "DONE" ? "\x1b[32m" : args.status === "FAILED" ? "\x1b[31m" : "\x1b[33m";
-            
-            fs.writeFileSync(planFile, JSON.stringify(plan, null, 2), 'utf8');
-            console.log(`\n[Pipeline] 🔄 Stage ${args.stage_index + 1} (${plan.stages[args.stage_index].name}) -> ${color}${args.status}\x1b[0m`);
-
-            if (args.status === "DONE" && args.stage_index === plan.stages.length - 1) {
-                 return { status: "success", message: "CHÚC MỪNG! Toàn bộ Pipeline đã hoàn tất." };
-            }
-
-            return { status: "success", message: `Đã cập nhật trạng thái. Hãy chuyển sang thực thi Stage tiếp theo.` };
-        }
-    }
 };

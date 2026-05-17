@@ -3,7 +3,58 @@ import os from 'os';
 import boxen from 'boxen';
 import chalk from 'chalk';
 
+// 1. Quản lý các tiến trình đang chạy ngầm
+const activeProcesses = new Map();
+let processCounter = 1;
+
+// Hàm hỗ trợ tắt tiến trình ngầm (chống kẹt Port trên Windows/Mac)
+function killProcess(child) {
+    if (os.platform() === 'win32') {
+        exec(`taskkill /PID ${child.pid} /T /F`, () => {}); // /T tắt cả cây tiến trình (cmd.exe và node.exe)
+    } else {
+        child.kill('SIGKILL');
+    }
+}
+
 export default {
+    // KỸ NĂNG MỚI: CẤP CHO AI QUYỀN TẮT TRÌNH CHẠY NGẦM
+    "stop_terminal_process": {
+        description: "[QUAN TRỌNG] Dừng tiến trình đang chạy ngầm (như Web Server). BẮT BUỘC DÙNG lệnh này sau khi bạn đã khởi chạy server, test xong, và muốn kết thúc nhiệm vụ để giải phóng cổng (Port).",
+        parameters: {
+            type: "object",
+            properties: {
+                process_id: { type: "string", description: "ID của tiến trình cần tắt (Ví dụ: process_1). Nhập 'all' để tắt toàn bộ." }
+            },
+            required: ["process_id"]
+        },
+        handler: async (args) => {
+            const pid = args.process_id;
+
+            if (pid === 'all') {
+                if (activeProcesses.size === 0) return { message: "Không có tiến trình nào đang chạy ngầm." };
+                for (const [key, proc] of activeProcesses.entries()) {
+                    killProcess(proc.child);
+                }
+                activeProcesses.clear();
+                console.log(chalk.red(`\n[Terminal] 🛑 Đã dọn dẹp tắt tất cả các tiến trình ngầm.`));
+                return { status: "success", message: "Đã tắt tất cả tiến trình chạy ngầm thành công." };
+            }
+
+            if (!activeProcesses.has(pid)) {
+                return { status: "error", error_message: `Không tìm thấy tiến trình nào với ID: ${pid}` };
+            }
+
+            const proc = activeProcesses.get(pid);
+            killProcess(proc.child);
+            activeProcesses.delete(pid);
+
+            console.log(chalk.red(`\n[Terminal] 🛑 Đã tắt tiến trình ngầm: ${proc.command} (${pid})`));
+            
+            return { status: "success", message: `Đã tắt thành công tiến trình: ${proc.command}` };
+        }
+    },
+
+    // KỸ NĂNG CŨ (ĐÃ ĐƯỢC NÂNG CẤP ĐỂ LƯU PROCESS_ID)
     "execute_terminal_command": {
         description: "Thực thi lệnh Terminal/CMD. Đây là lệnh quyền lực nhất.",
         parameters: {
@@ -31,7 +82,6 @@ export default {
             const cwd = args.working_directory || os.homedir();
             const isBackground = args.is_background || false;
 
-            // Ném lỗi ép AI tự gọi lại nếu thiếu tham số
             if (!args.functionality || !args.purpose) {
                 throw new Error("LỖI NGHIÊM TRỌNG: Bạn ĐÃ QUÊN truyền tham số 'functionality' và 'purpose'. Hệ thống từ chối cấp quyền. Hãy GỌI LẠI LỆNH NÀY và BẮT BUỘC GIẢI THÍCH BẰNG TIẾNG VIỆT!");
             }
@@ -43,7 +93,6 @@ export default {
                     ? chalk.magenta(command) + chalk.bgMagenta.white(' BACKGROUND PROCESS ')
                     : chalk.yellow(command);
 
-                // Cập nhật lại Box thông báo để thêm chức năng và mục đích
                 const promptContent = `
 ${chalk.bold.cyan('📁 Thư mục :')} ${cwd}
 ${chalk.bold.cyan('💻 Lệnh    :')} ${cmdText}
@@ -51,9 +100,9 @@ ${chalk.bold.green('🔧 Chức năng:')} ${functionality}
 ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
 `;
                 console.log(boxen(promptContent, {
-                    title: chalk.gray(' Action Required '), // Đổi title thành màu xám tiếng Anh
+                    title: chalk.gray(' Action Required '),
                     padding: 1,
-                    borderColor: 'gray', // Đổi viền thành màu xám tối giản
+                    borderColor: 'gray',
                     borderStyle: 'round'
                 }));
 
@@ -64,10 +113,15 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
                 console.log(`\n⚡ ${chalk.gray('Auto-running:')} ${chalk.yellow(command)}`);
             }
 
-            // XỬ LÝ CHẠY NGẦM VÀ AUTO-PING (Dành cho Dev Server)
+            // XỬ LÝ CHẠY NGẦM VÀ AUTO-PING (Đã nâng cấp)
             if (isBackground) {
                 return new Promise((resolve) => {
                     const child = spawn(command, { cwd, shell: true });
+                    
+                    // 2. LƯU LẠI TIẾN TRÌNH VÀO BỘ NHỚ ĐỂ CÓ THỂ TẮT SAU NÀY
+                    const procId = `process_${processCounter++}`;
+                    activeProcesses.set(procId, { child, command });
+
                     let outputLog = "";
 
                     child.stdout.on('data', (data) => { outputLog += data.toString(); process.stdout.write(data); });
@@ -77,37 +131,30 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
                         resolve({ status: "error", error_message: `Lỗi khi khởi chạy: ${err.message}` });
                     });
 
-                    // Đợi 3 giây để server bind port
                     setTimeout(async () => {
-                        // Tự động tìm URL trong log (VD: http://localhost:5174)
                         const urlMatch = outputLog.match(/http:\/\/(localhost|127\.0\.0\.1):\d+/);
 
                         if (urlMatch) {
                             const localUrl = urlMatch[0];
                             console.log(`\n[Node] 🕵️ Tự động Ping tới ${localUrl} để kích hoạt Lazy-Compilation...`);
-                            try {
-                                // Gửi request mồi để ép Vite/Webpack biên dịch
-                                await fetch(localUrl);
-                            } catch (e) {
-                                // Bỏ qua lỗi fetch vì mục đích chỉ là "chọc" vào server
-                            }
+                            try { await fetch(localUrl); } catch (e) { }
 
-                            // Đợi thêm 2.5 giây để hứng lỗi biên dịch (nếu có) văng ra màn hình
                             setTimeout(() => {
                                 resolve({
                                     command,
+                                    process_id: procId, // Báo ID cho AI
                                     status: "running_in_background",
-                                    message: `Tiến trình chạy ngầm. Đã tự động test ping tới ${localUrl}. HÃY ĐỌC KỸ startup_logs ĐỂ XEM CÓ LỖI BIÊN DỊCH KHÔNG!`,
-                                    startup_logs: outputLog.substring(0, 3000) // Trả về tối đa 3000 ký tự để AI thấy lỗi Tailwind
+                                    message: `Tiến trình chạy ngầm đã khởi động (ID: ${procId}). Đã tự động test ping tới ${localUrl}. KIỂM TRA LỖI BIÊN DỊCH TRONG LOG. NẾU KHÔNG LỖI, BẠN HOÀN TOÀN CÓ QUYỀN GỌI LỆNH 'stop_terminal_process' ĐỂ TẮT NÓ NẾU MUỐN HOÀN THÀNH NHIỆM VỤ!`,
+                                    startup_logs: outputLog.substring(0, 3000)
                                 });
                             }, 2500);
 
                         } else {
-                            // Nếu không tìm thấy URL nào, trả về bình thường
                             resolve({
                                 command,
+                                process_id: procId, // Báo ID cho AI
                                 status: "running_in_background",
-                                message: "Tiến trình đã được khởi chạy ngầm.",
+                                message: `Tiến trình đã được khởi chạy ngầm với ID: ${procId}. Nếu bạn đã thực hiện xong mục đích của mình, bạn CÓ THỂ gọi lệnh 'stop_terminal_process' truyền ID '${procId}' để tắt tiến trình này đi nhằm giải phóng tài nguyên.`,
                                 startup_logs: outputLog.substring(0, 1500)
                             });
                         }

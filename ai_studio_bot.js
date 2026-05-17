@@ -223,6 +223,32 @@ class AIStudioBot {
         console.log("[Browser] Đã bấm nút Run!");
 
     }
+    // ==========================================
+    // TẠO TAB MỚI CHO NHIỆM VỤ CON (WORKER ISOLATION)
+    // ==========================================
+    async createWorkerBot() {
+        if (!this.context) await this.init();
+        
+        console.log("\n[Browser] 🌍 Mở Tab Worker mới để xử lý tác vụ con độc lập...");
+        const workerPage = await this.context.newPage();
+        
+        // Nhân bản một bot mới điều khiển riêng Tab này
+        const workerBot = new AIStudioBot();
+        workerBot.context = this.context;
+        workerBot.page = workerPage;
+        workerBot.isReady = true;
+        
+        await workerPage.goto('https://aistudio.google.com/app/prompts/new_chat', { waitUntil: 'domcontentloaded' });
+        await workerPage.waitForSelector('textarea[aria-label*="prompt"], textarea[formcontrolname="promptText"]', { timeout: 60000 });
+        
+        // Cung cấp hàm tự hủy Tab
+        workerBot.closeWorker = async () => {
+            console.log("[Browser] 🗑️ Hoàn thành tác vụ con. Đóng Tab Worker...");
+            await workerPage.close();
+        };
+        
+        return workerBot;
+    }
 
     async waitForResponse(onStreamChunk) {
 

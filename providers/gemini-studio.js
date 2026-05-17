@@ -8,12 +8,17 @@ class GeminiStudioProvider extends BaseProvider {
         this.isExtensionBased = false; // Đổi thành false! Server tự xử lý 100%
     }
 
-    async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15 } = options;
-        // 1. Chắc chắn Browser đã mở
+   async chat(options) {
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker } = options;
         await aiStudioBot.init();
 
-        // 2. Chuyển đổi Skills sang định dạng JSON cho AI Studio
+        // 1. Phân lập Tab (Cô lập Context theo ý tưởng của bạn)
+        let bot = aiStudioBot;
+        if (isWorker) {
+            bot = await aiStudioBot.createWorkerBot();
+        }
+
+        // 2. Cài đặt môi trường cho Tab
         const functionDeclarations = Object.keys(skillRegistry).map(key => {
             const skill = skillRegistry[key];
             const decl = { name: key, description: skill.description };
@@ -21,50 +26,60 @@ class GeminiStudioProvider extends BaseProvider {
             return decl;
         });
 
-        // 3. SET UP MÔI TRƯỜNG (Gọi hàm bạn vừa thêm ở bước 1)
-        await aiStudioBot.setupAgentEnvironment(
-            systemPrompt,
-            JSON.stringify(functionDeclarations, null, 2),
-            "High"
-        );
+        await bot.setupAgentEnvironment(systemPrompt, JSON.stringify(functionDeclarations, null, 2), "High");
 
-        // 2. Gom message cuối cùng (Text + Context)
+        // 3. Gửi Prompt
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
+        await bot.sendPrompt(lastUserMessage);
 
-        // let compiledPrompt = systemPrompt ? `[HƯỚNG DẪN HỆ THỐNG]\n${systemPrompt}\n\n` : "";
-        // compiledPrompt += `[YÊU CẦU NGƯỜI DÙNG]\n${lastUserMessage}`;
-
-        // 3. Gửi Prompt vào trình duyệt
-        await aiStudioBot.sendPrompt(lastUserMessage);
-
-        // 4. Vòng lặp Agent (Chờ text hoặc Function Call)
+        // 4. Vòng lặp
         let stepCount = 0;
+        let finalResult = '[Lỗi: Quá giới hạn vòng lặp Function Calling]';
+
         while (stepCount <= maxSteps) {
             stepCount++;
-            // Lắng nghe kết quả từ trình duyệt (DOM)
-            const result = await aiStudioBot.waitForResponse(onStreamChunk);
+            const result = await bot.waitForResponse(onStreamChunk);
 
-            if (result.type === 'function_call') {
+          if (result.type === 'function_call') {
                 console.log(`[${this.name}] ⚙️ AI gọi hàm: [${result.functionName}]`);
-
                 let funcResultString = "";
                 try {
                     const funcRes = await executeSkill(result.functionName, result.arguments);
+                    
+                    // --- SỬA ĐOẠN NÀY ---
+                    if (funcRes === "__HANDOVER_TO_ENGINE__") {
+                        // 1. Phải gửi một phản hồi giả để "Mở khóa" (Unlock) giao diện trình duyệt
+                        await bot.submitFunctionResponse(JSON.stringify({ 
+                            status: "success", 
+                            message: "Kế hoạch đã được duyệt. Hệ thống tự động sẽ tiếp quản. Bạn không cần làm gì thêm." 
+                        }));
+                        
+                        // 2. Trả thẳng tín hiệu về cho Server.js
+                        return "__HANDOVER_TO_ENGINE__"; 
+                    }
+                    // --------------------
+
                     funcResultString = typeof funcRes === 'object' ? JSON.stringify(funcRes) : String(funcRes);
                 } catch (err) {
                     funcResultString = JSON.stringify({ status: "error", error_message: err.message });
                 }
 
-                // Điền kết quả chạy hàm vào giao diện trình duyệt
-                await aiStudioBot.submitFunctionResponse(funcResultString);
-                continue; // Quay lại đầu vòng lặp để đợi AI phản hồi tiếp
+                await bot.submitFunctionResponse(funcResultString);
+                continue;
             }
 
             if (result.type === 'text') {
-                return result.data.markdown || result.data.text;
+                finalResult = result.data.markdown || result.data.text;
+                break;
             }
         }
-        return '[Lỗi: Quá giới hạn vòng lặp Function Calling]';
+
+        // Nếu là Tab Worker, làm xong thì đóng lại trả tài nguyên
+        if (isWorker && typeof bot.closeWorker === 'function') {
+            await bot.closeWorker();
+        }
+
+        return finalResult;
     }
 
     async healthCheck() {
