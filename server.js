@@ -231,6 +231,11 @@ function resetSystem() {
 const SKILL_REGISTRY = {};
 
 async function loadSkills() {
+    // Xóa tất cả skill cũ trước khi load lại
+    for (const key in SKILL_REGISTRY) {
+        delete SKILL_REGISTRY[key];
+    }
+
     let totalHardSkills = 0;
     let totalSoftSkills = 0;
 
@@ -255,10 +260,10 @@ async function loadSkills() {
         }
     }
 
-    const agentSkillsDir = path.join(__dirname, 'agent_skills');
+    const agentSkillsDir = path.join(__dirname, '.agents', 'skills');
     if (!fs.existsSync(agentSkillsDir)) {
-        fs.mkdirSync(agentSkillsDir);
-        console.log(`[Plugin] Đã tạo thư mục /agent_skills. Hãy bỏ các thư mục skill tải về vào đây.`);
+        fs.mkdirSync(agentSkillsDir, { recursive: true });
+        console.log(`[Plugin] Đã tạo thư mục /.agents/skills. Hãy bỏ các thư mục skill tải về vào đây.`);
     } else {
         const folders = fs.readdirSync(agentSkillsDir);
         folders.forEach(folder => {
@@ -302,6 +307,34 @@ async function loadSkills() {
 }
 
 await loadSkills();
+
+// =================================================================
+// 🔄 HOT RELOAD SKILLS (fs.watch)
+// =================================================================
+let debounceSkillTimer = null;
+const watchDir = path.join(__dirname, '.agents', 'skills');
+if (!fs.existsSync(watchDir)) fs.mkdirSync(watchDir, { recursive: true });
+
+fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
+    if (filename && filename.endsWith('SKILL.md')) {
+        clearTimeout(debounceSkillTimer);
+        debounceSkillTimer = setTimeout(async () => {
+            console.log(chalk.cyan(`\n[Plugin] 🔄 Thay đổi được phát hiện ở skill: ${filename}. Đang reload...`));
+            await loadSkills();
+            
+            // Báo cho AI Studio (nếu đang chạy) reset lại function calling flags
+            try {
+                const botModule = await import('./ai_studio_bot.js');
+                if (botModule.default && botModule.default.setupFlags) {
+                    botModule.default.setupFlags.functions = false;
+                    console.log(chalk.gray(`[Plugin] ⚙️ Đã báo Gemini Studio cài đặt lại Function Calling trên trình duyệt.`));
+                }
+            } catch(e) {
+                // Ignore errors if ai_studio_bot.js is not loaded
+            }
+        }, 1000);
+    }
+});
 
 // =================================================================
 // 🌐 API CHO EXTENSION LÀM VIỆC
