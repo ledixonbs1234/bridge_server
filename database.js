@@ -28,6 +28,16 @@ db.exec(`
     );
 `);
 
+// 1.1 Migration: Thêm cột trust_score và use_count (Hermes Trust Score)
+// Dùng try/catch để an toàn với DB đã tồn tại
+try {
+    db.exec(`ALTER TABLE memories ADD COLUMN trust_score REAL DEFAULT 0.7;`);
+} catch (e) { /* Cột đã tồn tại — bỏ qua */ }
+
+try {
+    db.exec(`ALTER TABLE memories ADD COLUMN use_count INTEGER DEFAULT 0;`);
+} catch (e) { /* Cột đã tồn tại — bỏ qua */ }
+
 // 2. Tạo bảng Virtual FTS5 để tìm kiếm văn bản (Full Text Search) siêu tốc
 db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
@@ -44,6 +54,25 @@ db.exec(`
         INSERT INTO memories_fts(rowid, situation, solution) VALUES (new.rowid, new.situation, new.solution);
     END;
 `);
+
+// 3.1 Trigger DELETE: Đồng bộ FTS5 khi xóa memory
+try {
+    db.exec(`
+        CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+            INSERT INTO memories_fts(memories_fts, rowid, situation, solution) VALUES ('delete', old.rowid, old.situation, old.solution);
+        END;
+    `);
+} catch (e) { /* Trigger đã tồn tại */ }
+
+// 3.2 Trigger UPDATE: Đồng bộ FTS5 khi cập nhật memory
+try {
+    db.exec(`
+        CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF situation, solution ON memories BEGIN
+            INSERT INTO memories_fts(memories_fts, rowid, situation, solution) VALUES ('delete', old.rowid, old.situation, old.solution);
+            INSERT INTO memories_fts(rowid, situation, solution) VALUES (new.rowid, new.situation, new.solution);
+        END;
+    `);
+} catch (e) { /* Trigger đã tồn tại */ }
 
 // 4. Tạo bảng cho Pipeline (Kế hoạch công việc)
 db.exec(`

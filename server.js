@@ -14,6 +14,7 @@ import TerminalRenderer from 'marked-terminal';
 import { fileURLToPath, pathToFileURL } from 'url';
 import WorkflowEngine from './workflow_engine.js';
 import db from './database.js';
+import telemetry from './telemetry.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -340,13 +341,16 @@ fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
 // 🌐 API CHO EXTENSION LÀM VIỆC
 // =================================================================
 app.get('/api/skills', (req, res) => {
-    const declarations = Object.keys(SKILL_REGISTRY).map(key => {
+    // 📊 Inject Reliability Score vào description trước khi trả về
+    const enrichedRegistry = telemetry.injectReliabilityIntoRegistry(SKILL_REGISTRY);
+
+    const declarations = Object.keys(enrichedRegistry).map(key => {
         const decl = {
             name: key,
-            description: SKILL_REGISTRY[key].description
+            description: enrichedRegistry[key].description
         };
-        if (SKILL_REGISTRY[key].parameters) {
-            decl.parameters = SKILL_REGISTRY[key].parameters;
+        if (enrichedRegistry[key].parameters) {
+            decl.parameters = enrichedRegistry[key].parameters;
         }
         return decl;
     });
@@ -369,7 +373,72 @@ app.get('/api/system-prompt', (req, res) => {
 
 const activeStreams = new Map();
 
-// Thay đổi hàm executeSkillForProvider:
+// =================================================================
+// 📊 SESSION LOG (Cho Critic Agent đọc sau mỗi phiên chat)
+// =================================================================
+let currentSessionLog = [];
+
+function resetSessionLog() {
+    currentSessionLog = [];
+}
+
+// =================================================================
+// 🧠 CRITIC AGENT (Hard Loop — Tự động phân tích lỗi & ghi bài học)
+// Lấy cảm hứng từ Hermes Agent 3.0 "Quality Monitor"
+// =================================================================
+async function runCriticAgent(sessionLog) {
+    if (!activeProvider || !activeProvider.chat) return;
+
+    const errorEntries = sessionLog.filter(e => e.success === false);
+    if (errorEntries.length === 0) return;
+
+    console.log(chalk.magenta(`\n[Critic Agent] 🧠 Phát hiện ${errorEntries.length} lỗi trong phiên vừa rồi. Đang tự động phân tích...`));
+
+    const logSummary = sessionLog.map(e => {
+        const status = e.success ? '✅' : '❌';
+        const errInfo = e.errorMessage ? ` | Lỗi: ${e.errorMessage}` : '';
+        return `${status} ${e.tool}(${JSON.stringify(e.args).substring(0, 100)}) — ${e.durationMs}ms${errInfo}`;
+    }).join('\n');
+
+    const criticPrompt = `Bạn là Critic Agent — hệ thống Quality Monitor chạy ngầm.
+Dưới đây là LOG thực thi của phiên chat vừa kết thúc:
+
+${logSummary}
+
+Nhiệm vụ:
+1. Phân tích các lỗi (❌) đã xảy ra. Xác định NGUYÊN NHÂN GỐC RỄ.
+2. NẾU bạn rút ra được bài học mới (pattern lỗi chưa từng gặp, hoặc cách fix mới), HÃY GỌI memorize_lesson.
+3. NẾU không có gì đáng nhớ, KHÔNG gọi tool nào.
+Chỉ trả lời cực ngắn gọn (1-2 câu).`;
+
+    try {
+        const criticSkills = {};
+        if (SKILL_REGISTRY['memorize_lesson']) criticSkills['memorize_lesson'] = SKILL_REGISTRY['memorize_lesson'];
+        if (SKILL_REGISTRY['rate_memory']) criticSkills['rate_memory'] = SKILL_REGISTRY['rate_memory'];
+
+        const response = await activeProvider.chat({
+            messages: [{ role: 'user', content: criticPrompt }],
+            skillRegistry: criticSkills,
+            executeSkill: async (funcName, args) => {
+                console.log(chalk.magenta(`[Critic Agent] 💡 Tự động gọi: ${funcName}`));
+                return await executeSkillForProvider(funcName, args);
+            },
+            systemPrompt: "Bạn là Critic Agent (Quality Monitor). Phân tích log lỗi và tự rút kinh nghiệm. Trả lời cực ngắn.",
+            maxSteps: 2,
+            isWorker: true,
+            workerType: 'critic'
+        });
+
+        const cleanResponse = response.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        if (cleanResponse) {
+            console.log(chalk.gray(`[Critic Agent] Kết luận: ${cleanResponse}`));
+        }
+    } catch (e) {
+        console.warn(chalk.yellow(`[Critic Agent] Lỗi khi chạy Critic: ${e.message}`));
+    }
+}
+
+// Thay đổi hàm executeSkillForProvider (có middleware Telemetry):
 async function executeSkillForProvider(functionName, funcArgs) {
     const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines', 'get_os_context'];
     if (!silentFunctions.includes(functionName) && !functionName.startsWith('workflow_')) {
@@ -378,20 +447,42 @@ async function executeSkillForProvider(functionName, funcArgs) {
 
     const skill = SKILL_REGISTRY[functionName];
     if (!skill) {
+        telemetry.recordToolExecution(functionName, false, 0, 'Function not defined');
         return JSON.stringify({ status: "error", error_message: `Function '${functionName}' is not defined.` });
     }
 
+    const startTime = Date.now();
+
     try {
         const result = await skill.handler(funcArgs);
+        const durationMs = Date.now() - startTime;
+
+        // 📊 GHI TELEMETRY: Thành công
+        telemetry.recordToolExecution(functionName, true, durationMs);
+
+        // 📝 GHI SESSION LOG
+        currentSessionLog.push({
+            tool: functionName, args: funcArgs, success: true, durationMs, timestamp: new Date().toISOString()
+        });
 
        if (functionName === 'create_pipeline_plan') {
             console.log(chalk.blue(`\n[Node] ⚙️ Kế hoạch đã được duyệt. Đang đóng luồng Chat để chuyển giao cho Engine...`));
-            return "__HANDOVER_TO_ENGINE__"; // Trả thẳng chuỗi này về cho hàm chat()
+            return "__HANDOVER_TO_ENGINE__";
         }
 
         return JSON.stringify({ status: "success", data: result });
     } catch (error) {
-        // ... (Giữ nguyên logic báo lỗi cũ của bạn) ...
+        const durationMs = Date.now() - startTime;
+
+        // 📊 GHI TELEMETRY: Thất bại
+        telemetry.recordToolExecution(functionName, false, durationMs, error.message);
+
+        // 📝 GHI SESSION LOG
+        currentSessionLog.push({
+            tool: functionName, args: funcArgs, success: false, durationMs,
+            errorMessage: error.message, timestamp: new Date().toISOString()
+        });
+
         console.error(`[Node] ❌ Lỗi khi chạy hàm:`, error.message);
         let suggestion = "Vui lòng kiểm tra lại tham số.";
         if (error.message.includes("không tồn tại")) suggestion = "Hãy dùng list_directory để kiểm tra...";
@@ -472,20 +563,26 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
         }
 
         if (searchTerms) {
+            // 🧠 HERMES TRUST SCORE: Chỉ lấy bài học có trust_score > 0.3, sắp xếp theo trust_score DESC
             const stmt = db.prepare(`
-            SELECT m.situation, m.solution 
+            SELECT m.id, m.situation, m.solution, m.trust_score, m.use_count
             FROM memories_fts f
             JOIN memories m ON f.rowid = m.rowid
             WHERE memories_fts MATCH ?
-            ORDER BY rank
-            LIMIT 2
+            AND m.trust_score > 0.3
+            ORDER BY m.trust_score DESC, rank
+            LIMIT 3
         `);
 
             const results = stmt.all(searchTerms);
 
             if (results.length > 0) {
-                injectedContext += "\n--- BÀI HỌC TỪ LỖI TRONG QUÁ KHỨ ---\n";
-                injectedContext += results.map(r => `- Vấn đề: "${r.situation}" -> Xử lý: "${r.solution}"`).join('\n');
+                injectedContext += "\n--- BÀI HỌC TỪ LỖI TRONG QUÁ KHỨ (Trust Score) ---\n";
+                injectedContext += results.map(r => {
+                    const trust = (r.trust_score ?? 0.7).toFixed(2);
+                    return `- [Trust: ${trust} | ID: ${r.id}] Vấn đề: "${r.situation}" -> Xử lý: "${r.solution}"`;
+                }).join('\n');
+                injectedContext += "\n(Lưu ý: Nếu bài học nào GIÚP ÍCH, hãy gọi rate_memory với outcome='success'. Nếu SAI, gọi với outcome='fail'.)";
                 hasMemory = true;
             }
         }
@@ -738,15 +835,24 @@ async function startTerminalChatLoop() {
         if (text === '/clear' || text === '/new') {
             cliChatHistory.length = 0;
             if (typeof activeProvider.resetSession === 'function') activeProvider.resetSession();
+            resetSessionLog();
             console.clear();
             continue;
         }
         if (text === '/model') { await loadProviderConfig(true); console.clear(); continue; }
         if (text === '/reset') { resetSystem(); continue; }
+        if (text === '/stats') {
+            telemetry.printStatsTable();
+            telemetry.printTopMemories();
+            continue;
+        }
 
         process.stdout.moveCursor(0, -1);
         process.stdout.clearLine(1);
         console.log(`\n${OC_BLUE('▌')} ${chalk.bold.white(text)}\n`);
+
+        // Reset session log cho phiên chat mới
+        resetSessionLog();
 
         const reformulatedText = await reformulateQuery(text);
         cliChatHistory.push({ role: 'user', content: reformulatedText });
@@ -892,6 +998,13 @@ async function startTerminalChatLoop() {
             console.log(`\n\n${OC_BLUE('■')}  ${OC_TEXT('Build')} · ${OC_MUTED(modelName + ' · ' + duration + 's')}\n`);
 
             cliChatHistory.push({ role: 'assistant', content: cleanResponseForHistory });
+
+            // 🧠 CRITIC AGENT: Chạy ngầm sau mỗi phiên nếu có lỗi
+            if (currentSessionLog.some(entry => entry.success === false)) {
+                runCriticAgent([...currentSessionLog]).catch(err => {
+                    console.warn(chalk.yellow(`[Critic Agent] Lỗi ngầm: ${err.message}`));
+                });
+            }
 
         } catch (error) {
            spinner.stop();

@@ -35,18 +35,73 @@ export default {
             // Chuyển mảng tags thành chuỗi JSON để lưu vào DB
             const tagsJson = JSON.stringify(args.tags || []);
 
-            // Lưu vào SQLite
+            // Lưu vào SQLite (với trust_score mặc định 0.7 — Hermes Trust Score)
             const stmt = db.prepare(`
-                INSERT INTO memories (id, date, tags, situation, solution) 
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO memories (id, date, tags, situation, solution, trust_score, use_count) 
+                VALUES (?, ?, ?, ?, ?, 0.7, 0)
             `);
             
             stmt.run(id, date, tagsJson, args.situation, args.solution);
 
-            console.log(`\n[🧠 Memory] AI vừa ghi nhớ vào Database: [${(args.tags || []).join(', ')}]`);
-            return { status: "success", message: "Đã khắc sâu vào Database cục bộ." };
+            console.log(`\n[🧠 Memory] AI vừa ghi nhớ vào Database: [${(args.tags || []).join(', ')}] (Trust: 0.70)`);
+            return { status: "success", memory_id: id, message: "Đã khắc sâu vào Database cục bộ (Trust Score: 0.70)." };
         }
     },
+
+    "rate_memory": {
+        description: "[HỆ THỐNG NỘI BỘ] Đánh giá lại một bài học đã lưu. Nếu bài học đã GIÚP ÍCH (fix lỗi thành công), hãy gọi với outcome='success'. Nếu bài học SAI HƯỚNG (áp dụng mà vẫn lỗi), hãy gọi với outcome='fail'. Hệ thống sẽ tự điều chỉnh Trust Score.",
+        parameters: {
+            type: "object",
+            properties: {
+                memory_id: {
+                    type: "string",
+                    description: "ID của bài học cần đánh giá (lấy từ trường memory_id khi gọi memorize_lesson hoặc từ kết quả tìm kiếm bộ nhớ)."
+                },
+                outcome: {
+                    type: "string",
+                    enum: ["success", "fail"],
+                    description: "'success' nếu bài học đã giúp fix lỗi. 'fail' nếu áp dụng bài học mà vẫn lỗi."
+                }
+            },
+            required: ["memory_id", "outcome"]
+        },
+        handler: async (args) => {
+            const { memory_id, outcome } = args;
+
+            // Lấy memory hiện tại
+            const row = db.prepare(`SELECT id, trust_score, use_count, situation FROM memories WHERE id = ?`).get(memory_id);
+            if (!row) {
+                return { status: "error", error_message: `Không tìm thấy bài học với ID: ${memory_id}` };
+            }
+
+            let newScore = row.trust_score ?? 0.7;
+            let newCount = (row.use_count ?? 0) + 1;
+
+            if (outcome === 'success') {
+                newScore = Math.min(1.0, newScore + 0.1); // Tăng 0.1, max 1.0
+            } else {
+                newScore = Math.max(0.0, newScore - 0.15); // Giảm 0.15, min 0.0
+            }
+
+            // Round to 2 decimals
+            newScore = Math.round(newScore * 100) / 100;
+
+            db.prepare(`UPDATE memories SET trust_score = ?, use_count = ? WHERE id = ?`)
+                .run(newScore, newCount, memory_id);
+
+            const emoji = outcome === 'success' ? '📈' : '📉';
+            console.log(`\n[🧠 Memory] ${emoji} Trust Score cập nhật: "${row.situation}" → ${newScore} (Dùng: ${newCount} lần)`);
+
+            return {
+                status: "success",
+                memory_id,
+                new_trust_score: newScore,
+                use_count: newCount,
+                message: `Đã ${outcome === 'success' ? 'tăng' : 'giảm'} Trust Score thành ${newScore}.`
+            };
+        }
+    },
+
     "memorize_rule": {
         description: "[QUAN TRỌNG] Lưu lại một NGUYÊN TẮC, SỞ THÍCH hoặc QUY CHUẨN CODE của User (VD: 'Luôn dùng Tailwind', 'Chỉ dùng arrow function').",
         parameters: {
