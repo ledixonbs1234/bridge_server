@@ -40,6 +40,232 @@ const EXTENSION_PORT = 54321;
 // =================================================================
 let activeProvider = null;
 let providerConfig = {};
+let persistentGoal = null;
+
+// =================================================================
+// 🧭 ADAPTIVE SKILL ROUTER (Phân loại Intent → Lọc Tools)
+// =================================================================
+const SKILL_GROUPS = {
+    chat: [],
+    code: ['read_file', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context', 'memorize_lesson', 'memorize_rule', 'rate_memory'],
+    research: ['web_markdown_reader', 'dynamic_browser_controller', 'graphify_query', 'graphify_ingest', 'memorize_lesson'],
+    complex: null
+};
+
+function classifyIntent(userMessage) {
+    const msg = userMessage.toLowerCase();
+    if (msg.match(/^(giải thích|tại sao|là gì|what is|explain|how does|tóm tắt|summarize|dịch|translate|cho tôi biết|kể về)/)) return 'chat';
+    if (msg.match(/(tìm trên|search|đọc trang|đọc link|url:|http:|https:|tra cứu|look up|crawl|scrape)/)) return 'research';
+    if (msg.match(/(tạo file|sửa file|viết code|fix|build|deploy|chạy lệnh|npm |pnpm |yarn |cài đặt|install|commit|git |tạo dự án|refactor|debug|compile|lint|test)/)) return 'code';
+    return 'complex';
+}
+
+function filterSkillsByIntent(intent, fullRegistry) {
+    if (intent === 'complex' || !SKILL_GROUPS[intent]) return fullRegistry;
+    if (intent === 'chat') return {};
+    const allowedNames = SKILL_GROUPS[intent];
+    const filtered = {};
+    for (const key of Object.keys(fullRegistry)) {
+        if (allowedNames.includes(key) || key.startsWith('workflow_')) {
+            filtered[key] = fullRegistry[key];
+        }
+    }
+    return filtered;
+}
+
+// =================================================================
+// 💾 SESSION CHECKPOINT (Auto-Save & Restore)
+// =================================================================
+const SESSION_DIR = path.join(__dirname, '.agent_memory', 'sessions');
+if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
+
+function saveSession(chatHistory, goalText) {
+    if (chatHistory.length === 0) return;
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+    const filePath = path.join(SESSION_DIR, `session_${timestamp}.jsonl`);
+    const meta = { _type: 'meta', goal: goalText, provider: activeProvider?.getDisplayName(), savedAt: new Date().toISOString() };
+    const lines = [JSON.stringify(meta), ...chatHistory.map(m => JSON.stringify(m))];
+    fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
+}
+
+function getLatestSession() {
+    if (!fs.existsSync(SESSION_DIR)) return null;
+    const files = fs.readdirSync(SESSION_DIR).filter(f => f.endsWith('.jsonl')).sort().reverse();
+    if (files.length === 0) return null;
+    const latestFile = files[0];
+    const filePath = path.join(SESSION_DIR, latestFile);
+    const stat = fs.statSync(filePath);
+    const ageMinutes = (Date.now() - stat.mtimeMs) / 60000;
+    if (ageMinutes > 120) return null;
+    const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n');
+    let meta = null;
+    const messages = [];
+    for (const line of lines) {
+        try {
+            const obj = JSON.parse(line);
+            if (obj._type === 'meta') { meta = obj; continue; }
+            messages.push(obj);
+        } catch { /* skip */ }
+    }
+    return { file: latestFile, messages, meta, ageMinutes: Math.round(ageMinutes) };
+}
+
+function listSessions() {
+    if (!fs.existsSync(SESSION_DIR)) return [];
+    return fs.readdirSync(SESSION_DIR)
+        .filter(f => f.endsWith('.jsonl'))
+        .sort().reverse()
+        .slice(0, 10)
+        .map(f => {
+            const stat = fs.statSync(path.join(SESSION_DIR, f));
+            const allLines = fs.readFileSync(path.join(SESSION_DIR, f), 'utf8').trim().split('\n');
+            let meta = null;
+            try { const first = JSON.parse(allLines[0]); if (first._type === 'meta') meta = first; } catch {}
+            const msgCount = meta ? allLines.length - 1 : allLines.length;
+            return {
+                file: f,
+                messages: msgCount,
+                goal: meta?.goal || '(không có)',
+                age: Math.round((Date.now() - stat.mtimeMs) / 60000)
+            };
+        });
+}
+
+// =================================================================
+// 💓 HEARTBEAT MONITOR (Chống Agent treo / Zombie Detection)
+// =================================================================
+const HEARTBEAT_TIMEOUT_MS = 120000; // 2 phút không hoạt động = cảnh báo
+let lastActivityTimestamp = Date.now();
+let heartbeatInterval = null;
+let heartbeatWarned = false;
+
+function startHeartbeat() {
+    lastActivityTimestamp = Date.now();
+    heartbeatWarned = false;
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    heartbeatInterval = setInterval(() => {
+        const elapsed = Date.now() - lastActivityTimestamp;
+        if (elapsed > HEARTBEAT_TIMEOUT_MS && !heartbeatWarned) {
+            heartbeatWarned = true;
+            const mins = Math.round(elapsed / 60000);
+            console.log(chalk.yellow(`\n⚠️  [Heartbeat] Agent không phản hồi hơn ${mins} phút!`));
+            console.log(chalk.gray('   Provider có thể đang bị nghẽ hoặc trình duyệt bị treo.'));
+            console.log(chalk.gray('   Bấm Ctrl+C để hủy, hoặc chờ thêm...\n'));
+        }
+    }, 15000);
+}
+
+function tickHeartbeat() {
+    lastActivityTimestamp = Date.now();
+    heartbeatWarned = false;
+}
+
+function stopHeartbeat() {
+    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+}
+
+// =================================================================
+// 🔄 PROVIDER FAILOVER (Tự động chuyển provider khi lỗi)
+// =================================================================
+const loadedProviders = {}; // Cache các provider đã khởi tạo
+
+async function getProviderInstance(providerName) {
+    if (loadedProviders[providerName]) return loadedProviders[providerName];
+    const providerMap = {
+        'deepseek-web': './providers/deepseek-web.js',
+        'gemini-studio': './providers/gemini-studio.js',
+        'openai': './providers/openai.js',
+        'openai-compatible': './providers/openai.js',
+        'claude': './providers/claude.js',
+        'ollama': './providers/ollama.js',
+        'gemini-api': './providers/gemini-api.js',
+    };
+    const adapterPath = providerMap[providerName];
+    if (!adapterPath) return null;
+    const settings = providerConfig.providers?.[providerName] || {};
+    if (!settings.enabled) return null;
+    try {
+        const module = await import(adapterPath);
+        const ProviderClass = module.default;
+        const instance = new ProviderClass(settings);
+        loadedProviders[providerName] = instance;
+        return instance;
+    } catch { return null; }
+}
+
+function getFailoverChain() {
+    if (providerConfig.failoverChain && Array.isArray(providerConfig.failoverChain)) {
+        return providerConfig.failoverChain;
+    }
+    // Tự động tạo chain: active provider đầu tiên, sau đó các provider enabled
+    const active = providerConfig.activeProvider;
+    const others = Object.keys(providerConfig.providers || {})
+        .filter(p => p !== active && providerConfig.providers[p].enabled);
+    return [active, ...others];
+}
+
+async function chatWithFailover(options) {
+    const chain = getFailoverChain();
+    let lastError = null;
+
+    for (const providerName of chain) {
+        const provider = (providerName === providerConfig.activeProvider)
+            ? activeProvider
+            : await getProviderInstance(providerName);
+
+        if (!provider || !provider.chat) continue;
+
+        try {
+            console.log(chalk.gray(`[Failover] Đang dùng: ${provider.getDisplayName()}`));
+            const result = await provider.chat(options);
+            return result;
+        } catch (err) {
+            lastError = err;
+            // Lỗi do handover không phải là lỗi thực sự — đẩy lên
+            if (err.message?.includes('__HANDOVER_TO_ENGINE__')) throw err;
+            console.warn(chalk.yellow(`[Failover] ❌ ${provider.getDisplayName()} lỗi: ${err.message}`));
+            telemetry.recordToolExecution(`provider:${providerName}`, false, 0, err.message);
+            console.log(chalk.yellow(`[Failover] Đang chuyển sang provider tiếp theo...`));
+        }
+    }
+
+    throw lastError || new Error('Tất cả provider đều lỗi!');
+}
+
+// =================================================================
+// 🧠 SEMANTIC MEMORY EMBEDDING (Vector Search cho bộ nhớ)
+// =================================================================
+async function embedText(text) {
+    // Sử dụng Gemini Embedding API (miễn phí)
+    const geminiConfig = providerConfig.providers?.['gemini-api'];
+    if (!geminiConfig?.apiKey) return null;
+
+    try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${geminiConfig.apiKey}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                content: { parts: [{ text }] },
+                taskType: 'RETRIEVAL_QUERY'
+            })
+        });
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data.embedding?.values || null;
+    } catch { return null; }
+}
+
+function cosineSimilarity(a, b) {
+    if (!a || !b || a.length !== b.length) return 0;
+    let dotProduct = 0, normA = 0, normB = 0;
+    for (let i = 0; i < a.length; i++) {
+        dotProduct += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
+    }
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB) || 1);
+}
 
 // Cấu hình Render Markdown cực đẹp cho Terminal
 marked.setOptions({
@@ -200,6 +426,13 @@ async function loadProviderConfig(showMenu = false) {
 }
 
 await loadProviderConfig();
+
+// Pre-load các provider backup cho Failover
+for (const pName of Object.keys(providerConfig.providers || {})) {
+    if (pName !== providerConfig.activeProvider && providerConfig.providers[pName].enabled) {
+        getProviderInstance(pName).catch(() => {});
+    }
+}
 
 // =================================================================
 // 🛡️ HỆ THỐNG BẢO MẬT (Đã thiết kế lại dùng Inquirer)
@@ -369,6 +602,40 @@ app.get('/api/system-prompt', (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
+});
+
+// =================================================================
+// 📊 DASHBOARD API (Trực quan hóa Telemetry + Memory)
+// =================================================================
+app.use('/dashboard', express.static(path.join(__dirname, 'public')));
+
+app.get('/api/dashboard/telemetry', (req, res) => {
+    const report = telemetry.getToolReliabilityReport();
+    const timeline = db.prepare(`
+        SELECT tool_name, timestamp, success, duration_ms 
+        FROM tool_telemetry ORDER BY timestamp DESC LIMIT 200
+    `).all();
+    res.json({ report, timeline });
+});
+
+app.get('/api/dashboard/memories', (req, res) => {
+    const memories = db.prepare(`
+        SELECT id, date, tags, situation, solution, trust_score, use_count,
+               CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END as has_embedding
+        FROM memories ORDER BY trust_score DESC, date DESC LIMIT 100
+    `).all();
+    const stats = db.prepare(`
+        SELECT COUNT(*) as total,
+               AVG(trust_score) as avg_trust,
+               SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) as embedded_count
+        FROM memories
+    `).get();
+    res.json({ memories, stats });
+});
+
+app.get('/api/dashboard/sessions', (req, res) => {
+    const sessions = listSessions();
+    res.json({ sessions, currentGoal: persistentGoal });
 });
 
 const activeStreams = new Map();
@@ -562,29 +829,75 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
             }
         }
 
-        if (searchTerms) {
-            // 🧠 HERMES TRUST SCORE: Chỉ lấy bài học có trust_score > 0.3, sắp xếp theo trust_score DESC
-            const stmt = db.prepare(`
-            SELECT m.id, m.situation, m.solution, m.trust_score, m.use_count
-            FROM memories_fts f
-            JOIN memories m ON f.rowid = m.rowid
-            WHERE memories_fts MATCH ?
-            AND m.trust_score > 0.3
-            ORDER BY m.trust_score DESC, rank
-            LIMIT 3
-        `);
+        // 🧠 HYBRID SEARCH: Vector Embedding + FTS5 Keyword
+        let allResults = [];
 
-            const results = stmt.all(searchTerms);
+        // --- PHASE 1: Semantic Vector Search (nếu có Gemini API key) ---
+        try {
+            const queryEmbedding = await embedText(lastUserMessage);
+            if (queryEmbedding) {
+                const allMemories = db.prepare(`
+                    SELECT id, situation, solution, trust_score, use_count, embedding
+                    FROM memories WHERE trust_score > 0.3
+                `).all();
 
-            if (results.length > 0) {
-                injectedContext += "\n--- BÀI HỌC TỪ LỖI TRONG QUÁ KHỨ (Trust Score) ---\n";
-                injectedContext += results.map(r => {
-                    const trust = (r.trust_score ?? 0.7).toFixed(2);
-                    return `- [Trust: ${trust} | ID: ${r.id}] Vấn đề: "${r.situation}" -> Xử lý: "${r.solution}"`;
-                }).join('\n');
-                injectedContext += "\n(Lưu ý: Nếu bài học nào GIÚP ÍCH, hãy gọi rate_memory với outcome='success'. Nếu SAI, gọi với outcome='fail'.)";
-                hasMemory = true;
+                const scored = allMemories
+                    .filter(m => m.embedding)
+                    .map(m => {
+                        try {
+                            const memEmbed = JSON.parse(m.embedding);
+                            const similarity = cosineSimilarity(queryEmbedding, memEmbed);
+                            return { ...m, similarity, source: 'semantic' };
+                        } catch { return null; }
+                    })
+                    .filter(m => m && m.similarity > 0.5)
+                    .sort((a, b) => b.similarity - a.similarity)
+                    .slice(0, 3);
+
+                allResults.push(...scored);
+                if (scored.length > 0) {
+                    console.log(chalk.gray(`[Memory] 🧠 Semantic Search: ${scored.length} kết quả (top similarity: ${scored[0].similarity.toFixed(3)})`));
+                }
             }
+        } catch (embedErr) {
+            // Ignore embedding errors, fall through to FTS5
+        }
+
+        // --- PHASE 2: FTS5 Keyword Search (luôn chạy) ---
+        if (searchTerms) {
+            const stmt = db.prepare(`
+                SELECT m.id, m.situation, m.solution, m.trust_score, m.use_count
+                FROM memories_fts f
+                JOIN memories m ON f.rowid = m.rowid
+                WHERE memories_fts MATCH ?
+                AND m.trust_score > 0.3
+                ORDER BY m.trust_score DESC, rank
+                LIMIT 3
+            `);
+            const ftsResults = stmt.all(searchTerms).map(r => ({ ...r, source: 'keyword' }));
+            allResults.push(...ftsResults);
+        }
+
+        // --- MERGE & DEDUPLICATE ---
+        const seenIds = new Set();
+        const uniqueResults = [];
+        for (const r of allResults) {
+            if (!seenIds.has(r.id)) {
+                seenIds.add(r.id);
+                uniqueResults.push(r);
+            }
+        }
+        const finalResults = uniqueResults.slice(0, 5);
+
+        if (finalResults.length > 0) {
+            injectedContext += "\n--- BÀI HỌC TỪ LỖI TRONG QUÁ KHỨ (Hybrid Search) ---\n";
+            injectedContext += finalResults.map(r => {
+                const trust = (r.trust_score ?? 0.7).toFixed(2);
+                const tag = r.source === 'semantic' ? `🧠 Semantic | Trust: ${trust}` : `🔤 Keyword | Trust: ${trust}`;
+                return `- [${tag} | ID: ${r.id}] Vấn đề: "${r.situation}" -> Xử lý: "${r.solution}"`;
+            }).join('\n');
+            injectedContext += "\n(Lưu ý: Nếu bài học nào GIÚP ÍCH, hãy gọi rate_memory với outcome='success'. Nếu SAI, gọi với outcome='fail'.)";
+            hasMemory = true;
         }
     } catch (e) {
         console.warn("[Node] Lỗi truy vấn bộ nhớ DB:", e.message);
@@ -718,6 +1031,16 @@ app.post('/v1/chat/completions', async (req, res) => {
     // Tự động inject biến môi trường cơ bản vào system prompt
     systemPrompt = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPrompt;
 
+    // 🎯 PERSISTENT GOAL: Inject mục tiêu khóa cứng (nếu có)
+    if (persistentGoal) {
+        systemPrompt = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên. Nếu bạn thấy mình đang đi lạc hướng, hãy dừng lại và quay về mục tiêu.\n\n` + systemPrompt;
+    }
+
+    // 🧭 ADAPTIVE SKILL ROUTER: Chỉ cấp tools cần thiết
+    const apiIntent = classifyIntent(lastUserMessage);
+    const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
+    if (apiIntent !== 'complex') console.log(chalk.gray(`[Router] Intent: ${apiIntent} → ${Object.keys(filteredSkills).length} tools`));
+
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
@@ -733,25 +1056,28 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 
     try {
-        const resultText = await activeProvider.chat({
-            messages: enrichedMessages,
-            skillRegistry: SKILL_REGISTRY,
-            executeSkill: async (funcName, args) => {
-                if (spinner) spinner.stop();
-                const res = await executeSkillForProvider(funcName, args);
-                if (spinner) spinner.start(chalk.yellow(`Đang xử lý kết quả của ${funcName}...`));
-                return res;
-            },
-            systemPrompt: systemPrompt,
-            maxSteps: 15,
-            onStreamChunk: stream ? (chunk) => {
-                res.write(`data: ${JSON.stringify({
-                    id: "chatcmpl-" + taskId,
-                    object: "chat.completion.chunk",
-                    choices: [{ delta: { content: chunk }, finish_reason: null }]
-                })}\n\n`);
-            } : null
-        });
+            const resultText = await chatWithFailover({
+                messages: enrichedMessages,
+                skillRegistry: filteredSkills,
+                executeSkill: async (funcName, args) => {
+                    if (spinner) spinner.stop();
+                    tickHeartbeat();
+                    const res = await executeSkillForProvider(funcName, args);
+                    tickHeartbeat();
+                    if (spinner) spinner.start(chalk.yellow(`Đang xử lý kết quả của ${funcName}...`));
+                    return res;
+                },
+                systemPrompt: systemPrompt,
+                maxSteps: 15,
+                onStreamChunk: stream ? (chunk) => {
+                    tickHeartbeat();
+                    res.write(`data: ${JSON.stringify({
+                        id: "chatcmpl-" + taskId,
+                        object: "chat.completion.chunk",
+                        choices: [{ delta: { content: chunk }, finish_reason: null }]
+                    })}\n\n`);
+                } : null
+            });
 
         if (spinner) spinner.succeed(chalk.green('AI đã trả lời xong!'));
 
@@ -811,6 +1137,32 @@ async function startTerminalChatLoop() {
     console.clear();
     console.log(OC_MUTED(`\n  B R I D G E  S E R V E R\n`));
 
+    // 💾 SESSION RESTORE: Kiểm tra phiên chat cũ
+    const lastSession = getLatestSession();
+    if (lastSession && lastSession.messages.length > 0) {
+        console.log(chalk.cyan(`  📋 Phát hiện phiên chat cũ: ${lastSession.file}`));
+        console.log(chalk.gray(`     ${lastSession.messages.length} tin nhắn — ${lastSession.ageMinutes} phút trước`));
+        if (lastSession.meta?.goal) console.log(chalk.green(`     🎯 Goal: "${lastSession.meta.goal}"`));
+        try {
+            const answer = await select({
+                message: '  Bạn muốn tiếp tục phiên cũ không?',
+                choices: [
+                    { name: '🔄 Tiếp tục phiên cũ', value: 'restore' },
+                    { name: '✨ Bắt đầu phiên mới', value: 'new' }
+                ]
+            });
+            if (answer === 'restore') {
+                cliChatHistory.push(...lastSession.messages);
+                if (lastSession.meta?.goal) persistentGoal = lastSession.meta.goal;
+                console.log(chalk.green(`\n  ✅ Đã khôi phục! Gõ tiếp để tiếp tục...\n`));
+            } else {
+                console.log(chalk.gray(`\n  Bắt đầu phiên mới...\n`));
+            }
+        } catch {
+            console.log(chalk.gray(`\n  Bắt đầu phiên mới...\n`));
+        }
+    }
+
     while (true) {
         console.log(chalk.gray('  Ask anything...'));
 
@@ -833,9 +1185,11 @@ async function startTerminalChatLoop() {
 
         if (text === '/exit' || text === '/quit') process.exit(0);
         if (text === '/clear' || text === '/new') {
+            saveSession(cliChatHistory, persistentGoal);
             cliChatHistory.length = 0;
             if (typeof activeProvider.resetSession === 'function') activeProvider.resetSession();
             resetSessionLog();
+            persistentGoal = null;
             console.clear();
             continue;
         }
@@ -844,6 +1198,51 @@ async function startTerminalChatLoop() {
         if (text === '/stats') {
             telemetry.printStatsTable();
             telemetry.printTopMemories();
+            continue;
+        }
+
+        // 🎯 PERSISTENT GOAL
+        if (text.startsWith('/goal')) {
+            const goalText = text.replace('/goal', '').trim();
+            if (!goalText || goalText === 'clear') {
+                persistentGoal = null;
+                console.log(chalk.yellow('\n[Goal] 🎯 Đã xóa mục tiêu. AI sẽ hoạt động tự do.\n'));
+            } else {
+                persistentGoal = goalText;
+                console.log(chalk.green(`\n[Goal] 🎯 Mục tiêu khóa cứng: "${persistentGoal}"\n`));
+                console.log(chalk.gray('  AI sẽ nhận mục tiêu này trong MỌI lượt chat cho đến khi bạn gõ /goal clear'));
+            }
+            continue;
+        }
+
+        // 💾 SESSION MANAGEMENT
+        if (text === '/sessions') {
+            const sessions = listSessions();
+            if (sessions.length === 0) {
+                console.log(chalk.yellow('\n  Chưa có phiên chat nào được lưu.\n'));
+            } else {
+                console.log(chalk.cyan('\n  📋 DANH SÁCH PHIÊN CHAT GẦN ĐÂY:'));
+                console.log(chalk.gray('  ─────────────────────────────────────────'));
+                sessions.forEach((s, i) => {
+                    const goalStr = s.goal !== '(không có)' ? chalk.green(` 🎯 ${s.goal}`) : '';
+                    console.log(`  ${chalk.white(i + 1)}. ${chalk.cyan(s.file)} — ${s.messages} tin nhắn — ${chalk.gray(s.age + ' phút trước')}${goalStr}`);
+                });
+                console.log(chalk.gray('\n  Gõ /restore để khôi phục phiên gần nhất\n'));
+            }
+            continue;
+        }
+        if (text === '/restore') {
+            const session = getLatestSession();
+            if (!session) {
+                console.log(chalk.yellow('\n  Không tìm thấy phiên chat gần đây (< 2 giờ).\n'));
+            } else {
+                cliChatHistory.length = 0;
+                cliChatHistory.push(...session.messages);
+                if (session.meta?.goal) persistentGoal = session.meta.goal;
+                console.log(chalk.green(`\n  ✅ Đã khôi phục phiên "${session.file}" (${session.messages.length} tin nhắn, ${session.ageMinutes} phút trước)`));
+                if (persistentGoal) console.log(chalk.green(`  🎯 Goal: "${persistentGoal}"`));
+                console.log('');
+            }
             continue;
         }
 
@@ -899,6 +1298,18 @@ async function startTerminalChatLoop() {
         // Tự động inject biến môi trường
         systemPromptText = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPromptText;
 
+        // 🎯 PERSISTENT GOAL: Inject mục tiêu khóa cứng
+        if (persistentGoal) {
+            systemPromptText = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên. Nếu bạn thấy mình đang đi lạc hướng, hãy dừng lại và quay về mục tiêu.\n\n` + systemPromptText;
+        }
+
+        // 🧭 ADAPTIVE SKILL ROUTER: Chỉ cấp tools cần thiết cho AI
+        const cliIntent = classifyIntent(text);
+        const cliFilteredSkills = filterSkillsByIntent(cliIntent, SKILL_REGISTRY);
+        if (cliIntent !== 'complex') {
+            console.log(chalk.gray(`[Router] 🧭 Intent: ${cliIntent} → ${Object.keys(cliFilteredSkills).length}/${Object.keys(SKILL_REGISTRY).length} tools`));
+        }
+
         let fullAiResponse = '';
         let isFirstChunk = true;
         const startTime = Date.now();
@@ -911,15 +1322,19 @@ async function startTerminalChatLoop() {
         const terminalCols = process.stdout.columns || 80;
         const terminalRowsMax = process.stdout.rows || 24;
 
+        startHeartbeat();
+
         try {
-            const chatResult = await activeProvider.chat({
+            const chatResult = await chatWithFailover({
                 messages: enrichedMessages,
-                skillRegistry: SKILL_REGISTRY,
+                skillRegistry: cliFilteredSkills,
                 executeSkill: async (funcName, args) => {
                     if (!isFirstChunk) console.log('\n');
                     spinner.stop();
+                    tickHeartbeat();
                     console.log(`\n${OC_THINK.italic('Action:')} ${OC_MUTED.italic(`Executing ${funcName}...`)}\n`);
                     const res = await executeSkillForProvider(funcName, args);
+                    tickHeartbeat();
                     if (res !== "__HANDOVER_TO_ENGINE__") {
                         spinner = ora({ text: OC_MUTED.italic(`Evaluating output...`), spinner: 'dots' }).start();
                     }
@@ -929,6 +1344,7 @@ async function startTerminalChatLoop() {
                 systemPrompt: systemPromptText,
                 maxSteps: 15,
                 onStreamChunk: (chunk) => {
+                    tickHeartbeat();
                     if (isFirstChunk) { spinner.stop(); isFirstChunk = false; }
                     fullAiResponse += chunk;
 
@@ -952,6 +1368,7 @@ async function startTerminalChatLoop() {
             });
 
             if (isFirstChunk) spinner.stop();
+            stopHeartbeat();
             if (chatResult === "__HANDOVER_TO_ENGINE__" || fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
                 const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text);
                 await engine.run(); // Block Terminal chờ Engine chạy xong
@@ -999,6 +1416,9 @@ async function startTerminalChatLoop() {
 
             cliChatHistory.push({ role: 'assistant', content: cleanResponseForHistory });
 
+            // 💾 AUTO-SAVE SESSION: Lưu checkpoint sau mỗi lượt chat
+            saveSession(cliChatHistory, persistentGoal);
+
             // 🧠 CRITIC AGENT: Chạy ngầm sau mỗi phiên nếu có lỗi
             if (currentSessionLog.some(entry => entry.success === false)) {
                 runCriticAgent([...currentSessionLog]).catch(err => {
@@ -1008,6 +1428,7 @@ async function startTerminalChatLoop() {
 
         } catch (error) {
            spinner.stop();
+            stopHeartbeat();
             
             // Xử lý cướp quyền (Không in lỗi đỏ, chỉ thoát vòng lặp lặng lẽ)
             if (error.message.includes("__HANDOVER_TO_ENGINE__")) {

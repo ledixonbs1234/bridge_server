@@ -38,6 +38,11 @@ try {
     db.exec(`ALTER TABLE memories ADD COLUMN use_count INTEGER DEFAULT 0;`);
 } catch (e) { /* Cột đã tồn tại — bỏ qua */ }
 
+// 1.2 Migration: Thêm cột embedding cho Semantic Vector Search
+try {
+    db.exec(`ALTER TABLE memories ADD COLUMN embedding TEXT;`);
+} catch (e) { /* Cột đã tồn tại — bỏ qua */ }
+
 // 2. Tạo bảng Virtual FTS5 để tìm kiếm văn bản (Full Text Search) siêu tốc
 db.exec(`
     CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(

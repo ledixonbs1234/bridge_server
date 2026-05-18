@@ -44,6 +44,39 @@ export default {
             stmt.run(id, date, tagsJson, args.situation, args.solution);
 
             console.log(`\n[🧠 Memory] AI vừa ghi nhớ vào Database: [${(args.tags || []).join(', ')}] (Trust: 0.70)`);
+
+            // 🧠 AUTO-EMBED: Tự động tạo vector embedding cho bài học (async, không block)
+            (async () => {
+                try {
+                    // Dynamic import config để lấy Gemini API key
+                    const configPath = path.join(__dirname, '..', 'config.json');
+                    if (!fs.existsSync(configPath)) return;
+                    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                    const apiKey = config.providers?.['gemini-api']?.apiKey;
+                    if (!apiKey) return;
+
+                    const textToEmbed = `${args.situation} ${args.solution}`;
+                    const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${apiKey}`;
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            content: { parts: [{ text: textToEmbed }] },
+                            taskType: 'RETRIEVAL_DOCUMENT'
+                        })
+                    });
+                    if (!response.ok) return;
+                    const data = await response.json();
+                    const embedding = data.embedding?.values;
+                    if (embedding) {
+                        db.prepare(`UPDATE memories SET embedding = ? WHERE id = ?`).run(JSON.stringify(embedding), id);
+                        console.log(`[🧠 Memory] ✅ Đã tạo embedding vector (${embedding.length} dims) cho bài học #${id}`);
+                    }
+                } catch (e) {
+                    // Embedding thất bại không ảnh hưởng đến việc lưu memory
+                }
+            })();
+
             return { status: "success", memory_id: id, message: "Đã khắc sâu vào Database cục bộ (Trust Score: 0.70)." };
         }
     },

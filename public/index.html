@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bridge Server — Agent Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #0a0e1a; --surface: #111827; --surface2: #1e293b;
+            --border: #1e3a5f; --text: #e2e8f0; --muted: #64748b;
+            --accent: #3b82f6; --success: #10b981; --warn: #f59e0b; --danger: #ef4444;
+            --glass: rgba(17, 24, 39, 0.7);
+        }
+        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+        body::before {
+            content: ''; position: fixed; inset: 0; z-index: -1;
+            background: radial-gradient(ellipse at 20% 50%, rgba(59,130,246,0.08) 0%, transparent 50%),
+                        radial-gradient(ellipse at 80% 20%, rgba(16,185,129,0.06) 0%, transparent 50%),
+                        radial-gradient(ellipse at 50% 80%, rgba(139,92,246,0.05) 0%, transparent 50%);
+        }
+
+        .header {
+            padding: 24px 32px; display: flex; align-items: center; gap: 16px;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(135deg, rgba(59,130,246,0.05), rgba(16,185,129,0.03));
+        }
+        .header h1 { font-size: 22px; font-weight: 700; background: linear-gradient(135deg, #3b82f6, #10b981); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .header .subtitle { color: var(--muted); font-size: 13px; }
+        .header .status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--success); }
+        .header .status::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--success); animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        .goal-bar {
+            padding: 12px 32px; background: linear-gradient(90deg, rgba(245,158,11,0.1), transparent);
+            border-bottom: 1px solid rgba(245,158,11,0.2); display: none; font-size: 13px;
+        }
+        .goal-bar.active { display: flex; align-items: center; gap: 8px; }
+        .goal-bar .label { color: var(--warn); font-weight: 600; }
+
+        .tabs {
+            display: flex; gap: 0; padding: 0 32px; border-bottom: 1px solid var(--border); background: var(--surface);
+        }
+        .tab {
+            padding: 14px 24px; font-size: 13px; font-weight: 500; color: var(--muted);
+            cursor: pointer; border-bottom: 2px solid transparent; transition: all .2s;
+        }
+        .tab:hover { color: var(--text); }
+        .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+        .content { padding: 24px 32px; max-width: 1400px; margin: 0 auto; }
+        .panel { display: none; } .panel.active { display: block; }
+
+        .grid { display: grid; gap: 20px; }
+        .grid-4 { grid-template-columns: repeat(4, 1fr); }
+        .grid-2 { grid-template-columns: repeat(2, 1fr); }
+        @media (max-width: 900px) { .grid-4, .grid-2 { grid-template-columns: 1fr; } }
+
+        .card {
+            background: var(--glass); border: 1px solid var(--border); border-radius: 12px;
+            padding: 20px; backdrop-filter: blur(12px); transition: border-color .2s;
+        }
+        .card:hover { border-color: var(--accent); }
+        .card h3 { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+        .card .value { font-size: 32px; font-weight: 700; }
+        .card .value.green { color: var(--success); }
+        .card .value.blue { color: var(--accent); }
+        .card .value.yellow { color: var(--warn); }
+
+        .chart-card { padding: 20px; min-height: 320px; }
+        .chart-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 16px; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 10px 12px; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+        td { padding: 10px 12px; border-bottom: 1px solid rgba(30,58,95,0.3); }
+        tr:hover td { background: rgba(59,130,246,0.04); }
+
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .badge.green { background: rgba(16,185,129,0.15); color: var(--success); }
+        .badge.yellow { background: rgba(245,158,11,0.15); color: var(--warn); }
+        .badge.red { background: rgba(239,68,68,0.15); color: var(--danger); }
+        .badge.blue { background: rgba(59,130,246,0.15); color: var(--accent); }
+
+        .trust-bar { width: 80px; height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; display: inline-block; vertical-align: middle; margin-right: 6px; }
+        .trust-bar-fill { height: 100%; border-radius: 3px; transition: width .5s; }
+
+        .mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+        .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+        .empty .icon { font-size: 48px; margin-bottom: 12px; }
+        .refresh-btn {
+            position: fixed; bottom: 24px; right: 24px; width: 48px; height: 48px;
+            border-radius: 50%; border: 1px solid var(--border); background: var(--surface);
+            color: var(--accent); font-size: 20px; cursor: pointer; transition: all .2s;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .refresh-btn:hover { background: var(--accent); color: white; transform: rotate(180deg); }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>🧠 Bridge Server Dashboard</h1>
+            <div class="subtitle">Agent Telemetry & Memory Visualization</div>
+        </div>
+        <div class="status" id="status">Online</div>
+    </div>
+
+    <div class="goal-bar" id="goalBar">
+        <span class="label">🎯 GOAL:</span>
+        <span id="goalText"></span>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" data-panel="telemetry">📊 Telemetry</div>
+        <div class="tab" data-panel="memory">🧠 Memory</div>
+        <div class="tab" data-panel="sessions">💾 Sessions</div>
+    </div>
+
+    <div class="content">
+        <!-- TELEMETRY PANEL -->
+        <div class="panel active" id="panel-telemetry">
+            <div class="grid grid-4" id="telemetry-stats" style="margin-bottom:20px"></div>
+            <div class="grid grid-2" style="margin-bottom:20px">
+                <div class="card chart-card">
+                    <h3>📊 Tool Reliability</h3>
+                    <canvas id="chartReliability"></canvas>
+                </div>
+                <div class="card chart-card">
+                    <h3>⏱️ Avg Duration (ms)</h3>
+                    <canvas id="chartDuration"></canvas>
+                </div>
+            </div>
+            <div class="card">
+                <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">📋 Chi tiết Tools</h3>
+                <table id="telemetry-table"><thead><tr><th>Tool</th><th>Calls</th><th>Success</th><th>Fail</th><th>Reliability</th><th>Avg Duration</th></tr></thead><tbody></tbody></table>
+            </div>
+        </div>
+
+        <!-- MEMORY PANEL -->
+        <div class="panel" id="panel-memory">
+            <div class="grid grid-4" id="memory-stats" style="margin-bottom:20px"></div>
+            <div class="grid grid-2" style="margin-bottom:20px">
+                <div class="card chart-card">
+                    <h3>🧠 Trust Score Distribution</h3>
+                    <canvas id="chartTrust"></canvas>
+                </div>
+                <div class="card chart-card">
+                    <h3>📈 Memory Timeline</h3>
+                    <canvas id="chartTimeline"></canvas>
+                </div>
+            </div>
+            <div class="card">
+                <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">📋 All Memories</h3>
+                <table id="memory-table"><thead><tr><th>Trust</th><th>Situation</th><th>Solution</th><th>Tags</th><th>Embedded</th><th>Uses</th></tr></thead><tbody></tbody></table>
+            </div>
+        </div>
+
+        <!-- SESSIONS PANEL -->
+        <div class="panel" id="panel-sessions">
+            <div class="card">
+                <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">💾 Session History</h3>
+                <table id="sessions-table"><thead><tr><th>#</th><th>File</th><th>Messages</th><th>Goal</th><th>Age</th></tr></thead><tbody></tbody></table>
+            </div>
+        </div>
+    </div>
+
+    <button class="refresh-btn" onclick="loadAll()" title="Refresh">↻</button>
+
+    <script>
+    const API = window.location.origin;
+    let charts = {};
+
+    // Tabs
+    document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+        document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
+        t.classList.add('active');
+        document.getElementById('panel-' + t.dataset.panel).classList.add('active');
+    }));
+
+    function badgeFor(val) {
+        const pct = Math.round(val * 100);
+        const cls = pct >= 90 ? 'green' : pct >= 70 ? 'yellow' : 'red';
+        return `<span class="badge ${cls}">${pct}%</span>`;
+    }
+    function trustBar(val) {
+        const pct = Math.round((val || 0.7) * 100);
+        const color = pct >= 70 ? 'var(--success)' : pct >= 40 ? 'var(--warn)' : 'var(--danger)';
+        return `<span class="trust-bar"><span class="trust-bar-fill" style="width:${pct}%;background:${color}"></span></span><span class="mono">${(val||0.7).toFixed(2)}</span>`;
+    }
+
+    async function loadTelemetry() {
+        const r = await fetch(API + '/api/dashboard/telemetry').then(r => r.json());
+        const report = r.report || [];
+        const totalCalls = report.reduce((s, x) => s + x.total, 0);
+        const totalSuccess = report.reduce((s, x) => s + x.success, 0);
+        const overallRel = totalCalls > 0 ? (totalSuccess / totalCalls) : 1;
+        const avgDur = report.length > 0 ? Math.round(report.reduce((s, x) => s + x.avgDuration, 0) / report.length) : 0;
+
+        document.getElementById('telemetry-stats').innerHTML = `
+            <div class="card"><h3>Total Calls</h3><div class="value blue">${totalCalls}</div></div>
+            <div class="card"><h3>Success Rate</h3><div class="value green">${Math.round(overallRel*100)}%</div></div>
+            <div class="card"><h3>Unique Tools</h3><div class="value">${report.length}</div></div>
+            <div class="card"><h3>Avg Duration</h3><div class="value yellow">${avgDur}ms</div></div>
+        `;
+
+        // Table
+        const tbody = document.querySelector('#telemetry-table tbody');
+        tbody.innerHTML = report.map(r => `<tr>
+            <td class="mono">${r.tool}</td><td>${r.total}</td>
+            <td style="color:var(--success)">${r.success}</td><td style="color:var(--danger)">${r.fail}</td>
+            <td>${badgeFor(r.reliability)}</td><td class="mono">${r.avgDuration}ms</td>
+        </tr>`).join('') || '<tr><td colspan="6" class="empty"><div class="icon">📊</div>Chưa có dữ liệu telemetry</td></tr>';
+
+        // Charts
+        const labels = report.map(r => r.tool.replace(/_/g, ' '));
+        if (charts.rel) charts.rel.destroy();
+        charts.rel = new Chart(document.getElementById('chartReliability'), {
+            type: 'bar', data: {
+                labels, datasets: [{
+                    label: 'Reliability %', data: report.map(r => Math.round(r.reliability * 100)),
+                    backgroundColor: report.map(r => r.reliability >= 0.9 ? 'rgba(16,185,129,0.6)' : r.reliability >= 0.7 ? 'rgba(245,158,11,0.6)' : 'rgba(239,68,68,0.6)'),
+                    borderRadius: 6
+                }]
+            }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { max: 100, grid: { color: 'rgba(30,58,95,0.3)' }, ticks: { color: '#64748b' } }, x: { grid: { display: false }, ticks: { color: '#64748b', maxRotation: 45 } } } }
+        });
+        if (charts.dur) charts.dur.destroy();
+        charts.dur = new Chart(document.getElementById('chartDuration'), {
+            type: 'bar', data: {
+                labels, datasets: [{ label: 'ms', data: report.map(r => r.avgDuration), backgroundColor: 'rgba(59,130,246,0.5)', borderRadius: 6 }]
+            }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { grid: { color: 'rgba(30,58,95,0.3)' }, ticks: { color: '#64748b' } }, x: { grid: { display: false }, ticks: { color: '#64748b', maxRotation: 45 } } } }
+        });
+    }
+
+    async function loadMemories() {
+        const r = await fetch(API + '/api/dashboard/memories').then(r => r.json());
+        const mems = r.memories || [];
+        const stats = r.stats || {};
+
+        document.getElementById('memory-stats').innerHTML = `
+            <div class="card"><h3>Total Memories</h3><div class="value blue">${stats.total || 0}</div></div>
+            <div class="card"><h3>Avg Trust</h3><div class="value green">${(stats.avg_trust || 0).toFixed(2)}</div></div>
+            <div class="card"><h3>Embedded</h3><div class="value">${stats.embedded_count || 0}<span style="font-size:14px;color:var(--muted)">/${stats.total||0}</span></div></div>
+            <div class="card"><h3>High Trust (≥0.7)</h3><div class="value green">${mems.filter(m=>(m.trust_score||0)>=0.7).length}</div></div>
+        `;
+
+        const tbody = document.querySelector('#memory-table tbody');
+        tbody.innerHTML = mems.map(m => {
+            let tags = ''; try { tags = JSON.parse(m.tags||'[]').map(t=>`<span class="badge blue">${t}</span>`).join(' '); } catch {}
+            return `<tr>
+                <td>${trustBar(m.trust_score)}</td>
+                <td style="max-width:280px">${m.situation||'-'}</td>
+                <td style="max-width:280px;color:var(--muted)">${m.solution||'-'}</td>
+                <td>${tags}</td>
+                <td>${m.has_embedding ? '<span class="badge green">🧠 Yes</span>' : '<span class="badge" style="opacity:.4">No</span>'}</td>
+                <td class="mono">${m.use_count||0}</td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="6" class="empty"><div class="icon">🧠</div>Chưa có memory nào</td></tr>';
+
+        // Trust distribution chart
+        const buckets = [0,0,0,0,0]; // 0-.2, .2-.4, .4-.6, .6-.8, .8-1
+        mems.forEach(m => { const t = m.trust_score||0.7; const i = Math.min(Math.floor(t*5),4); buckets[i]++; });
+        if (charts.trust) charts.trust.destroy();
+        charts.trust = new Chart(document.getElementById('chartTrust'), {
+            type: 'doughnut', data: {
+                labels: ['0-0.2','0.2-0.4','0.4-0.6','0.6-0.8','0.8-1.0'],
+                datasets: [{ data: buckets, backgroundColor: ['#ef4444','#f97316','#f59e0b','#10b981','#3b82f6'], borderWidth: 0 }]
+            }, options: { responsive: true, plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 11 } } } } }
+        });
+
+        // Timeline chart
+        const byDate = {}; mems.forEach(m => { if (!m.date) return; const d = m.date.slice(0,10); byDate[d] = (byDate[d]||0)+1; });
+        const dates = Object.keys(byDate).sort().slice(-14);
+        if (charts.timeline) charts.timeline.destroy();
+        charts.timeline = new Chart(document.getElementById('chartTimeline'), {
+            type: 'line', data: {
+                labels: dates, datasets: [{ label: 'New memories', data: dates.map(d=>byDate[d]), borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.4, pointRadius: 4 }]
+            }, options: { responsive: true, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, grid: { color: 'rgba(30,58,95,0.3)' }, ticks: { color: '#64748b' } }, x: { grid: { display: false }, ticks: { color: '#64748b' } } } }
+        });
+    }
+
+    async function loadSessions() {
+        const r = await fetch(API + '/api/dashboard/sessions').then(r => r.json());
+        if (r.currentGoal) { document.getElementById('goalBar').classList.add('active'); document.getElementById('goalText').textContent = r.currentGoal; }
+        else { document.getElementById('goalBar').classList.remove('active'); }
+
+        const tbody = document.querySelector('#sessions-table tbody');
+        tbody.innerHTML = (r.sessions||[]).map((s,i) => `<tr>
+            <td>${i+1}</td><td class="mono">${s.file}</td><td>${s.messages}</td>
+            <td>${s.goal !== '(không có)' ? '<span class="badge yellow">🎯 '+s.goal+'</span>' : '<span style="color:var(--muted)">—</span>'}</td>
+            <td class="mono">${s.age} phút</td>
+        </tr>`).join('') || '<tr><td colspan="5" class="empty"><div class="icon">💾</div>Chưa có session</td></tr>';
+    }
+
+    async function loadAll() { await Promise.all([loadTelemetry(), loadMemories(), loadSessions()]); }
+    loadAll();
+    setInterval(loadAll, 30000);
+    </script>
+</body>
+</html>
