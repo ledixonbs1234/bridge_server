@@ -41,13 +41,13 @@ QUAN TRỌNG:
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker } = options;
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default' } = options;
 
         await deepseekBot.init();
         
         let bot = deepseekBot;
         if (isWorker) {
-            bot = await deepseekBot.createWorkerBot();
+            bot = await deepseekBot.getWorkerBot(workerType);
         }
 
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";

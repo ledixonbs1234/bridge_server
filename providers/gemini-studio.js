@@ -6,16 +6,30 @@ class GeminiStudioProvider extends BaseProvider {
         super(config);
         this.name = config.name || 'Gemini Studio (CloakBrowser)';
         this.isExtensionBased = false; // Đổi thành false! Server tự xử lý 100%
+        this.hasInitializedChat = false;
+    }
+
+    resetSession() {
+        this.hasInitializedChat = false;
+        console.log(`\n[Gemini Studio] 🧹 Đã xóa trạng thái. Tin nhắn tiếp theo sẽ bắt đầu một phiên New Chat!`);
     }
 
    async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker } = options;
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default' } = options;
         await aiStudioBot.init();
 
         // 1. Phân lập Tab (Cô lập Context theo ý tưởng của bạn)
         let bot = aiStudioBot;
         if (isWorker) {
-            bot = await aiStudioBot.createWorkerBot();
+            bot = await aiStudioBot.getWorkerBot(workerType);
+        }
+
+        const userMessagesCount = messages.filter(m => m.role === 'user').length;
+        const isFirstTurn = userMessagesCount <= 1 && !this.hasInitializedChat;
+
+        if (isFirstTurn && !isWorker) {
+            await bot.clickNewChat();
+            this.hasInitializedChat = true;
         }
 
         // 2. Cài đặt môi trường cho Tab

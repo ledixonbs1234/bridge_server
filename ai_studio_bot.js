@@ -11,13 +11,23 @@ class AIStudioBot {
         this.isReady = false
         // Các cờ đánh dấu để không setup lại nhiều lần gây mất thời gian
         this.setupFlags = { system: false, functions: false, thinking: false };
+        this.workerBots = {};
+    }
+
+    async clickNewChat() {
+        if (!this.isReady) await this.init();
+        console.log("[Browser] Bắt đầu phiên chat mới trên AI Studio...");
+        await this.page.goto('https://aistudio.google.com/app/prompts/new_chat', { waitUntil: 'domcontentloaded' });
+        await this.page.waitForSelector('textarea[aria-label*="prompt"], textarea[formcontrolname="promptText"]', { timeout: 60000 });
+        // Buộc phải thiết lập lại môi trường sau khi mở tab chat mới
+        this.setupFlags = { system: false, functions: false, thinking: false };
     }
 
     async init() {
         if (this.isReady) return;
 
         console.log("[Browser] Đang khởi động CloakBrowser...");
-        const profilePath = path.join(__dirname, 'profile', 'Profile_Xon_Pro_All'); 
+        const profilePath = path.join(__dirname, 'profile', 'Profile_DATA2');
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
             headless: false,
@@ -226,27 +236,34 @@ class AIStudioBot {
     // ==========================================
     // TẠO TAB MỚI CHO NHIỆM VỤ CON (WORKER ISOLATION)
     // ==========================================
-    async createWorkerBot() {
+    async getWorkerBot(workerType = 'default') {
         if (!this.context) await this.init();
-        
-        console.log("\n[Browser] 🌍 Mở Tab Worker mới để xử lý tác vụ con độc lập...");
+
+        if (!this.workerBots) this.workerBots = {};
+
+        if (this.workerBots[workerType] && this.workerBots[workerType].page && !this.workerBots[workerType].page.isClosed()) {
+            console.log(`\n[Browser] 🌍 Tái sử dụng Tab Worker [${workerType}] đã có để tiết kiệm thời gian...`);
+            return this.workerBots[workerType];
+        }
+
+        console.log(`\n[Browser] 🌍 Khởi tạo Tab Worker mới loại [${workerType}] (chạy ngầm)...`);
         const workerPage = await this.context.newPage();
-        
+
         // Nhân bản một bot mới điều khiển riêng Tab này
         const workerBot = new AIStudioBot();
         workerBot.context = this.context;
         workerBot.page = workerPage;
         workerBot.isReady = true;
-        
+
         await workerPage.goto('https://aistudio.google.com/app/prompts/new_chat', { waitUntil: 'domcontentloaded' });
         await workerPage.waitForSelector('textarea[aria-label*="prompt"], textarea[formcontrolname="promptText"]', { timeout: 60000 });
-        
-        // Cung cấp hàm tự hủy Tab
+
+        // Cung cấp hàm dọn dẹp giả để tương thích, nhưng không đóng tab
         workerBot.closeWorker = async () => {
-            console.log("[Browser] 🗑️ Hoàn thành tác vụ con. Đóng Tab Worker...");
-            await workerPage.close();
+            console.log(`[Browser] 🔄 Tác vụ con hoàn thành. Giữ Tab Worker [${workerType}] để dùng lại lần sau.`);
         };
-        
+
+        this.workerBots[workerType] = workerBot;
         return workerBot;
     }
 
@@ -375,7 +392,7 @@ class AIStudioBot {
             }, { timeout: 10000 });
 
             // 3. Chờ thêm 1.5s cho UI ổn định
-            await this.page.waitForTimeout(1500);
+            await this.page.waitForTimeout(2000);
 
             // 4. Click và ĐÁNH DẤU CHẾT (data-answered)
             await this.page.evaluate(() => {
@@ -383,7 +400,7 @@ class AIStudioBot {
                 if (!inputField) return;
                 const container = inputField.closest('form, ms-function-call-chunk, ms-chat-turn');
                 if (!container) return;
-
+                2290
                 const buttons = container.querySelectorAll('button');
                 for (const btn of buttons) {
                     const isSendBtn = btn.textContent.toLowerCase().includes('send') ||

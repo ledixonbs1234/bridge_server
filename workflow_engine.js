@@ -56,7 +56,8 @@ Chỉ trả về đánh giá ngắn gọn của bạn.
                 },
                 systemPrompt: "Bạn là một AI Critic có khả năng tự rút kinh nghiệm. Trả lời cực kỳ ngắn gọn.",
                 maxSteps: 2,
-                isWorker: true
+                isWorker: true,
+                workerType: 'task'
             });
 
             console.log(chalk.gray(`[Reflection Output]: ${response}`));
@@ -123,7 +124,8 @@ Bạn là một AI Worker CHUYÊN THỰC THI LỆNH.
                         },
                         systemPrompt: "Bạn là Worker. Chỉ thực thi, không giải thích dài dòng.",
                         maxSteps: 3, // Giảm xuống 3 cho Worker đỡ ngáo
-                        isWorker: true
+                        isWorker: true,
+                        workerType: 'task'
                     });
 
                     spinner.succeed(chalk.green(`Hoàn thành: ${step.task}`));

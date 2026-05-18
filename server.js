@@ -438,7 +438,8 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
                     executeSkill: async () => {},
                     systemPrompt: "Bạn là hệ thống trích xuất từ khóa tìm kiếm nội bộ. Chỉ output từ khóa.",
                     maxSteps: 1,
-                    isWorker: true
+                    isWorker: true,
+                    workerType: 'keyword'
                 });
                 
                 keywordResponse = keywordResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
@@ -449,7 +450,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
                     .filter(w => w.length > 1);
 
                 if (words.length > 0) {
-                    searchTerms = words.join('* OR ') + '*';
+                    searchTerms = words.map(w => '"' + w + '"*').join(' OR ');
                     console.log(chalk.gray(`\n[Memory] AI Keyword Extraction: "${searchTerms}"`));
                 }
             }
@@ -466,7 +467,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
                 .filter(w => w.length > 1);
 
             if (words.length > 0) {
-                searchTerms = words.join('* OR ') + '*';
+                searchTerms = words.map(w => '"' + w + '"*').join(' OR ');
             }
         }
 
@@ -493,6 +494,40 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
     }
 
     return hasMemory ? injectedContext : "";
+}
+
+// =================================================================
+// 🧠 TỰ ĐỘNG THUẬT LẠI CÂU HỎI (QUERY REFORMULATION)
+// =================================================================
+async function reformulateQuery(userMessage) {
+    if (!activeProvider || !activeProvider.chat) return userMessage;
+    
+    console.log(chalk.gray(`\n[Reformulator] Đang biên tập lại tin nhắn để làm rõ ngữ cảnh...`));
+    
+    const systemPrompt = "Bạn là một AI Prompt Engineer. Nhiệm vụ của bạn là đọc tin nhắn của người dùng và thuật lại (reformulate) nó thành một Prompt rõ ràng, rành mạch, đầy đủ ngữ cảnh nhất để một AI khác đọc hiểu và xử lý hiệu quả. Không giải thích thêm, không thay đổi ý định gốc. CHỈ TRẢ VỀ CÂU ĐÃ ĐƯỢC THUẬT LẠI.";
+    const prompt = `Tin nhắn gốc của người dùng: "${userMessage}"`;
+
+    try {
+        let optimizedMessage = await activeProvider.chat({
+            messages: [{ role: 'user', content: prompt }],
+            skillRegistry: {},
+            executeSkill: async () => {},
+            systemPrompt: systemPrompt,
+            maxSteps: 1,
+            isWorker: true,
+            workerType: 'reformulator'
+        });
+        
+        optimizedMessage = optimizedMessage.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        
+        if (optimizedMessage && optimizedMessage !== userMessage) {
+            console.log(chalk.cyan(`[Reformulator] Viết lại thành công!`));
+            return `[User Original]: ${userMessage}\n\n[Optimized Context]: ${optimizedMessage}`;
+        }
+    } catch (e) {
+        console.warn(chalk.yellow(`[Reformulator] Lỗi khi thuật lại câu hỏi: ${e.message}`));
+    }
+    return userMessage; // Fallback
 }
 
 app.get('/api/provider', (req, res) => {
@@ -546,8 +581,8 @@ app.post('/v1/chat/completions', async (req, res) => {
     const injectedMemory = await recallMemory(lastUserMessage);
     const taskId = Date.now().toString();
 
-    // ---- THÊM ĐOẠN XỬ LÝ LỆNH /clear TỪ EXTENSION ----
-    if (lastUserMessage.trim() === '/clear') {
+    // ---- THÊM ĐOẠN XỬ LÝ LỆNH /clear HOẶC /new TỪ EXTENSION ----
+    if (lastUserMessage.trim() === '/clear' || lastUserMessage.trim() === '/new') {
         if (typeof activeProvider.resetSession === 'function') {
             activeProvider.resetSession();
         }
@@ -565,9 +600,14 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()}`);
 
+    // Query Reformulation
+    const reformulatedMessage = await reformulateQuery(lastUserMessage);
+
     const enrichedMessages = messages.map(m => {
-        if (m.role === 'user' && m.content === lastUserMessage && injectedMemory) {
-            return { ...m, content: m.content + injectedMemory };
+        if (m.role === 'user' && m.content === lastUserMessage) {
+            let finalContent = reformulatedMessage;
+            if (injectedMemory) finalContent += injectedMemory;
+            return { ...m, content: finalContent };
         }
         return m;
     });
@@ -577,6 +617,9 @@ app.post('/v1/chat/completions', async (req, res) => {
     if (fs.existsSync(promptPath)) {
         systemPrompt = fs.readFileSync(promptPath, 'utf8');
     }
+
+    // Tự động inject biến môi trường cơ bản vào system prompt
+    systemPrompt = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPrompt;
 
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
@@ -692,7 +735,7 @@ async function startTerminalChatLoop() {
         if (!text) continue;
 
         if (text === '/exit' || text === '/quit') process.exit(0);
-        if (text === '/clear') {
+        if (text === '/clear' || text === '/new') {
             cliChatHistory.length = 0;
             if (typeof activeProvider.resetSession === 'function') activeProvider.resetSession();
             console.clear();
@@ -705,7 +748,8 @@ async function startTerminalChatLoop() {
         process.stdout.clearLine(1);
         console.log(`\n${OC_BLUE('▌')} ${chalk.bold.white(text)}\n`);
 
-        cliChatHistory.push({ role: 'user', content: text });
+        const reformulatedText = await reformulateQuery(text);
+        cliChatHistory.push({ role: 'user', content: reformulatedText });
 
         // --- CONTEXT COMPACTION ---
         if (cliChatHistory.length > 15) {
@@ -723,7 +767,8 @@ async function startTerminalChatLoop() {
                         executeSkill: async () => {},
                         systemPrompt: "Bạn là công cụ tóm tắt. Trả về đúng nội dung tóm tắt.",
                         maxSteps: 1,
-                        isWorker: true
+                        isWorker: true,
+                        workerType: 'summary'
                     });
                     summary = summary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
                     
@@ -738,12 +783,15 @@ async function startTerminalChatLoop() {
         }
 
         const injectedMemory = await recallMemory(text);
-        const enrichedMessages = [...cliChatHistory];
+        const enrichedMessages = JSON.parse(JSON.stringify(cliChatHistory));
         if (injectedMemory) enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
 
         let systemPromptText = "";
         const promptPath = path.join(__dirname, 'system_prompt.md');
         if (fs.existsSync(promptPath)) systemPromptText = fs.readFileSync(promptPath, 'utf8');
+
+        // Tự động inject biến môi trường
+        systemPromptText = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPromptText;
 
         let fullAiResponse = '';
         let isFirstChunk = true;
