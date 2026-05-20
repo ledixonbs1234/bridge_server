@@ -99,6 +99,43 @@
             display: flex; align-items: center; justify-content: center;
         }
         .refresh-btn:hover { background: var(--accent); color: white; transform: rotate(180deg); }
+        .cmd-card { padding: 10px 14px; display: flex; align-items: center; gap: 12px; cursor: default; }
+        .cmd-card .cmd-name { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--accent); background: rgba(59,130,246,0.1); padding: 3px 10px; border-radius: 6px; white-space: nowrap; }
+        .cmd-card .cmd-desc { font-size: 12px; color: var(--muted); }
+        .cmd-card .cmd-alias { font-size: 11px; color: var(--warn); margin-left: auto; white-space: nowrap; }
+        .cat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--warn); font-weight: 600; padding: 14px 14px 6px; }
+        .api-method { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; }
+        .api-method.get { background: rgba(16,185,129,0.15); color: var(--success); }
+        .api-method.post { background: rgba(245,158,11,0.15); color: var(--warn); }
+        .chat-box { display: flex; flex-direction: column; height: 520px; }
+        .chat-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+        .chat-msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; word-wrap: break-word; white-space: pre-wrap; }
+        .chat-msg.user { align-self: flex-end; background: linear-gradient(135deg, #3b82f6, #2563eb); color: #fff; border-bottom-right-radius: 4px; }
+        .chat-msg.bot { align-self: flex-start; background: var(--surface2); color: var(--text); border-bottom-left-radius: 4px; }
+        .chat-msg.err { align-self: flex-start; background: rgba(239,68,68,0.15); color: var(--danger); }
+        .chat-input-row { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); }
+        .chat-input-row input { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; color: var(--text); font-size: 13px; outline: none; font-family: 'Inter', sans-serif; }
+        .chat-input-row input:focus { border-color: var(--accent); }
+        .chat-input-row button { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 10px 20px; font-weight: 600; cursor: pointer; font-size: 13px; transition: background .2s; }
+        .chat-input-row button:hover { background: #2563eb; }
+        .chat-input-row button:disabled { opacity: .5; cursor: not-allowed; }
+        .skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+        .skill-item { padding: 10px 14px; background: var(--surface2); border-radius: 8px; border: 1px solid transparent; transition: border-color .2s; }
+        .skill-item:hover { border-color: var(--accent); }
+        .skill-item .skill-name { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--success); }
+        .skill-item .skill-desc { font-size: 11px; color: var(--muted); margin-top: 4px; }
+        
+        /* Streaming Action Indicator Styles */
+        .chat-msg.thinking-tool {
+            border: 1px dashed var(--accent);
+            background: rgba(59, 130, 246, 0.05) !important;
+            color: var(--accent) !important;
+            animation: borderPulse 1.5s infinite alternate;
+        }
+        @keyframes borderPulse {
+            0% { border-color: rgba(59, 130, 246, 0.3); box-shadow: 0 0 5px rgba(59, 130, 246, 0.1); }
+            100% { border-color: rgba(59, 130, 246, 1); box-shadow: 0 0 15px rgba(59, 130, 246, 0.3); }
+        }
     </style>
 </head>
 <body>
@@ -119,6 +156,8 @@
         <div class="tab active" data-panel="telemetry">📊 Telemetry</div>
         <div class="tab" data-panel="memory">🧠 Memory</div>
         <div class="tab" data-panel="sessions">💾 Sessions</div>
+        <div class="tab" data-panel="commands">📖 Commands</div>
+        <div class="tab" data-panel="terminal">💬 Web Terminal</div>
     </div>
 
     <div class="content">
@@ -165,6 +204,43 @@
             <div class="card">
                 <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">💾 Session History</h3>
                 <table id="sessions-table"><thead><tr><th>#</th><th>File</th><th>Messages</th><th>Goal</th><th>Age</th></tr></thead><tbody></tbody></table>
+            </div>
+        </div>
+
+        <!-- COMMANDS PANEL -->
+        <div class="panel" id="panel-commands">
+            <div class="grid grid-2" style="margin-bottom:20px">
+                <div class="card">
+                    <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">⌨️ CLI Commands</h3>
+                    <div id="cli-commands-list"></div>
+                </div>
+                <div class="card">
+                    <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">🌐 API Endpoints</h3>
+                    <div id="api-endpoints-list"></div>
+                </div>
+            </div>
+            <div class="card">
+                <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">🧩 Registered Skills (<span id="skill-count">0</span>)</h3>
+                <div class="skill-grid" id="skills-list"></div>
+            </div>
+        </div>
+
+        <!-- WEB TERMINAL PANEL -->
+        <div class="panel" id="panel-terminal">
+            <div class="card chat-box">
+                <h3 style="font-size:14px;font-weight:600;padding:12px 16px;border-bottom:1px solid var(--border);margin:0">💬 Web Terminal — <span id="chat-provider" style="color:var(--success)"></span></h3>
+                <div class="chat-messages" id="chat-messages">
+                    <div class="chat-msg bot">Xin chào! Gửi tin nhắn để kiểm tra Bridge Server từ trình duyệt.</div>
+                </div>
+                <div class="chat-input-row">
+                    <input type="text" id="chat-input" placeholder="Nhập tin nhắn..." autocomplete="off">
+                    <button id="chat-send">Gửi ➤</button>
+                </div>
+            </div>
+            <div class="card" style="margin-top:16px">
+                <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">🔍 Quick API Test</h3>
+                <div style="display:flex;gap:8px;flex-wrap:wrap" id="quick-tests"></div>
+                <pre id="api-result" style="margin-top:12px;padding:12px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--muted);max-height:300px;overflow:auto;display:none"></pre>
             </div>
         </div>
     </div>
@@ -297,7 +373,186 @@
         </tr>`).join('') || '<tr><td colspan="5" class="empty"><div class="icon">💾</div>Chưa có session</td></tr>';
     }
 
-    async function loadAll() { await Promise.all([loadTelemetry(), loadMemories(), loadSessions()]); }
+    // ===== COMMANDS PANEL =====
+    async function loadCommands() {
+        const r = await fetch(API + '/api/dashboard/commands').then(r => r.json());
+        // CLI Commands
+        const grouped = {};
+        (r.cli||[]).forEach(c => { if(!grouped[c.category]) grouped[c.category]=[];  grouped[c.category].push(c); });
+        const catIcons = { session:'💾', system:'⚙️', config:'🔧', info:'📊' };
+        let cliHtml = '';
+        for (const [cat, cmds] of Object.entries(grouped)) {
+            cliHtml += `<div class="cat-label">${catIcons[cat]||'📌'} ${cat}</div>`;
+            cmds.forEach(c => {
+                cliHtml += `<div class="cmd-card"><span class="cmd-name">${c.cmd}</span><span class="cmd-desc">${c.desc}</span>${c.alias?`<span class="cmd-alias">alias: ${c.alias}</span>`:''}</div>`;
+            });
+        }
+        document.getElementById('cli-commands-list').innerHTML = cliHtml;
+        // API Endpoints
+        document.getElementById('api-endpoints-list').innerHTML = (r.api||[]).map(a => `<div class="cmd-card"><span class="api-method ${a.method.toLowerCase()}">${a.method}</span><span class="cmd-name" style="background:rgba(16,185,129,0.08);color:var(--success)">${a.path}</span><span class="cmd-desc">${a.desc}</span></div>`).join('');
+        // Skills
+        document.getElementById('skill-count').textContent = (r.skills||[]).length;
+        document.getElementById('skills-list').innerHTML = (r.skills||[]).map(s => `<div class="skill-item"><div class="skill-name">${s.name}</div><div class="skill-desc">${s.desc}</div></div>`).join('') || '<div class="empty"><div class="icon">🧩</div>Chưa có skill nào</div>';
+        // Provider info for chat
+        if (r.provider) document.getElementById('chat-provider').textContent = r.provider.name || r.provider.active;
+        // Quick test buttons
+        document.getElementById('quick-tests').innerHTML = (r.api||[]).filter(a=>a.method==='GET').map(a=>`<button class="badge blue" style="cursor:pointer;padding:6px 12px;font-size:12px" onclick="quickTest('${a.path}')">${a.method} ${a.path}</button>`).join('');
+    }
+
+    // ===== WEB TERMINAL =====
+    const chatInput = document.getElementById('chat-input');
+    const chatSend = document.getElementById('chat-send');
+    const chatMessages = document.getElementById('chat-messages');
+
+    function appendMsg(text, cls) {
+        const d = document.createElement('div');
+        d.className = 'chat-msg ' + cls;
+        d.textContent = text;
+        chatMessages.appendChild(d);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    async function sendChat() {
+        const msg = chatInput.value.trim();
+        if (!msg) return;
+        appendMsg(msg, 'user');
+        chatInput.value = '';
+        chatSend.disabled = true;
+        chatSend.textContent = '⏳';
+
+        const botMsgDiv = document.createElement('div');
+        botMsgDiv.className = 'chat-msg bot';
+        botMsgDiv.textContent = 'Thinking...';
+        chatMessages.appendChild(botMsgDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        let accumulatedText = "";
+
+        try {
+            const response = await fetch(API + '/api/dashboard/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: msg, stream: true })
+            });
+
+            if (!response.body) {
+                // Fallback nếu trình duyệt không hỗ trợ ReadableStream
+                const r = await response.json();
+                if (r.success) botMsgDiv.textContent = r.response;
+                else {
+                    botMsgDiv.className = 'chat-msg err';
+                    botMsgDiv.textContent = '❌ ' + (r.error || 'Unknown error');
+                }
+                chatSend.disabled = false;
+                chatSend.textContent = 'Gửi ➤';
+                return;
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let buffer = "";
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Giữ lại phần chưa hoàn thành cuối cùng
+
+                for (const line of lines) {
+                    const cleanLine = line.trim();
+                    if (!cleanLine.startsWith('data: ')) continue;
+                    try {
+                        const parsed = JSON.parse(cleanLine.substring(6));
+                        
+                        if (parsed.type === 'action') {
+                            botMsgDiv.className = 'chat-msg bot thinking-tool';
+                            botMsgDiv.innerHTML = `⚡ AI đang kích hoạt Skill: <span style="font-family:'JetBrains Mono',monospace;font-weight:600">${parsed.tool}</span>...`;
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        } 
+                        else if (parsed.type === 'chunk') {
+                            if (botMsgDiv.classList.contains('thinking-tool') || botMsgDiv.textContent === 'Thinking...') {
+                                botMsgDiv.className = 'chat-msg bot';
+                                botMsgDiv.innerHTML = '';
+                            }
+
+                            const chunk = parsed.content;
+                            accumulatedText += chunk;
+
+                            // Xử lý khối suy nghĩ <think> của DeepSeek hoặc các model tương tự
+                            let displayHtml = "";
+                            let remainingText = accumulatedText;
+
+                            if (remainingText.includes('<think>')) {
+                                const parts = remainingText.split('<think>');
+                                const beforeThink = parts[0];
+                                const rest = parts[1];
+
+                                if (rest.includes('</think>')) {
+                                    const subParts = rest.split('</think>');
+                                    const thinkingContent = subParts[0];
+                                    const afterThink = subParts[1];
+                                    
+                                    displayHtml = `<div style="opacity:0.65;font-style:italic;font-size:12px;border-left:2px solid var(--accent);padding-left:8px;margin-bottom:8px;background:rgba(59,130,246,0.03);padding:6px 10px;border-radius:4px">💭 Suy nghĩ: ${thinkingContent}</div>` + afterThink;
+                                } else {
+                                    // Đang trong block suy nghĩ chưa đóng
+                                    displayHtml = `<div style="opacity:0.65;font-style:italic;font-size:12px;border-left:2px solid var(--accent);padding-left:8px;background:rgba(59,130,246,0.03);padding:6px 10px;border-radius:4px">💭 Suy nghĩ: ${rest}...</div>`;
+                                }
+                            } else {
+                                displayHtml = remainingText;
+                            }
+
+                            botMsgDiv.innerHTML = displayHtml;
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        } 
+                        else if (parsed.type === 'done') {
+                            // Khi hoàn thành, render toàn bộ văn bản cuối cùng sạch đẹp
+                            let finalText = parsed.response;
+                            let displayHtml = "";
+                            if (accumulatedText.includes('<think>') && accumulatedText.includes('</think>')) {
+                                const parts = accumulatedText.split('<think>');
+                                const rest = parts[1].split('</think>');
+                                const thinkingContent = rest[0];
+                                displayHtml = `<div style="opacity:0.65;font-style:italic;font-size:12px;border-left:2px solid var(--accent);padding-left:8px;margin-bottom:8px;background:rgba(59,130,246,0.03);padding:6px 10px;border-radius:4px">💭 Suy nghĩ: ${thinkingContent}</div>` + finalText;
+                            } else {
+                                displayHtml = finalText;
+                            }
+                            botMsgDiv.innerHTML = displayHtml;
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        } 
+                        else if (parsed.type === 'error') {
+                            botMsgDiv.className = 'chat-msg err';
+                            botMsgDiv.textContent = '❌ Lỗi: ' + parsed.error;
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                        }
+                    } catch (errParse) {
+                        console.warn("Lỗi parse dòng SSE:", errParse, cleanLine);
+                    }
+                }
+            }
+        } catch(e) { 
+            botMsgDiv.className = 'chat-msg err';
+            botMsgDiv.textContent = '❌ Lỗi kết nối: ' + e.message; 
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        chatSend.disabled = false;
+        chatSend.textContent = 'Gửi ➤';
+    }
+    chatSend.addEventListener('click', sendChat);
+    chatInput.addEventListener('keydown', e => { if(e.key==='Enter') sendChat(); });
+
+    async function quickTest(path) {
+        const el = document.getElementById('api-result');
+        el.style.display = 'block';
+        el.textContent = 'Loading...';
+        try {
+            const r = await fetch(API + path).then(r=>r.json());
+            el.textContent = JSON.stringify(r, null, 2);
+        } catch(e) { el.textContent = 'Error: ' + e.message; }
+    }
+
+    async function loadAll() { await Promise.all([loadTelemetry(), loadMemories(), loadSessions(), loadCommands()]); }
     loadAll();
     setInterval(loadAll, 30000);
     </script>

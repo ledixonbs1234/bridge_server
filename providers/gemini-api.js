@@ -5,7 +5,7 @@
  * Dùng REST API trực tiếp (không qua Chrome Extension).
  */
 
-const BaseProvider = require('./base-provider');
+import BaseProvider from './base-provider.js';
 
 class GeminiAPIProvider extends BaseProvider {
     constructor(config) {

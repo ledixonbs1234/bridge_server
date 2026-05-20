@@ -8,15 +8,15 @@
  * - Function Calling (tool_calls) với ReAct loop tự động
  */
 
-const BaseProvider = require('./base-provider');
+import BaseProvider from './base-provider.js';
 
 class OpenAIProvider extends BaseProvider {
     constructor(config) {
         super(config);
         this.name = config.name || 'OpenAI';
         this.apiKey = config.apiKey;
-        this.model = config.model || 'gpt-4o-mini';
-        this.baseUrl = (config.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');
+        this.model = config.model || 'learn';
+        this.baseUrl = (config.baseUrl || 'http://localhost:20128/v1').replace(/\/$/, '');
         this.maxTokens = config.maxTokens || 4096;
         this.temperature = config.temperature ?? 0.7;
         this.isExtensionBased = false;
@@ -290,4 +290,4 @@ class OpenAIProvider extends BaseProvider {
     }
 }
 
-module.exports = OpenAIProvider;
+export default OpenAIProvider;

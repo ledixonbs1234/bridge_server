@@ -5,7 +5,7 @@
  * Đặc biệt: Claude dùng format `tool_use` thay vì `tool_calls` (khác OpenAI)
  */
 
-const BaseProvider = require('./base-provider');
+import BaseProvider from './base-provider.js';
 
 class ClaudeProvider extends BaseProvider {
     constructor(config) {
@@ -216,4 +216,4 @@ class ClaudeProvider extends BaseProvider {
     }
 }
 
-module.exports = ClaudeProvider;
+export default ClaudeProvider;

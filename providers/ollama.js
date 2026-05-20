@@ -6,7 +6,7 @@
  * Không cần API key.
  */
 
-const BaseProvider = require('./base-provider');
+import BaseProvider from './base-provider.js';
 
 class OllamaProvider extends BaseProvider {
     constructor(config) {
@@ -120,4 +120,4 @@ class OllamaProvider extends BaseProvider {
     }
 }
 
-module.exports = OllamaProvider;
+export default OllamaProvider;

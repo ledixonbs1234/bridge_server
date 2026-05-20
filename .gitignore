@@ -2,6 +2,8 @@
 /profile
 /.agent_memory
 package-lock.json
+/agent_skills
+/.agent
 # Logs
 logs
 *.log

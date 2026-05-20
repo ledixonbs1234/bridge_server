@@ -331,7 +331,7 @@ async function loadProviderConfig(showMenu = false) {
 
             providerConfig.activeProvider = selectedProviderName;
 
-            if (selectedProviderName !== 'gemini-studio' && selectedProviderName !== 'deepseek-web') {
+            if (selectedProviderName !== 'gemini-studio' && selectedProviderName !== 'deepseek-web' && selectedProviderName !== 'openai') {
                 const providerData = providerConfig.providers[selectedProviderName];
                 let modelChoices = [];
 
@@ -636,6 +636,104 @@ app.get('/api/dashboard/memories', (req, res) => {
 app.get('/api/dashboard/sessions', (req, res) => {
     const sessions = listSessions();
     res.json({ sessions, currentGoal: persistentGoal });
+});
+
+// 📋 COMMAND REFERENCE API
+app.get('/api/dashboard/commands', (req, res) => {
+    const cliCommands = [
+        { cmd: '/new', alias: '/clear', desc: 'Xóa lịch sử chat, bắt đầu phiên mới', category: 'session' },
+        { cmd: '/exit', alias: '/quit', desc: 'Thoát ứng dụng', category: 'system' },
+        { cmd: '/model', alias: null, desc: 'Chọn lại AI Provider và Model', category: 'config' },
+        { cmd: '/reset', alias: null, desc: 'Tắt chế độ Yes-To-All, reset bảo mật', category: 'system' },
+        { cmd: '/stats', alias: null, desc: 'Hiển thị bảng thống kê Telemetry & Memory', category: 'info' },
+        { cmd: '/goal <text>', alias: null, desc: 'Khóa cứng mục tiêu cho AI (gõ /goal clear để xóa)', category: 'session' },
+        { cmd: '/sessions', alias: null, desc: 'Liệt kê các phiên chat đã lưu', category: 'session' },
+        { cmd: '/restore', alias: null, desc: 'Khôi phục phiên chat gần nhất', category: 'session' },
+    ];
+    const apiEndpoints = [
+        { method: 'GET', path: '/api/skills', desc: 'Danh sách tất cả Skills (Function Calling)' },
+        { method: 'GET', path: '/api/provider', desc: 'Thông tin Provider đang hoạt động' },
+        { method: 'GET', path: '/api/config', desc: 'Đọc cấu hình config.json' },
+        { method: 'POST', path: '/api/provider/switch', desc: 'Chuyển đổi AI Provider' },
+        { method: 'POST', path: '/v1/chat/completions', desc: 'Gửi tin nhắn cho AI (OpenAI-compatible)' },
+        { method: 'GET', path: '/api/dashboard/telemetry', desc: 'Dữ liệu telemetry' },
+        { method: 'GET', path: '/api/dashboard/memories', desc: 'Dữ liệu bộ nhớ' },
+        { method: 'GET', path: '/api/dashboard/sessions', desc: 'Danh sách phiên chat' },
+    ];
+    const skills = Object.keys(SKILL_REGISTRY).map(k => ({
+        name: k,
+        desc: SKILL_REGISTRY[k].description?.substring(0, 120) || '',
+        hasParams: !!SKILL_REGISTRY[k].parameters
+    }));
+    res.json({
+        cli: cliCommands,
+        api: apiEndpoints,
+        skills,
+        provider: { name: activeProvider?.getDisplayName(), active: providerConfig.activeProvider }
+    });
+});
+
+// 💬 WEB TERMINAL: Chat từ trình duyệt
+app.post('/api/dashboard/chat', async (req, res) => {
+    const { message, stream } = req.body;
+    if (!message) return res.status(400).json({ error: 'Thiếu message' });
+
+    console.log(chalk.magenta(`\n[Web Terminal] 📥 "${message.substring(0, 80)}"${stream ? ' (Stream)' : ''}`));
+
+    if (stream) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+    }
+
+    try {
+        let systemPrompt = "";
+        const promptPath = path.join(__dirname, 'system_prompt.md');
+        if (fs.existsSync(promptPath)) systemPrompt = fs.readFileSync(promptPath, 'utf8');
+
+        // Tự động cung cấp ngữ cảnh hệ thống giống CLI
+        systemPrompt = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPrompt;
+
+        if (persistentGoal) {
+            systemPrompt = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên.\n\n` + systemPrompt;
+        }
+
+        const apiIntent = classifyIntent(message);
+        const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
+
+        const result = await chatWithFailover({
+            messages: [{ role: 'user', content: message }],
+            skillRegistry: filteredSkills,
+            executeSkill: async (funcName, args) => {
+                console.log(chalk.magenta(`[Web Terminal] ⚡ ${funcName}`));
+                if (stream) {
+                    res.write(`data: ${JSON.stringify({ type: 'action', tool: funcName })}\n\n`);
+                }
+                return await executeSkillForProvider(funcName, args);
+            },
+            systemPrompt,
+            maxSteps: 10,
+            onStreamChunk: stream ? (chunk) => {
+                res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
+            } : null
+        });
+
+        const clean = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        if (stream) {
+            res.write(`data: ${JSON.stringify({ type: 'done', response: clean })}\n\n`);
+            res.end();
+        } else {
+            res.json({ success: true, response: clean });
+        }
+    } catch (err) {
+        console.error(chalk.red(`[Web Terminal] ❌ Lỗi xử lý:`), err.message);
+        if (stream) {
+            res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+            res.end();
+        } else {
+            res.status(500).json({ success: false, error: err.message });
+        }
+    }
 });
 
 const activeStreams = new Map();
