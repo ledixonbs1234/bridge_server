@@ -16,6 +16,7 @@ import WorkflowEngine from './workflow_engine.js';
 import db from './database.js';
 import telemetry from './telemetry.js';
 import tracer from './tracer.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -42,6 +43,16 @@ const EXTENSION_PORT = 54321;
 let activeProvider = null;
 let providerConfig = {};
 let persistentGoal = null;
+
+// Quản lý session Web hoạt động và hàng đợi xin cấp quyền
+const activeWebSession = {
+    res: null
+};
+const pendingPermissions = new Map();
+
+// Trình gom log chi tiết cho giao diện Web Chat
+let logBuffer = [];
+const originalConsoleLog = console.log;
 
 // =================================================================
 // 🧭 ADAPTIVE SKILL ROUTER (Phân loại Intent → Lọc Tools)
@@ -168,7 +179,7 @@ function stopHeartbeat() {
 // =================================================================
 // 🔄 PROVIDER FAILOVER (Tự động chuyển provider khi lỗi)
 // =================================================================
-const loadedProviders = {}; // Cache các provider đã khởi tạo
+const loadedProviders = {};
 
 async function getProviderInstance(providerName) {
     if (loadedProviders[providerName]) return loadedProviders[providerName];
@@ -198,7 +209,6 @@ function getFailoverChain() {
     if (providerConfig.failoverChain && Array.isArray(providerConfig.failoverChain)) {
         return providerConfig.failoverChain;
     }
-    // Tự động tạo chain: active provider đầu tiên, sau đó các provider enabled
     const active = providerConfig.activeProvider;
     const others = Object.keys(providerConfig.providers || {})
         .filter(p => p !== active && providerConfig.providers[p].enabled);
@@ -222,7 +232,6 @@ async function chatWithFailover(options) {
             return result;
         } catch (err) {
             lastError = err;
-            // Lỗi do handover không phải là lỗi thực sự — đẩy lên
             if (err.message?.includes('__HANDOVER_TO_ENGINE__')) throw err;
             console.warn(chalk.yellow(`[Failover] ❌ ${provider.getDisplayName()} lỗi: ${err.message}`));
             telemetry.recordToolExecution(`provider:${providerName}`, false, 0, err.message);
@@ -237,7 +246,6 @@ async function chatWithFailover(options) {
 // 🧠 SEMANTIC MEMORY EMBEDDING (Vector Search cho bộ nhớ)
 // =================================================================
 async function embedText(text) {
-    // Sử dụng Gemini Embedding API (miễn phí)
     const geminiConfig = providerConfig.providers?.['gemini-api'];
     if (!geminiConfig?.apiKey) return null;
 
@@ -268,7 +276,7 @@ function cosineSimilarity(a, b) {
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB) || 1);
 }
 
-// Cấu hình Render Markdown cực đẹp cho Terminal
+// Cấu hình Render Markdown
 marked.setOptions({
     renderer: new TerminalRenderer({
         reflowText: true,
@@ -436,11 +444,34 @@ for (const pName of Object.keys(providerConfig.providers || {})) {
 }
 
 // =================================================================
-// 🛡️ HỆ THỐNG BẢO MẬT (Đã thiết kế lại dùng Inquirer)
+// 🛡️ HỆ THỐNG BẢO MẬT (Đã thiết kế lại dùng Inquirer / Web SSE)
 // =================================================================
 global.isAutoApproveAll = false;
 
 global.askPermission = async function (query) {
+    // Làm sạch mã màu ANSI của query gửi lên frontend
+    const cleanQuery = query.replace(/\x1b\[[0-9;]*m/g, '');
+
+    if (activeWebSession && activeWebSession.res) {
+        const permId = 'perm_' + Math.random().toString(36).substring(2, 9);
+        
+        // Trích xuất toàn bộ log chi tiết (như boxen và source code) thu thập được từ bộ đệm
+        const cleanDetails = logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+        logBuffer = []; // Reset bộ đệm sau khi đã đóng gói thành công
+        
+        // Đẩy thông tin đầy đủ kèm theo tệp tin/mã nguồn qua luồng SSE
+        activeWebSession.res.write(`data: ${JSON.stringify({ 
+            type: 'ask_permission', 
+            id: permId, 
+            query: cleanQuery,
+            details: cleanDetails 
+        })}\n\n`);
+        
+        return new Promise((resolve) => {
+            pendingPermissions.set(permId, resolve);
+        });
+    }
+
     try {
         const answer = await input({
             message: query
@@ -453,7 +484,7 @@ global.askPermission = async function (query) {
         }
         return 'n'; // Từ chối nếu gặp lỗi khác
     }
-}
+};
 
 function resetSystem() {
     global.isAutoApproveAll = false;
@@ -466,7 +497,6 @@ function resetSystem() {
 const SKILL_REGISTRY = {};
 
 async function loadSkills() {
-    // Xóa tất cả skill cũ trước khi load lại
     for (const key in SKILL_REGISTRY) {
         delete SKILL_REGISTRY[key];
     }
@@ -557,16 +587,13 @@ fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
             console.log(chalk.cyan(`\n[Plugin] 🔄 Thay đổi được phát hiện ở skill: ${filename}. Đang reload...`));
             await loadSkills();
             
-            // Báo cho AI Studio (nếu đang chạy) reset lại function calling flags
             try {
                 const botModule = await import('./ai_studio_bot.js');
                 if (botModule.default && botModule.default.setupFlags) {
                     botModule.default.setupFlags.functions = false;
                     console.log(chalk.gray(`[Plugin] ⚙️ Đã báo Gemini Studio cài đặt lại Function Calling trên trình duyệt.`));
                 }
-            } catch(e) {
-                // Ignore errors if ai_studio_bot.js is not loaded
-            }
+            } catch(e) {}
         }, 1000);
     }
 });
@@ -575,7 +602,6 @@ fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
 // 🌐 API CHO EXTENSION LÀM VIỆC
 // =================================================================
 app.get('/api/skills', (req, res) => {
-    // 📊 Inject Reliability Score vào description trước khi trả về
     const enrichedRegistry = telemetry.injectReliabilityIntoRegistry(SKILL_REGISTRY);
 
     const declarations = Object.keys(enrichedRegistry).map(key => {
@@ -606,7 +632,7 @@ app.get('/api/system-prompt', (req, res) => {
 });
 
 // =================================================================
-// 📊 DASHBOARD API (Trực quan hóa Telemetry + Memory)
+// 📊 DASHBOARD API (Trực quan hóa Telemetry + Memory + Sessions)
 // =================================================================
 app.use('/dashboard', express.static(path.join(__dirname, 'public')));
 
@@ -637,6 +663,53 @@ app.get('/api/dashboard/memories', (req, res) => {
 app.get('/api/dashboard/sessions', (req, res) => {
     const sessions = listSessions();
     res.json({ sessions, currentGoal: persistentGoal });
+});
+
+// 💾 KHÔI PHỤC SESSION: Trả về nội dung tệp session.jsonl
+app.get('/api/dashboard/sessions/:filename', (req, res) => {
+    const { filename } = req.params;
+    const filePath = path.join(SESSION_DIR, filename);
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ success: false, error: 'Không tìm thấy tệp session yêu cầu.' });
+    }
+    try {
+        const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n');
+        let meta = null;
+        const messages = [];
+        for (const line of lines) {
+            try {
+                const obj = JSON.parse(line);
+                if (obj._type === 'meta') { meta = obj; continue; }
+                messages.push(obj);
+            } catch { /* skip */ }
+        }
+        res.json({ success: true, messages, meta });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// 🎯 GOAL BAR: Cập nhật mục tiêu khóa cứng qua Web UI
+app.post('/api/dashboard/goal', (req, res) => {
+    const { goal } = req.body;
+    persistentGoal = goal;
+    res.json({ success: true, goal });
+});
+
+// 🛡️ PERMISSION RESPOND: Tiếp nhận lựa chọn cấp quyền của User từ Web Chat
+app.post('/api/dashboard/permission/respond', (req, res) => {
+    const { id, response } = req.body;
+    if (!id || !response) {
+        return res.status(400).json({ error: 'Thiếu tham số id hoặc response' });
+    }
+    if (pendingPermissions.has(id)) {
+        const resolve = pendingPermissions.get(id);
+        pendingPermissions.delete(id);
+        resolve(response.toLowerCase().trim());
+        res.json({ success: true });
+    } else {
+        res.status(404).json({ error: 'Phiên yêu cầu cấp quyền không tồn tại hoặc đã hết hạn.' });
+    }
 });
 
 // 🔄 PIPELINE STATE MACHINE API (Real-time FSM status)
@@ -706,6 +779,9 @@ app.get('/api/dashboard/commands', (req, res) => {
         { method: 'GET', path: '/api/dashboard/telemetry', desc: 'Dữ liệu telemetry' },
         { method: 'GET', path: '/api/dashboard/memories', desc: 'Dữ liệu bộ nhớ' },
         { method: 'GET', path: '/api/dashboard/sessions', desc: 'Danh sách phiên chat' },
+        { method: 'GET', path: '/api/dashboard/sessions/:filename', desc: 'Tải nội dung chi tiết của tệp session' },
+        { method: 'POST', path: '/api/dashboard/goal', desc: 'Đặt mục tiêu khóa cứng thông qua Web UI' },
+        { method: 'POST', path: '/api/dashboard/permission/respond', desc: 'Gửi phản hồi cấp quyền từ Web Chat' }
     ];
     const skills = Object.keys(SKILL_REGISTRY).map(k => ({
         name: k,
@@ -720,9 +796,9 @@ app.get('/api/dashboard/commands', (req, res) => {
     });
 });
 
-// 💬 WEB TERMINAL: Chat từ trình duyệt
+// 💬 WEB TERMINAL: Chat từ trình duyệt (Nâng cấp hỗ trợ History, Compaction, Handover)
 app.post('/api/dashboard/chat', async (req, res) => {
-    const { message, stream } = req.body;
+    const { message, stream, history = [] } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
 
     console.log(chalk.magenta(`\n[Web Terminal] 📥 "${message.substring(0, 80)}"${stream ? ' (Stream)' : ''}`));
@@ -731,14 +807,58 @@ app.post('/api/dashboard/chat', async (req, res) => {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
+        activeWebSession.res = res;
+    } else {
+        activeWebSession.res = null;
     }
 
     try {
+        const currentHistory = [...history];
+
+        // Tự động thuật lại câu hỏi
+        const reformulatedText = await reformulateQuery(message);
+        currentHistory.push({ role: 'user', content: reformulatedText });
+
+        // Tự động tóm tắt/nén context khi lịch sử chat quá dài
+        if (currentHistory.length > 15) {
+            console.log(chalk.gray(`\n[Memory] Ngữ cảnh quá dài (${currentHistory.length} tin nhắn), đang tự động nén...`));
+            const messagesToCompress = currentHistory.slice(0, 10);
+            
+            if (activeProvider && activeProvider.chat) {
+                const compPrompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` + 
+                               messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
+                
+                try {
+                    let summary = await activeProvider.chat({
+                        messages: [{ role: 'user', content: compPrompt }],
+                        skillRegistry: {},
+                        executeSkill: async () => {},
+                        systemPrompt: "Bạn là công cụ tóm tắt. Trả về đúng nội dung tóm tắt.",
+                        maxSteps: 1,
+                        isWorker: true,
+                        workerType: 'summary'
+                    });
+                    summary = summary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+                    
+                    currentHistory.splice(0, 10);
+                    currentHistory.unshift({ role: 'system', content: `[Tóm tắt bối cảnh cũ]: ${summary}` });
+                    console.log(chalk.green(`[Memory] Nén ngữ cảnh bằng AI thành công! Số tin nhắn hiện tại: ${currentHistory.length}`));
+                } catch (err) {
+                    console.warn(chalk.yellow(`[Memory] Lỗi khi nén ngữ cảnh: ${err.message}`));
+                    currentHistory.splice(0, 10);
+                }
+            }
+        }
+
+        const lastUserMessage = currentHistory[currentHistory.length - 1].content;
+        const injectedMemory = await recallMemory(message); // Sử dụng tin nhắn gốc để tìm kiếm Hybrid Search hiệu quả nhất
+        const enrichedMessages = JSON.parse(JSON.stringify(currentHistory));
+        if (injectedMemory) enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
+
         let systemPrompt = "";
         const promptPath = path.join(__dirname, 'system_prompt.md');
         if (fs.existsSync(promptPath)) systemPrompt = fs.readFileSync(promptPath, 'utf8');
 
-        // Tự động cung cấp ngữ cảnh hệ thống giống CLI
         systemPrompt = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPrompt;
 
         if (persistentGoal) {
@@ -748,11 +868,17 @@ app.post('/api/dashboard/chat', async (req, res) => {
         const apiIntent = classifyIntent(message);
         const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
 
-        // 🔍 TRACE: Web terminal trace
         const webTraceId = tracer.createTrace(`[Web] ${message.substring(0, 60)}`);
 
+        // Đăng ký cổng log truyền trực tiếp log từ WorkflowEngine lên giao diện Web
+        global.logToWebChat = (text) => {
+            if (stream) {
+                res.write(`data: ${JSON.stringify({ type: 'system', content: text })}\n\n`);
+            }
+        };
+
         const result = await chatWithFailover({
-            messages: [{ role: 'user', content: message }],
+            messages: enrichedMessages,
             skillRegistry: filteredSkills,
             executeSkill: async (funcName, args) => {
                 console.log(chalk.magenta(`[Web Terminal] ⚡ ${funcName}`));
@@ -765,19 +891,42 @@ app.post('/api/dashboard/chat', async (req, res) => {
                 return toolResult;
             },
             systemPrompt,
-            maxSteps: 10,
+            maxSteps: 15,
             onStreamChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
             } : null
         });
 
-        const clean = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         if (webTraceId) tracer.completeTrace(webTraceId, 'completed');
+
+        // BÀN GIAO SANG WORKFLOW ENGINE NẾU CÓ TÍN HIỆU KHỞI TẠO PIPELINE
+        if (result === "__HANDOVER_TO_ENGINE__" || (typeof result === 'string' && result.includes("__HANDOVER_TO_ENGINE__"))) {
+            if (stream) {
+                res.write(`data: ${JSON.stringify({ type: 'system', content: "🔄 Đang khởi tạo và cấu hình Workflow Engine..." })}\n\n`);
+            }
+            const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, message);
+            await engine.run();
+
+            if (stream) {
+                res.write(`data: ${JSON.stringify({ type: 'system', content: "✅ Workflow Engine đã xử lý thành công toàn bộ Pipeline!" })}\n\n`);
+                res.write(`data: ${JSON.stringify({ type: 'done', response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: currentHistory })}\n\n`);
+                res.end();
+            } else {
+                res.json({ success: true, response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: currentHistory });
+            }
+            return;
+        }
+
+        const clean = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        currentHistory.push({ role: 'assistant', content: clean });
+        
+        saveSession(currentHistory, persistentGoal);
+
         if (stream) {
-            res.write(`data: ${JSON.stringify({ type: 'done', response: clean })}\n\n`);
+            res.write(`data: ${JSON.stringify({ type: 'done', response: clean, history: currentHistory })}\n\n`);
             res.end();
         } else {
-            res.json({ success: true, response: clean });
+            res.json({ success: true, response: clean, history: currentHistory });
         }
     } catch (err) {
         console.error(chalk.red(`[Web Terminal] ❌ Lỗi xử lý:`), err.message);
@@ -788,10 +937,521 @@ app.post('/api/dashboard/chat', async (req, res) => {
         } else {
             res.status(500).json({ success: false, error: err.message });
         }
+    } finally {
+        if (stream && activeWebSession.res === res) {
+            activeWebSession.res = null;
+        }
+        global.logToWebChat = null;
     }
 });
 
-const activeStreams = new Map();
+app.get('/api/provider', (req, res) => {
+    res.json({
+        active: providerConfig.activeProvider,
+        name: activeProvider?.getDisplayName(),
+        isExtensionBased: activeProvider?.isExtensionBased || false,
+        available: Object.keys(providerConfig.providers || {})
+    });
+});
+
+app.post('/api/provider/switch', (req, res) => {
+    const { provider } = req.body;
+    if (!provider) return res.status(400).json({ error: 'Thiếu tham số provider' });
+    if (!providerConfig.providers?.[provider]) {
+        return res.status(400).json({ error: `Provider "${provider}" không tồn tại trong config.json` });
+    }
+    providerConfig.activeProvider = provider;
+    const configPath = path.join(__dirname, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
+    loadProviderConfig();
+    res.json({ success: true, message: `Đã chuyển sang provider: ${activeProvider.getDisplayName()}` });
+});
+
+app.get('/api/config', (req, res) => {
+    res.json(providerConfig);
+});
+
+app.post('/api/config', (req, res) => {
+    const { activeProvider: newActive, providers } = req.body;
+
+    if (newActive) providerConfig.activeProvider = newActive;
+    if (providers) {
+        for (const [key, value] of Object.entries(providers)) {
+            if (providerConfig.providers[key]) {
+                providerConfig.providers[key] = { ...providerConfig.providers[key], ...value };
+            }
+        }
+    }
+
+    const configPath = path.join(__dirname, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
+
+    loadProviderConfig();
+    res.json({ success: true, message: 'Cấu hình đã được lưu thành công' });
+});
+
+app.post('/v1/chat/completions', async (req, res) => {
+    const { messages, stream } = req.body;
+    const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
+    const injectedMemory = await recallMemory(lastUserMessage);
+    const taskId = Date.now().toString();
+
+    if (lastUserMessage.trim() === '/clear' || lastUserMessage.trim() === '/new') {
+        if (typeof activeProvider.resetSession === 'function') {
+            activeProvider.resetSession();
+        }
+        const clearMsg = "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";
+        if (stream) {
+            res.setHeader('Content-Type', 'text/event-stream');
+            res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: clearMsg }, finish_reason: "stop" }] })}\n\n`);
+            res.write('data: [DONE]\n\n');
+            res.end();
+        } else {
+            res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: clearMsg } }] });
+        }
+        return;
+    }
+
+    console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()}`);
+
+    const reformulatedMessage = await reformulateQuery(lastUserMessage);
+
+    const enrichedMessages = messages.map(m => {
+        if (m.role === 'user' && m.content === lastUserMessage) {
+            let finalContent = reformulatedMessage;
+            if (injectedMemory) finalContent += injectedMemory;
+            return { ...m, content: finalContent };
+        }
+        return m;
+    });
+
+    let systemPrompt = "";
+    const promptPath = path.join(__dirname, 'system_prompt.md');
+    if (fs.existsSync(promptPath)) {
+        systemPrompt = fs.readFileSync(promptPath, 'utf8');
+    }
+
+    systemPrompt = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPrompt;
+
+    if (persistentGoal) {
+        systemPrompt = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên. Nếu bạn thấy mình đang đi lạc hướng, hãy dừng lại và quay về mục tiêu.\n\n` + systemPrompt;
+    }
+
+    const apiIntent = classifyIntent(lastUserMessage);
+    const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
+    if (apiIntent !== 'complex') console.log(chalk.gray(`[Router] Intent: ${apiIntent} → ${Object.keys(filteredSkills).length} tools`));
+
+    if (stream) {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+    }
+
+    let spinner = null;
+    if (!stream) {
+        spinner = ora({
+            text: chalk.yellow(`AI đang phân tích và suy nghĩ...`),
+            spinner: 'dots'
+        }).start();
+    }
+
+    try {
+        const resultText = await chatWithFailover({
+            messages: enrichedMessages,
+            skillRegistry: filteredSkills,
+            executeSkill: async (funcName, args) => {
+                if (spinner) spinner.stop();
+                tickHeartbeat();
+                const res = await executeSkillForProvider(funcName, args);
+                tickHeartbeat();
+                if (spinner) spinner.start(chalk.yellow(`Đang xử lý kết quả của ${funcName}...`));
+                return res;
+            },
+            systemPrompt: systemPrompt,
+            maxSteps: 15,
+            onStreamChunk: stream ? (chunk) => {
+                tickHeartbeat();
+                res.write(`data: ${JSON.stringify({
+                    id: "chatcmpl-" + taskId,
+                    object: "chat.completion.chunk",
+                    choices: [{ delta: { content: chunk }, finish_reason: null }]
+                })}\n\n`);
+            } : null
+        });
+
+        if (spinner) spinner.succeed(chalk.green('AI đã trả lời xong!'));
+
+        if (stream) {
+            res.write('data: [DONE]\n\n');
+            res.end();
+        } else {
+            res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
+        }
+    } catch (error) {
+        if (spinner) spinner.stop();
+
+        if (error.message.includes("__HANDOVER_TO_ENGINE__")) {
+             if (stream) {
+                 res.write('data: [DONE]\n\n');
+                 res.end();
+             } else {
+                 res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: "Đã chuyển giao cho Workflow Engine." } }] });
+             }
+             return;
+        }
+        console.error(chalk.red(`[Node] ❌ Lỗi xử lý:`), error.message);
+        if (stream) {
+            res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[LỖI: ${error.message}]` }, finish_reason: "stop" }] })}\n\n`);
+            res.write('data: [DONE]\n\n');
+            res.end();
+        } else {
+            res.status(500).json({ error: { message: error.message } });
+        }
+    }
+});
+
+app.listen(EXTENSION_PORT, () => {
+    console.log(`\n🚀 Bridge Server Agent đang chạy ở http://localhost:${EXTENSION_PORT}`);
+    console.log(`=================================================`);
+    console.log(`🔌 Active Provider: ${chalk.green(activeProvider.getDisplayName())}`);
+
+    if (activeProvider.model) {
+        console.log(`🧠 Model Đang Dùng: ${chalk.cyan(activeProvider.model)}`);
+    }
+
+    console.log("⌨️ MẸO: Truy cập http://localhost:54321/dashboard để dùng Web Chat!");
+    console.log(`=================================================\n`);
+});
+
+// =================================================================
+// 💬 TERMINAL UI - PHASE 4.1 (OPENCODE + MARKDOWN HOT-SWAP)
+// =================================================================
+const cliChatHistory = [];
+
+const OC_BLUE = chalk.hex('#3B82F6');
+const OC_THINK = chalk.hex('#D97706');
+const OC_TEXT = chalk.white;
+const OC_MUTED = chalk.hex('#6B7280');
+
+async function startTerminalChatLoop() {
+    console.clear();
+    console.log(OC_MUTED(`\n  B R I D G E  S E R V E R\n`));
+
+    const lastSession = getLatestSession();
+    if (lastSession && lastSession.messages.length > 0) {
+        console.log(chalk.cyan(`  📋 Phát hiện phiên chat cũ: ${lastSession.file}`));
+        console.log(chalk.gray(`     ${lastSession.messages.length} tin nhắn — ${lastSession.ageMinutes} phút trước`));
+        if (lastSession.meta?.goal) console.log(chalk.green(`     🎯 Goal: "${lastSession.meta.goal}"`));
+        try {
+            const answer = await select({
+                message: '  Bạn muốn tiếp tục phiên cũ không?',
+                choices: [
+                    { name: '🔄 Tiếp tục phiên cũ', value: 'restore' },
+                    { name: '✨ Bắt đầu phiên mới', value: 'new' }
+                ]
+            });
+            if (answer === 'restore') {
+                cliChatHistory.push(...lastSession.messages);
+                if (lastSession.meta?.goal) persistentGoal = lastSession.meta.goal;
+                console.log(chalk.green(`\n  ✅ Đã khôi phục! Gõ tiếp để tiếp tục...\n`));
+            } else {
+                console.log(chalk.gray(`\n  Bắt đầu phiên mới...\n`));
+            }
+        } catch {
+            console.log(chalk.gray(`\n  Bắt đầu phiên mới...\n`));
+        }
+    }
+
+    while (true) {
+        console.log(chalk.gray('  Ask anything...'));
+
+        let userText;
+        try {
+            userText = await input({
+                message: OC_BLUE('▌ '),
+                theme: { prefix: '' }
+            });
+        } catch (error) {
+            if (error.name === 'ExitPromptError' || (error.message && error.message.includes('force closed'))) {
+                console.log(OC_MUTED('\nGoodbye! 👋\n'));
+                process.exit(0);
+            }
+            continue;
+        }
+
+        const text = userText.trim();
+        if (!text) continue;
+
+        if (text === '/exit' || text === '/quit') process.exit(0);
+        if (text === '/clear' || text === '/new') {
+            saveSession(cliChatHistory, persistentGoal);
+            cliChatHistory.length = 0;
+            if (typeof activeProvider.resetSession === 'function') activeProvider.resetSession();
+            resetSessionLog();
+            persistentGoal = null;
+            console.clear();
+            continue;
+        }
+        if (text === '/model') { await loadProviderConfig(true); console.clear(); continue; }
+        if (text === '/reset') { resetSystem(); continue; }
+        if (text === '/stats') {
+            telemetry.printStatsTable();
+            telemetry.printTopMemories();
+            continue;
+        }
+
+        if (text.startsWith('/goal')) {
+            const goalText = text.replace('/goal', '').trim();
+            if (!goalText || goalText === 'clear') {
+                persistentGoal = null;
+                console.log(chalk.yellow('\n[Goal] 🎯 Đã xóa mục tiêu. AI sẽ hoạt động tự do.\n'));
+            } else {
+                persistentGoal = goalText;
+                console.log(chalk.green(`\n[Goal] 🎯 Mục tiêu khóa cứng: "${persistentGoal}"\n`));
+                console.log(chalk.gray('  AI sẽ nhận mục tiêu này trong MỌI lượt chat cho đến khi bạn gõ /goal clear'));
+            }
+            continue;
+        }
+
+        if (text === '/sessions') {
+            const sessions = listSessions();
+            if (sessions.length === 0) {
+                console.log(chalk.yellow('\n  Chưa có phiên chat nào được lưu.\n'));
+            } else {
+                console.log(chalk.cyan('\n  📋 DANH SÁCH PHIÊN CHAT GẦN ĐÂY:'));
+                console.log(chalk.gray('  ─────────────────────────────────────────'));
+                sessions.forEach((s, i) => {
+                    const goalStr = s.goal !== '(không có)' ? chalk.green(` 🎯 ${s.goal}`) : '';
+                    console.log(`  ${chalk.white(i + 1)}. ${chalk.cyan(s.file)} — ${s.messages} tin nhắn — ${chalk.gray(s.age + ' phút trước')}${goalStr}`);
+                });
+                console.log(chalk.gray('\n  Gõ /restore để khôi phục phiên gần nhất\n'));
+            }
+            continue;
+        }
+        if (text === '/restore') {
+            const session = getLatestSession();
+            if (!session) {
+                console.log(chalk.yellow('\n  Không tìm thấy phiên chat gần đây (< 2 giờ).\n'));
+            } else {
+                cliChatHistory.length = 0;
+                cliChatHistory.push(...session.messages);
+                if (session.meta?.goal) persistentGoal = session.meta.goal;
+                console.log(chalk.green(`\n  ✅ Đã khôi phục phiên "${session.file}" (${session.messages.length} tin nhắn, ${session.ageMinutes} phút trước)`));
+                if (persistentGoal) console.log(chalk.green(`  🎯 Goal: "${persistentGoal}"`));
+                console.log('');
+            }
+            continue;
+        }
+
+        process.stdout.moveCursor(0, -1);
+        process.stdout.clearLine(1);
+        console.log(`\n${OC_BLUE('▌')} ${chalk.bold.white(text)}\n`);
+
+        resetSessionLog();
+
+        const reformulatedText = await reformulateQuery(text);
+        cliChatHistory.push({ role: 'user', content: reformulatedText });
+
+        if (cliChatHistory.length > 15) {
+            console.log(chalk.gray(`\n[Memory] Ngữ cảnh quá dài (${cliChatHistory.length} tin nhắn), đang tự động nén...`));
+            const messagesToCompress = cliChatHistory.slice(0, 10);
+            
+            if (activeProvider) {
+                const prompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` + 
+                               messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
+                
+                try {
+                    let summary = await activeProvider.chat({
+                        messages: [{ role: 'user', content: prompt }],
+                        skillRegistry: {},
+                        executeSkill: async () => {},
+                        systemPrompt: "Bạn là công cụ tóm tắt. Trả về đúng nội dung tóm tắt.",
+                        maxSteps: 1,
+                        isWorker: true,
+                        workerType: 'summary'
+                    });
+                    summary = summary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+                    
+                    cliChatHistory.splice(0, 10);
+                    cliChatHistory.unshift({ role: 'system', content: `[Tóm tắt bối cảnh cũ]: ${summary}` });
+                    console.log(chalk.green(`[Memory] Nén ngữ cảnh bằng AI thành công! Số tin nhắn hiện tại: ${cliChatHistory.length}`));
+                } catch (err) {
+                    console.warn(chalk.yellow(`[Memory] Lỗi khi nén ngữ cảnh: ${err.message}`));
+                    cliChatHistory.splice(0, 10);
+                }
+            }
+        }
+
+        const injectedMemory = await recallMemory(text);
+        const enrichedMessages = JSON.parse(JSON.stringify(cliChatHistory));
+        if (injectedMemory) enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
+
+        let systemPromptText = "";
+        const promptPath = path.join(__dirname, 'system_prompt.md');
+        if (fs.existsSync(promptPath)) systemPromptText = fs.readFileSync(promptPath, 'utf8');
+
+        systemPromptText = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPromptText;
+
+        if (persistentGoal) {
+            systemPromptText = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên. Nếu bạn thấy mình đang đi lạc hướng, hãy dừng lại và quay về mục tiêu.\n\n` + systemPromptText;
+        }
+
+        const cliIntent = classifyIntent(text);
+        const cliFilteredSkills = filterSkillsByIntent(cliIntent, SKILL_REGISTRY);
+        if (cliIntent !== 'complex') {
+            console.log(chalk.gray(`[Router] 🧭 Intent: ${cliIntent} → ${Object.keys(cliFilteredSkills).length}/${Object.keys(SKILL_REGISTRY).length} tools`));
+        }
+
+        let fullAiResponse = '';
+        let isFirstChunk = true;
+        const startTime = Date.now();
+
+        const chatTraceId = tracer.createTrace(text.substring(0, 80));
+
+        let spinner = ora({ text: OC_MUTED.italic('Starting build...'), spinner: 'dots' }).start();
+        let isThinkingMode = false;
+
+        let printedRows = 0;
+        let currentLineLen = 0;
+        const terminalCols = process.stdout.columns || 80;
+        const terminalRowsMax = process.stdout.rows || 24;
+
+        startHeartbeat();
+
+        try {
+            const chatResult = await chatWithFailover({
+                messages: enrichedMessages,
+                skillRegistry: cliFilteredSkills,
+                executeSkill: async (funcName, args) => {
+                    if (!isFirstChunk) console.log('\n');
+                    spinner.stop();
+                    tickHeartbeat();
+                    console.log(`\n${OC_THINK.italic('Action:')} ${OC_MUTED.italic(`Executing ${funcName}...`)}\n`);
+                    const toolSpanId = chatTraceId ? tracer.startSpan(chatTraceId, funcName, 'tool', null, args) : null;
+                    const res = await executeSkillForProvider(funcName, args);
+                    if (toolSpanId) {
+                        if (res === "__HANDOVER_TO_ENGINE__") {
+                            tracer.endSpan(toolSpanId, 'completed', { handover: true });
+                        } else {
+                            try {
+                                const parsed = JSON.parse(res);
+                                tracer.endSpan(toolSpanId, parsed.status === 'success' ? 'completed' : 'failed', { status: parsed.status }, parsed.error_message || null);
+                            } catch { tracer.endSpan(toolSpanId, 'completed', { text: String(res).substring(0, 300) }); }
+                        }
+                    }
+                    tickHeartbeat();
+                    if (res !== "__HANDOVER_TO_ENGINE__") {
+                        spinner = ora({ text: OC_MUTED.italic(`Evaluating output...`), spinner: 'dots' }).start();
+                    }
+                    isFirstChunk = true;
+                    return res;
+                },
+                systemPrompt: systemPromptText,
+                maxSteps: 15,
+                onStreamChunk: (chunk) => {
+                    tickHeartbeat();
+                    if (isFirstChunk) { spinner.stop(); isFirstChunk = false; }
+                    fullAiResponse += chunk;
+
+                    if (chunk.includes('<think>')) { isThinkingMode = true; process.stdout.write(OC_THINK.italic('Thinking:\n')); return; }
+                    if (chunk.includes('</think>')) { isThinkingMode = false; process.stdout.write('\n\n'); return; }
+
+                    const textToPrint = isThinkingMode ? OC_MUTED.italic(chunk) : OC_TEXT(chunk);
+                    process.stdout.write(textToPrint);
+
+                    const rawChunk = chunk.replace(/\x1b\[[0-9;]*m/g, '');
+                    for (let i = 0; i < rawChunk.length; i++) {
+                        if (rawChunk[i] === '\n') {
+                            printedRows++;
+                            currentLineLen = 0;
+                        } else {
+                            currentLineLen++;
+                            if (currentLineLen >= terminalCols) { printedRows++; currentLineLen = 0; }
+                        }
+                    }
+                }
+            });
+
+            if (isFirstChunk) spinner.stop();
+            stopHeartbeat();
+            if (chatTraceId) tracer.completeTrace(chatTraceId, 'completed');
+            if (chatResult === "__HANDOVER_TO_ENGINE__" || fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
+                const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text);
+                await engine.run();
+                
+                console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal."));
+                continue;
+            }
+            const cleanResponseForHistory = fullAiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+            let polishedMarkdown = cleanResponseForHistory
+                .replace(/^\s*\*\s/gm, '- ')
+                .replace(/```[a-z]*\n/g, '\n');
+
+            const printBeautiful = (text) => {
+                let parsedText = marked.parse(text).trim();
+                parsedText = parsedText.replace(/^\s*-\s/gm, chalk.cyan('  • '));
+                console.log(parsedText);
+            };
+
+            if (printedRows > 0 && printedRows < terminalRowsMax - 3) {
+                process.stdout.write(`\r\x1b[${printedRows}A\x1b[0J`);
+                printBeautiful(polishedMarkdown);
+            } else if (printedRows > 0) {
+                console.log(OC_MUTED(`\n\n--- Formatting Markdown ---\n`));
+                printBeautiful(polishedMarkdown);
+            } else if (polishedMarkdown) {
+                printBeautiful(polishedMarkdown);
+            }
+
+            if (fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
+                const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text);
+                await engine.run();
+                console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal."));
+                continue; 
+            }
+
+            const endTime = Date.now();
+            const duration = ((endTime - startTime) / 1000).toFixed(1);
+            const modelName = activeProvider.model || 'Agent';
+
+            console.log(`\n\n${OC_BLUE('■')}  ${OC_TEXT('Build')} · ${OC_MUTED(modelName + ' · ' + duration + 's')}\n`);
+
+            cliChatHistory.push({ role: 'assistant', content: cleanResponseForHistory });
+
+            saveSession(cliChatHistory, persistentGoal);
+
+            if (currentSessionLog.some(entry => entry.success === false)) {
+                runCriticAgent([...currentSessionLog]).catch(err => {
+                    console.warn(chalk.yellow(`[Critic Agent] Lỗi ngầm: ${err.message}`));
+                });
+            }
+
+        } catch (error) {
+            spinner.stop();
+            stopHeartbeat();
+            if (chatTraceId) tracer.completeTrace(chatTraceId, 'failed');
+            
+            if (error.message.includes("__HANDOVER_TO_ENGINE__")) {
+                return;
+            }
+
+            console.error(chalk.red(`\n❌ Error: ${error.message}\n`));
+            cliChatHistory.pop();
+        }
+    }
+}
+
+// 🎯 CLI OPT-IN CHECK: Chỉ mở Terminal loop nếu chạy server bằng flag --cli
+const isCliMode = process.argv.includes('--cli');
+
+if (isCliMode) {
+    setTimeout(() => {
+        startTerminalChatLoop();
+    }, 500);
+} else {
+    console.log(chalk.cyan('💡 Muốn mở Terminal Chat trực tiếp? Hãy chạy lại lệnh kèm tham số: node server.js --cli\n'));
+}
 
 // =================================================================
 // 📊 SESSION LOG (Cho Critic Agent đọc sau mỗi phiên chat)
@@ -804,7 +1464,6 @@ function resetSessionLog() {
 
 // =================================================================
 // 🧠 CRITIC AGENT (Hard Loop — Tự động phân tích lỗi & ghi bài học)
-// Lấy cảm hứng từ Hermes Agent 3.0 "Quality Monitor"
 // =================================================================
 async function runCriticAgent(sessionLog) {
     if (!activeProvider || !activeProvider.chat) return;
@@ -833,12 +1492,12 @@ Chỉ trả lời cực ngắn gọn (1-2 câu).`;
 
     try {
         const criticSkills = {};
-        if (SKILL_REGISTRY['memorize_lesson']) criticSkills['memorize_lesson'] = SKILL_REGISTRY['memorize_lesson'];
+        if (SKILL_REGISTRY['memorize_lesson']) skills['memorize_lesson'] = SKILL_REGISTRY['memorize_lesson'];
         if (SKILL_REGISTRY['rate_memory']) criticSkills['rate_memory'] = SKILL_REGISTRY['rate_memory'];
 
         const response = await activeProvider.chat({
             messages: [{ role: 'user', content: criticPrompt }],
-            skillRegistry: criticSkills,
+            skillRegistry: skills,
             executeSkill: async (funcName, args) => {
                 console.log(chalk.magenta(`[Critic Agent] 💡 Tự động gọi: ${funcName}`));
                 return await executeSkillForProvider(funcName, args);
@@ -858,7 +1517,6 @@ Chỉ trả lời cực ngắn gọn (1-2 câu).`;
     }
 }
 
-// Thay đổi hàm executeSkillForProvider (có middleware Telemetry):
 async function executeSkillForProvider(functionName, funcArgs) {
     const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines', 'get_os_context'];
     if (!silentFunctions.includes(functionName) && !functionName.startsWith('workflow_')) {
@@ -873,19 +1531,28 @@ async function executeSkillForProvider(functionName, funcArgs) {
 
     const startTime = Date.now();
 
+    // Khởi tạo đánh chặn console.log để thu thập thông tin chi tiết (cho Web Chat)
+    const isWebSessionActive = activeWebSession && activeWebSession.res;
+    if (isWebSessionActive) {
+        logBuffer = [];
+        console.log = (...args) => {
+            originalConsoleLog(...args);
+            const str = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
+            logBuffer.push(str);
+        };
+    }
+
     try {
         const result = await skill.handler(funcArgs);
         const durationMs = Date.now() - startTime;
 
-        // 📊 GHI TELEMETRY: Thành công
         telemetry.recordToolExecution(functionName, true, durationMs);
 
-        // 📝 GHI SESSION LOG
         currentSessionLog.push({
             tool: functionName, args: funcArgs, success: true, durationMs, timestamp: new Date().toISOString()
         });
 
-       if (functionName === 'create_pipeline_plan') {
+        if (functionName === 'create_pipeline_plan') {
             console.log(chalk.blue(`\n[Node] ⚙️ Kế hoạch đã được duyệt. Đang đóng luồng Chat để chuyển giao cho Engine...`));
             return "__HANDOVER_TO_ENGINE__";
         }
@@ -894,10 +1561,8 @@ async function executeSkillForProvider(functionName, funcArgs) {
     } catch (error) {
         const durationMs = Date.now() - startTime;
 
-        // 📊 GHI TELEMETRY: Thất bại
         telemetry.recordToolExecution(functionName, false, durationMs, error.message);
 
-        // 📝 GHI SESSION LOG
         currentSessionLog.push({
             tool: functionName, args: funcArgs, success: false, durationMs,
             errorMessage: error.message, timestamp: new Date().toISOString()
@@ -908,8 +1573,13 @@ async function executeSkillForProvider(functionName, funcArgs) {
         if (error.message.includes("không tồn tại")) suggestion = "Hãy dùng list_directory để kiểm tra...";
         if (error.message.includes("PERMISSION_DENIED")) suggestion = "Người dùng đã từ chối lệnh này.";
         return JSON.stringify({ status: "error", error_message: error.message, suggestion });
+    } finally {
+        if (isWebSessionActive) {
+            console.log = originalConsoleLog; // Khôi phục lại console.log gốc của tiến trình
+        }
     }
 }
+
 async function recallMemory(lastUserMessage, allMessagesContext = "") {
     const memoryDir = path.join(__dirname, '.agent_memory');
     if (!fs.existsSync(memoryDir)) return "";
@@ -969,7 +1639,6 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
             console.warn("[Memory] Trích xuất từ khóa AI thất bại, dùng fallback.", apiErr.message);
         }
 
-        // Fallback
         if (!searchTerms) {
             const words = (lastUserMessage + " " + allMessagesContext)
                 .replace(/[^\p{L}\p{N}]/gu, ' ')
@@ -982,10 +1651,8 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
             }
         }
 
-        // 🧠 HYBRID SEARCH: Vector Embedding + FTS5 Keyword
         let allResults = [];
 
-        // --- PHASE 1: Semantic Vector Search (nếu có Gemini API key) ---
         try {
             const queryEmbedding = await embedText(lastUserMessage);
             if (queryEmbedding) {
@@ -1012,11 +1679,8 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
                     console.log(chalk.gray(`[Memory] 🧠 Semantic Search: ${scored.length} kết quả (top similarity: ${scored[0].similarity.toFixed(3)})`));
                 }
             }
-        } catch (embedErr) {
-            // Ignore embedding errors, fall through to FTS5
-        }
+        } catch (embedErr) {}
 
-        // --- PHASE 2: FTS5 Keyword Search (luôn chạy) ---
         if (searchTerms) {
             const stmt = db.prepare(`
                 SELECT m.id, m.situation, m.solution, m.trust_score, m.use_count
@@ -1031,7 +1695,6 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
             allResults.push(...ftsResults);
         }
 
-        // --- MERGE & DEDUPLICATE ---
         const seenIds = new Set();
         const uniqueResults = [];
         for (const r of allResults) {
@@ -1059,9 +1722,6 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
     return hasMemory ? injectedContext : "";
 }
 
-// =================================================================
-// 🧠 TỰ ĐỘNG THUẬT LẠI CÂU HỎI (QUERY REFORMULATION)
-// =================================================================
 async function reformulateQuery(userMessage) {
     if (!activeProvider || !activeProvider.chat) return userMessage;
     
@@ -1090,531 +1750,5 @@ async function reformulateQuery(userMessage) {
     } catch (e) {
         console.warn(chalk.yellow(`[Reformulator] Lỗi khi thuật lại câu hỏi: ${e.message}`));
     }
-    return userMessage; // Fallback
+    return userMessage;
 }
-
-app.get('/api/provider', (req, res) => {
-    res.json({
-        active: providerConfig.activeProvider,
-        name: activeProvider?.getDisplayName(),
-        isExtensionBased: activeProvider?.isExtensionBased || false,
-        available: Object.keys(providerConfig.providers || {})
-    });
-});
-
-app.post('/api/provider/switch', (req, res) => {
-    const { provider } = req.body;
-    if (!provider) return res.status(400).json({ error: 'Thiếu tham số provider' });
-    if (!providerConfig.providers?.[provider]) {
-        return res.status(400).json({ error: `Provider "${provider}" không tồn tại trong config.json` });
-    }
-    providerConfig.activeProvider = provider;
-    const configPath = path.join(__dirname, 'config.json');
-    fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
-    loadProviderConfig();
-    res.json({ success: true, message: `Đã chuyển sang provider: ${activeProvider.getDisplayName()}` });
-});
-
-app.get('/api/config', (req, res) => {
-    res.json(providerConfig);
-});
-
-app.post('/api/config', (req, res) => {
-    const { activeProvider: newActive, providers } = req.body;
-
-    if (newActive) providerConfig.activeProvider = newActive;
-    if (providers) {
-        for (const [key, value] of Object.entries(providers)) {
-            if (providerConfig.providers[key]) {
-                providerConfig.providers[key] = { ...providerConfig.providers[key], ...value };
-            }
-        }
-    }
-
-    const configPath = path.join(__dirname, 'config.json');
-    fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
-
-    loadProviderConfig();
-    res.json({ success: true, message: 'Cấu hình đã được lưu thành công' });
-});
-
-app.post('/v1/chat/completions', async (req, res) => {
-    const { messages, stream } = req.body;
-    const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
-    const injectedMemory = await recallMemory(lastUserMessage);
-    const taskId = Date.now().toString();
-
-    // ---- THÊM ĐOẠN XỬ LÝ LỆNH /clear HOẶC /new TỪ EXTENSION ----
-    if (lastUserMessage.trim() === '/clear' || lastUserMessage.trim() === '/new') {
-        if (typeof activeProvider.resetSession === 'function') {
-            activeProvider.resetSession();
-        }
-        const clearMsg = "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";
-        if (stream) {
-            res.setHeader('Content-Type', 'text/event-stream');
-            res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: clearMsg }, finish_reason: "stop" }] })}\n\n`);
-            res.write('data: [DONE]\n\n');
-            res.end();
-        } else {
-            res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: clearMsg } }] });
-        }
-        return; // Dừng tại đây, không gọi AI
-    }
-
-    console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()}`);
-
-    // Query Reformulation
-    const reformulatedMessage = await reformulateQuery(lastUserMessage);
-
-    const enrichedMessages = messages.map(m => {
-        if (m.role === 'user' && m.content === lastUserMessage) {
-            let finalContent = reformulatedMessage;
-            if (injectedMemory) finalContent += injectedMemory;
-            return { ...m, content: finalContent };
-        }
-        return m;
-    });
-
-    let systemPrompt = "";
-    const promptPath = path.join(__dirname, 'system_prompt.md');
-    if (fs.existsSync(promptPath)) {
-        systemPrompt = fs.readFileSync(promptPath, 'utf8');
-    }
-
-    // Tự động inject biến môi trường cơ bản vào system prompt
-    systemPrompt = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPrompt;
-
-    // 🎯 PERSISTENT GOAL: Inject mục tiêu khóa cứng (nếu có)
-    if (persistentGoal) {
-        systemPrompt = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên. Nếu bạn thấy mình đang đi lạc hướng, hãy dừng lại và quay về mục tiêu.\n\n` + systemPrompt;
-    }
-
-    // 🧭 ADAPTIVE SKILL ROUTER: Chỉ cấp tools cần thiết
-    const apiIntent = classifyIntent(lastUserMessage);
-    const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
-    if (apiIntent !== 'complex') console.log(chalk.gray(`[Router] Intent: ${apiIntent} → ${Object.keys(filteredSkills).length} tools`));
-
-    if (stream) {
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-    }
-
-    let spinner = null;
-    if (!stream) {
-        spinner = ora({
-            text: chalk.yellow(`AI đang phân tích và suy nghĩ...`),
-            spinner: 'dots'
-        }).start();
-    }
-
-    try {
-            const resultText = await chatWithFailover({
-                messages: enrichedMessages,
-                skillRegistry: filteredSkills,
-                executeSkill: async (funcName, args) => {
-                    if (spinner) spinner.stop();
-                    tickHeartbeat();
-                    const res = await executeSkillForProvider(funcName, args);
-                    tickHeartbeat();
-                    if (spinner) spinner.start(chalk.yellow(`Đang xử lý kết quả của ${funcName}...`));
-                    return res;
-                },
-                systemPrompt: systemPrompt,
-                maxSteps: 15,
-                onStreamChunk: stream ? (chunk) => {
-                    tickHeartbeat();
-                    res.write(`data: ${JSON.stringify({
-                        id: "chatcmpl-" + taskId,
-                        object: "chat.completion.chunk",
-                        choices: [{ delta: { content: chunk }, finish_reason: null }]
-                    })}\n\n`);
-                } : null
-            });
-
-        if (spinner) spinner.succeed(chalk.green('AI đã trả lời xong!'));
-
-        if (stream) {
-            res.write('data: [DONE]\n\n');
-            res.end();
-        } else {
-            res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
-        }
-    } catch (error) {
-        if (spinner) spinner.stop(); // Stop thay vì fail
-
-        if (error.message.includes("__HANDOVER_TO_ENGINE__")) {
-             if (stream) {
-                 res.write('data: [DONE]\n\n');
-                 res.end();
-             } else {
-                 res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: "Đã chuyển giao cho Workflow Engine." } }] });
-             }
-             return;
-        }
-        console.error(chalk.red(`[Node] ❌ Lỗi xử lý:`), error.message);
-        if (stream) {
-            res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[LỖI: ${error.message}]` }, finish_reason: "stop" }] })}\n\n`);
-            res.write('data: [DONE]\n\n');
-            res.end();
-        } else {
-            res.status(500).json({ error: { message: error.message } });
-        }
-    }
-});
-
-app.listen(EXTENSION_PORT, () => {
-    console.log(`\n🚀 Bridge Server Agent đang chạy ở http://localhost:${EXTENSION_PORT}`);
-    console.log(`=================================================`);
-    console.log(`🔌 Active Provider: ${chalk.green(activeProvider.getDisplayName())}`);
-
-    if (activeProvider.model) {
-        console.log(`🧠 Model Đang Dùng: ${chalk.cyan(activeProvider.model)}`);
-    }
-
-    console.log("⌨️ MẸO: Gõ lệnh trực tiếp vào ô chat để ra lệnh cho AI");
-    console.log(`=================================================\n`);
-});
-
-// =================================================================
-// 💬 TERMINAL UI - PHASE 4.1 (OPENCODE + MARKDOWN HOT-SWAP)
-// =================================================================
-const cliChatHistory = [];
-
-const OC_BLUE = chalk.hex('#3B82F6');
-const OC_THINK = chalk.hex('#D97706');
-const OC_TEXT = chalk.white;
-const OC_MUTED = chalk.hex('#6B7280');
-
-async function startTerminalChatLoop() {
-    console.clear();
-    console.log(OC_MUTED(`\n  B R I D G E  S E R V E R\n`));
-
-    // 💾 SESSION RESTORE: Kiểm tra phiên chat cũ
-    const lastSession = getLatestSession();
-    if (lastSession && lastSession.messages.length > 0) {
-        console.log(chalk.cyan(`  📋 Phát hiện phiên chat cũ: ${lastSession.file}`));
-        console.log(chalk.gray(`     ${lastSession.messages.length} tin nhắn — ${lastSession.ageMinutes} phút trước`));
-        if (lastSession.meta?.goal) console.log(chalk.green(`     🎯 Goal: "${lastSession.meta.goal}"`));
-        try {
-            const answer = await select({
-                message: '  Bạn muốn tiếp tục phiên cũ không?',
-                choices: [
-                    { name: '🔄 Tiếp tục phiên cũ', value: 'restore' },
-                    { name: '✨ Bắt đầu phiên mới', value: 'new' }
-                ]
-            });
-            if (answer === 'restore') {
-                cliChatHistory.push(...lastSession.messages);
-                if (lastSession.meta?.goal) persistentGoal = lastSession.meta.goal;
-                console.log(chalk.green(`\n  ✅ Đã khôi phục! Gõ tiếp để tiếp tục...\n`));
-            } else {
-                console.log(chalk.gray(`\n  Bắt đầu phiên mới...\n`));
-            }
-        } catch {
-            console.log(chalk.gray(`\n  Bắt đầu phiên mới...\n`));
-        }
-    }
-
-    while (true) {
-        console.log(chalk.gray('  Ask anything...'));
-
-        let userText;
-        try {
-            userText = await input({
-                message: OC_BLUE('▌ '),
-                theme: { prefix: '' }
-            });
-        } catch (error) {
-            if (error.name === 'ExitPromptError' || (error.message && error.message.includes('force closed'))) {
-                console.log(OC_MUTED('\nGoodbye! 👋\n'));
-                process.exit(0);
-            }
-            continue; // Nếu gặp lỗi khác, chạy lại vòng lặp
-        }
-
-        const text = userText.trim();
-        if (!text) continue;
-
-        if (text === '/exit' || text === '/quit') process.exit(0);
-        if (text === '/clear' || text === '/new') {
-            saveSession(cliChatHistory, persistentGoal);
-            cliChatHistory.length = 0;
-            if (typeof activeProvider.resetSession === 'function') activeProvider.resetSession();
-            resetSessionLog();
-            persistentGoal = null;
-            console.clear();
-            continue;
-        }
-        if (text === '/model') { await loadProviderConfig(true); console.clear(); continue; }
-        if (text === '/reset') { resetSystem(); continue; }
-        if (text === '/stats') {
-            telemetry.printStatsTable();
-            telemetry.printTopMemories();
-            continue;
-        }
-
-        // 🎯 PERSISTENT GOAL
-        if (text.startsWith('/goal')) {
-            const goalText = text.replace('/goal', '').trim();
-            if (!goalText || goalText === 'clear') {
-                persistentGoal = null;
-                console.log(chalk.yellow('\n[Goal] 🎯 Đã xóa mục tiêu. AI sẽ hoạt động tự do.\n'));
-            } else {
-                persistentGoal = goalText;
-                console.log(chalk.green(`\n[Goal] 🎯 Mục tiêu khóa cứng: "${persistentGoal}"\n`));
-                console.log(chalk.gray('  AI sẽ nhận mục tiêu này trong MỌI lượt chat cho đến khi bạn gõ /goal clear'));
-            }
-            continue;
-        }
-
-        // 💾 SESSION MANAGEMENT
-        if (text === '/sessions') {
-            const sessions = listSessions();
-            if (sessions.length === 0) {
-                console.log(chalk.yellow('\n  Chưa có phiên chat nào được lưu.\n'));
-            } else {
-                console.log(chalk.cyan('\n  📋 DANH SÁCH PHIÊN CHAT GẦN ĐÂY:'));
-                console.log(chalk.gray('  ─────────────────────────────────────────'));
-                sessions.forEach((s, i) => {
-                    const goalStr = s.goal !== '(không có)' ? chalk.green(` 🎯 ${s.goal}`) : '';
-                    console.log(`  ${chalk.white(i + 1)}. ${chalk.cyan(s.file)} — ${s.messages} tin nhắn — ${chalk.gray(s.age + ' phút trước')}${goalStr}`);
-                });
-                console.log(chalk.gray('\n  Gõ /restore để khôi phục phiên gần nhất\n'));
-            }
-            continue;
-        }
-        if (text === '/restore') {
-            const session = getLatestSession();
-            if (!session) {
-                console.log(chalk.yellow('\n  Không tìm thấy phiên chat gần đây (< 2 giờ).\n'));
-            } else {
-                cliChatHistory.length = 0;
-                cliChatHistory.push(...session.messages);
-                if (session.meta?.goal) persistentGoal = session.meta.goal;
-                console.log(chalk.green(`\n  ✅ Đã khôi phục phiên "${session.file}" (${session.messages.length} tin nhắn, ${session.ageMinutes} phút trước)`));
-                if (persistentGoal) console.log(chalk.green(`  🎯 Goal: "${persistentGoal}"`));
-                console.log('');
-            }
-            continue;
-        }
-
-        process.stdout.moveCursor(0, -1);
-        process.stdout.clearLine(1);
-        console.log(`\n${OC_BLUE('▌')} ${chalk.bold.white(text)}\n`);
-
-        // Reset session log cho phiên chat mới
-        resetSessionLog();
-
-        const reformulatedText = await reformulateQuery(text);
-        cliChatHistory.push({ role: 'user', content: reformulatedText });
-
-        // --- CONTEXT COMPACTION ---
-        if (cliChatHistory.length > 15) {
-            console.log(chalk.gray(`\n[Memory] Ngữ cảnh quá dài (${cliChatHistory.length} tin nhắn), đang tự động nén...`));
-            const messagesToCompress = cliChatHistory.slice(0, 10);
-            
-            if (activeProvider) {
-                const prompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` + 
-                               messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
-                
-                try {
-                    let summary = await activeProvider.chat({
-                        messages: [{ role: 'user', content: prompt }],
-                        skillRegistry: {},
-                        executeSkill: async () => {},
-                        systemPrompt: "Bạn là công cụ tóm tắt. Trả về đúng nội dung tóm tắt.",
-                        maxSteps: 1,
-                        isWorker: true,
-                        workerType: 'summary'
-                    });
-                    summary = summary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-                    
-                    cliChatHistory.splice(0, 10);
-                    cliChatHistory.unshift({ role: 'system', content: `[Tóm tắt bối cảnh cũ]: ${summary}` });
-                    console.log(chalk.green(`[Memory] Nén ngữ cảnh bằng AI thành công! Số tin nhắn hiện tại: ${cliChatHistory.length}`));
-                } catch (err) {
-                    console.warn(chalk.yellow(`[Memory] Lỗi khi nén ngữ cảnh: ${err.message}`));
-                    cliChatHistory.splice(0, 10);
-                }
-            }
-        }
-
-        const injectedMemory = await recallMemory(text);
-        const enrichedMessages = JSON.parse(JSON.stringify(cliChatHistory));
-        if (injectedMemory) enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
-
-        let systemPromptText = "";
-        const promptPath = path.join(__dirname, 'system_prompt.md');
-        if (fs.existsSync(promptPath)) systemPromptText = fs.readFileSync(promptPath, 'utf8');
-
-        // Tự động inject biến môi trường
-        systemPromptText = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPromptText;
-
-        // 🎯 PERSISTENT GOAL: Inject mục tiêu khóa cứng
-        if (persistentGoal) {
-            systemPromptText = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên. Nếu bạn thấy mình đang đi lạc hướng, hãy dừng lại và quay về mục tiêu.\n\n` + systemPromptText;
-        }
-
-        // 🧭 ADAPTIVE SKILL ROUTER: Chỉ cấp tools cần thiết cho AI
-        const cliIntent = classifyIntent(text);
-        const cliFilteredSkills = filterSkillsByIntent(cliIntent, SKILL_REGISTRY);
-        if (cliIntent !== 'complex') {
-            console.log(chalk.gray(`[Router] 🧭 Intent: ${cliIntent} → ${Object.keys(cliFilteredSkills).length}/${Object.keys(SKILL_REGISTRY).length} tools`));
-        }
-
-        let fullAiResponse = '';
-        let isFirstChunk = true;
-        const startTime = Date.now();
-
-        // 🔍 TRACE: Tạo trace cho mỗi lượt chat
-        const chatTraceId = tracer.createTrace(text.substring(0, 80));
-
-        let spinner = ora({ text: OC_MUTED.italic('Starting build...'), spinner: 'dots' }).start();
-        let isThinkingMode = false;
-
-        let printedRows = 0;
-        let currentLineLen = 0;
-        const terminalCols = process.stdout.columns || 80;
-        const terminalRowsMax = process.stdout.rows || 24;
-
-        startHeartbeat();
-
-        try {
-            const chatResult = await chatWithFailover({
-                messages: enrichedMessages,
-                skillRegistry: cliFilteredSkills,
-                executeSkill: async (funcName, args) => {
-                    if (!isFirstChunk) console.log('\n');
-                    spinner.stop();
-                    tickHeartbeat();
-                    console.log(`\n${OC_THINK.italic('Action:')} ${OC_MUTED.italic(`Executing ${funcName}...`)}\n`);
-                    // 🔍 TRACE: Span cho tool call
-                    const toolSpanId = chatTraceId ? tracer.startSpan(chatTraceId, funcName, 'tool', null, args) : null;
-                    const res = await executeSkillForProvider(funcName, args);
-                    if (toolSpanId) {
-                        if (res === "__HANDOVER_TO_ENGINE__") {
-                            tracer.endSpan(toolSpanId, 'completed', { handover: true });
-                        } else {
-                            try {
-                                const parsed = JSON.parse(res);
-                                tracer.endSpan(toolSpanId, parsed.status === 'success' ? 'completed' : 'failed', { status: parsed.status }, parsed.error_message || null);
-                            } catch { tracer.endSpan(toolSpanId, 'completed', { text: String(res).substring(0, 300) }); }
-                        }
-                    }
-                    tickHeartbeat();
-                    if (res !== "__HANDOVER_TO_ENGINE__") {
-                        spinner = ora({ text: OC_MUTED.italic(`Evaluating output...`), spinner: 'dots' }).start();
-                    }
-                    isFirstChunk = true;
-                    return res;
-                },
-                systemPrompt: systemPromptText,
-                maxSteps: 15,
-                onStreamChunk: (chunk) => {
-                    tickHeartbeat();
-                    if (isFirstChunk) { spinner.stop(); isFirstChunk = false; }
-                    fullAiResponse += chunk;
-
-                    if (chunk.includes('<think>')) { isThinkingMode = true; process.stdout.write(OC_THINK.italic('Thinking:\n')); return; }
-                    if (chunk.includes('</think>')) { isThinkingMode = false; process.stdout.write('\n\n'); return; }
-
-                    const textToPrint = isThinkingMode ? OC_MUTED.italic(chunk) : OC_TEXT(chunk);
-                    process.stdout.write(textToPrint);
-
-                    const rawChunk = chunk.replace(/\x1b\[[0-9;]*m/g, '');
-                    for (let i = 0; i < rawChunk.length; i++) {
-                        if (rawChunk[i] === '\n') {
-                            printedRows++;
-                            currentLineLen = 0;
-                        } else {
-                            currentLineLen++;
-                            if (currentLineLen >= terminalCols) { printedRows++; currentLineLen = 0; }
-                        }
-                    }
-                }
-            });
-
-            if (isFirstChunk) spinner.stop();
-            stopHeartbeat();
-            // 🔍 TRACE: Hoàn thành trace
-            if (chatTraceId) tracer.completeTrace(chatTraceId, 'completed');
-            if (chatResult === "__HANDOVER_TO_ENGINE__" || fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
-                const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text);
-                await engine.run(); // Block Terminal chờ Engine chạy xong
-                
-                console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal."));
-                continue; // Quay lại đầu vòng lặp để gõ câu lệnh mới
-            }
-            const cleanResponseForHistory = fullAiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-
-            let polishedMarkdown = cleanResponseForHistory
-                .replace(/^\s*\*\s/gm, '- ')
-                .replace(/```[a-z]*\n/g, '\n');
-
-            const printBeautiful = (text) => {
-                let parsedText = marked.parse(text).trim();
-                parsedText = parsedText.replace(/^\s*-\s/gm, chalk.cyan('  • '));
-                console.log(parsedText);
-            };
-
-            if (printedRows > 0 && printedRows < terminalRowsMax - 3) {
-                process.stdout.write(`\r\x1b[${printedRows}A\x1b[0J`);
-                printBeautiful(polishedMarkdown);
-            } else if (printedRows > 0) {
-                console.log(OC_MUTED(`\n\n--- Formatting Markdown ---\n`));
-                printBeautiful(polishedMarkdown);
-            } else if (polishedMarkdown) {
-                printBeautiful(polishedMarkdown);
-            }
-
-            // XỬ LÝ NẾU CÓ TÍN HIỆU TỪ PIPELINE
-            if (fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
-                const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text); // 'text' chính là câu hỏi của user
-                await engine.run(); // AWAIT ở đây sẽ block terminal, không cho nó hiện dấu nháy lên
-                
-                // Sau khi Engine xong, tiếp tục vòng lặp để chat tiếp
-                console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal."));
-                continue; 
-            }
-
-            const endTime = Date.now();
-            const duration = ((endTime - startTime) / 1000).toFixed(1);
-            const modelName = activeProvider.model || 'Agent';
-
-            console.log(`\n\n${OC_BLUE('■')}  ${OC_TEXT('Build')} · ${OC_MUTED(modelName + ' · ' + duration + 's')}\n`);
-
-            cliChatHistory.push({ role: 'assistant', content: cleanResponseForHistory });
-
-            // 💾 AUTO-SAVE SESSION: Lưu checkpoint sau mỗi lượt chat
-            saveSession(cliChatHistory, persistentGoal);
-
-            // 🧠 CRITIC AGENT: Chạy ngầm sau mỗi phiên nếu có lỗi
-            if (currentSessionLog.some(entry => entry.success === false)) {
-                runCriticAgent([...currentSessionLog]).catch(err => {
-                    console.warn(chalk.yellow(`[Critic Agent] Lỗi ngầm: ${err.message}`));
-                });
-            }
-
-        } catch (error) {
-           spinner.stop();
-            stopHeartbeat();
-            // 🔍 TRACE: Mark trace as failed
-            if (chatTraceId) tracer.completeTrace(chatTraceId, 'failed');
-            
-            // Xử lý cướp quyền (Không in lỗi đỏ, chỉ thoát vòng lặp lặng lẽ)
-            if (error.message.includes("__HANDOVER_TO_ENGINE__")) {
-                // Đừng làm gì cả, Workflow Engine đã tiếp quản ở background
-                return; // Thoát hẳn 1 lượt chat
-            }
-
-            // Các lỗi khác thì in bình thường
-            console.error(chalk.red(`\n❌ Error: ${error.message}\n`));
-            cliChatHistory.pop();
-        }
-    }
-}
-
-setTimeout(() => {
-    startTerminalChatLoop();
-}, 500);

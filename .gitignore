@@ -1,9 +1,9 @@
 /node_modules
-/profile
+/profile*
 /.agent_memory
 package-lock.json
-/agent_skills
-/.agent
+/agent_skills*
+/.agent*
 # Logs
 logs
 *.log

@@ -8,6 +8,21 @@ import { select } from '@inquirer/prompts';
 import tracer from './tracer.js';
 
 // =================================================================
+// ⚙️ LOG MESSAGE HELPER: Đồng bộ log ra cả Terminal lẫn Web Chat
+// =================================================================
+function logMessage(text, isError = false) {
+    if (isError) {
+        console.error(text);
+    } else {
+        console.log(text);
+    }
+    if (typeof global.logToWebChat === 'function') {
+        const cleanText = typeof text === 'string' ? text.replace(/\x1b\[[0-9;]*m/g, '') : String(text);
+        global.logToWebChat(cleanText);
+    }
+}
+
+// =================================================================
 // 🔧 STEP STATES — Máy Trạng Thái Tường Minh (Explicit FSM)
 // =================================================================
 const STEP_STATES = {
@@ -74,7 +89,7 @@ export default class WorkflowEngine {
         const currentState = current?.state || 'PENDING';
         const allowed = VALID_TRANSITIONS[currentState] || [];
         if (!allowed.includes(newState)) {
-            console.log(chalk.yellow(`[FSM] ⚠️ Chuyển trạng thái không hợp lệ: ${currentState} → ${newState} (step: ${stepKey}). Bỏ qua.`));
+            logMessage(chalk.yellow(`[FSM] ⚠️ Chuyển trạng thái không hợp lệ: ${currentState} → ${newState} (step: ${stepKey}). Bỏ qua.`));
             return;
         }
         const updates = { state: newState, updated_at: new Date().toISOString(), ...extra };
@@ -103,7 +118,7 @@ export default class WorkflowEngine {
     }
 
     rollbackChanges(preStepStatus) {
-        console.log(chalk.yellow(`\n↩️ Rollback mã nguồn...`));
+        logMessage(chalk.yellow(`\n↩️ Rollback mã nguồn...`));
         const postStepStatus = this.getGitStatus();
         const preFiles = new Map(preStepStatus.map(item => [item.file, item.status]));
         for (const item of postStepStatus) {
@@ -115,10 +130,10 @@ export default class WorkflowEngine {
                         if (stats.isDirectory()) fs.rmSync(item.file, { recursive: true, force: true });
                         else fs.unlinkSync(item.file);
                     }
-                } catch (err) { console.error(`Không thể xóa ${item.file}:`, err.message); }
+                } catch (err) { logMessage(`Không thể xóa ${item.file}: ${err.message}`, true); }
             } else if (item.status !== preStatus) {
                 try { execSync(`git checkout -- "${item.file}"`, { stdio: 'ignore' }); }
-                catch (err) { console.error(`Không thể khôi phục ${item.file}:`, err.message); }
+                catch (err) { logMessage(`Không thể khôi phục ${item.file}: ${err.message}`, true); }
             }
         }
     }
@@ -158,8 +173,7 @@ Sau đó mới được dùng tool.
             catch { return { passed: false, reason: `Lệnh kiểm tra thất bại: ${val.value}` }; }
         }
         if (val.type === 'llm_check') {
-            console.log(chalk.blue(`🤖 Khởi chạy Validator Agent...`));
-            // Inject error history để Validator biết lỗi cũ
+            logMessage(chalk.blue(`🤖 Khởi chạy Validator Agent...`));
             const stepState = this.getStepState('CURRENT', step.step_key);
             const errorHistory = JSON.parse(stepState?.error_history || '[]');
             const errorCtx = errorHistory.length > 0 ? `\n[LỖI ĐÃ GẶP TRƯỚC ĐÓ]: ${errorHistory.slice(-3).join(' | ')}` : '';
@@ -178,7 +192,7 @@ Kiểm tra thật nghiêm túc. Nếu ĐẠT → chỉ trả về "PASS". Nếu 
                     messages: [{ role: 'user', content: validationPrompt }],
                     skillRegistry: workerSkills,
                     executeSkill: async (fn, args) => {
-                        console.log(chalk.yellow(`\n⚙️ Validator gọi Tool: ${fn}...`));
+                        logMessage(chalk.yellow(`\n⚙️ Validator gọi Tool: ${fn}...`));
                         return await this.executeSkillFn(fn, args);
                     },
                     systemPrompt: "Bạn là Validator. Nếu đạt → PASS. Nếu không → chỉ ra lỗi.",
@@ -206,9 +220,9 @@ Kiểm tra thật nghiêm túc. Nếu ĐẠT → chỉ trả về "PASS". Nếu 
         } catch { return `Đã hoàn thành: ${step.task}`; }
     }
 
-    // === REFLECTION (Giữ nguyên logic) ===
+    // === REFLECTION ===
     async triggerReflection(pipeline, outcome, error = null) {
-        console.log(chalk.magenta(`\n🧠 Auto-Reflection...`));
+        logMessage(chalk.magenta(`\n🧠 Auto-Reflection...`));
         const prompt = `Bạn là AI Critic. Pipeline "${this.globalContext}" ${outcome === 'SUCCESS' ? 'hoàn thành' : 'thất bại'}.
 ${error ? `Lỗi: ${error.message}` : ''}
 1. Đánh giá ngắn gọn. 2. Nếu có bài học → gọi memorize_lesson. 3. Nếu có quy trình mới → gọi synthesize_skill.`;
@@ -218,11 +232,11 @@ ${error ? `Lỗi: ${error.message}` : ''}
             if (this.skillRegistry['synthesize_skill']) skills['synthesize_skill'] = this.skillRegistry['synthesize_skill'];
             const resp = await this.provider.chat({
                 messages: [{ role: 'user', content: prompt }], skillRegistry: skills,
-                executeSkill: async (fn, args) => { console.log(chalk.magenta(`💡 Reflection gọi: ${fn}`)); return await this.executeSkillFn(fn, args); },
-                systemPrompt: "Bạn là AI Critic. Trả lời cực ngắn.", maxSteps: 2, isWorker: true, workerType: 'task'
+                executeSkill: async (fn, args) => { logMessage(chalk.magenta(`💡 Reflection gọi: ${fn}`)); return await this.executeSkillFn(fn, args); },
+                systemPrompt: "Bạn là AI Critic. Trả về cực ngắn.", maxSteps: 2, isWorker: true, workerType: 'task'
             });
-            console.log(chalk.gray(`[Reflection]: ${resp}`));
-        } catch (e) { console.error(chalk.red(`[Reflection] Lỗi:`), e.message); }
+            logMessage(chalk.gray(`[Reflection]: ${resp}`));
+        } catch (e) { logMessage(chalk.red(`[Reflection] Lỗi: ${e.message}`), true); }
     }
 
     // === DB PIPELINE HELPERS ===
@@ -254,7 +268,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
     async handleHITL(step, breakReason) {
         const reasonMap = { MAX_RETRIES: 'đạt số lần thử tối đa', LOOP_DETECTED: 'phát hiện vòng lặp lỗi lặp lại' };
         const msg = `⚠️ Circuit Breaker: "${step.task}" — ${reasonMap[breakReason] || breakReason}`;
-        console.log(chalk.red(`\n${msg}`));
+        logMessage(chalk.red(`\n${msg}`), true);
 
         let choice = '';
         if (global.askPermission) {
@@ -300,16 +314,14 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 }
             }
 
-            // Transition: QUEUED → RUNNING
             this.transitionState('CURRENT', stepKey, 'RUNNING');
             const currentRetry = (this.getStepState('CURRENT', stepKey)?.retry_count || 0);
-            console.log(chalk.yellow(`\n⏳ Step: ${step.task} (Lần ${currentRetry + 1}/${maxRetries})`));
+            logMessage(chalk.yellow(`\n⏳ Step: ${step.task} (Lần ${currentRetry + 1}/${maxRetries})`));
 
             const preStepStatus = this.getGitStatus();
             const journalContext = this.buildJournalContext(pipeline);
             const promptContext = this.buildSCANPrompt(step, journalContext);
 
-            // 🔍 Trace: Tạo span cho step
             const stepSpanId = this.currentTraceId ? tracer.startSpan(this.currentTraceId, `${step.task}`, 'agent', null, { tool: step.tool, step_key: stepKey }) : null;
 
             let spinner = ora(`AI đang xử lý: ${step.tool}...`).start();
@@ -321,7 +333,6 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 delete workerSkills['create_pipeline_plan'];
                 delete workerSkills['update_pipeline_status'];
 
-                // 🔍 Trace: Span cho LLM call
                 const llmSpanId = stepSpanId ? tracer.startSpan(this.currentTraceId, `LLM Chat`, 'llm', stepSpanId, { prompt_length: promptContext.length }) : null;
 
                 response = await this.provider.chat({
@@ -329,8 +340,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
                     skillRegistry: workerSkills,
                     executeSkill: async (fn, args) => {
                         spinner.stop();
-                        console.log(chalk.yellow(`\n⚙️ Worker gọi Tool: ${fn}...`));
-                        // 🔍 Trace: Span cho tool call
+                        logMessage(chalk.yellow(`\n⚙️ Worker gọi Tool: ${fn}...`));
                         const toolSpanId = stepSpanId ? tracer.startSpan(this.currentTraceId, fn, 'tool', stepSpanId, args) : null;
                         try {
                             const result = await this.executeSkillFn(fn, args);
@@ -355,7 +365,6 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 if (stepSpanId) tracer.endSpan(stepSpanId, 'failed', null, err.message);
             }
 
-            // Transition: RUNNING → VALIDATING
             if (!execError) {
                 this.transitionState('CURRENT', stepKey, 'VALIDATING');
                 const valSpinner = ora(`Kiểm duyệt (Validator)...`).start();
@@ -371,16 +380,13 @@ ${error ? `Lỗi: ${error.message}` : ''}
                     execError = new Error(valResult.reason);
                 }
             } else {
-                // Executor failed → force state to VALIDATING for consistent flow
                 db.prepare(`UPDATE agent_states SET state = 'VALIDATING', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
                     .run(new Date().toISOString(), stepKey);
             }
 
-            // Thất bại → ghi lỗi, rollback, retry
             this.appendError('CURRENT', stepKey, execError.message);
             this.rollbackChanges(preStepStatus);
 
-            // Check if we exceeded max retries after incrementing
             const updatedState = this.getStepState('CURRENT', stepKey);
             if (updatedState.retry_count >= maxRetries) {
                 this.transitionState('CURRENT', stepKey, 'BLOCKED');
@@ -398,7 +404,6 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 }
             }
 
-            // Retry: VALIDATING → QUEUED
             this.transitionState('CURRENT', stepKey, 'QUEUED');
             this.updatePipelineStatus(pipeline, 'IN_PROGRESS');
         }
@@ -406,7 +411,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
     // === PARALLEL GROUP EXECUTOR ===
     async executeParallelGroup(steps, pipeline) {
-        console.log(chalk.magenta(`\n⇄ Chạy song song ${steps.length} steps: [${steps.map(s => s.task).join(' | ')}]`));
+        logMessage(chalk.magenta(`\n⇄ Chạy song song ${steps.length} steps: [${steps.map(s => s.task).join(' | ')}]`));
         const results = await Promise.allSettled(steps.map(step => this.executeStep(step, pipeline)));
         const failed = results.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.success));
         if (failed.length > 0) {
@@ -430,28 +435,25 @@ ${error ? `Lỗi: ${error.message}` : ''}
     async run() {
         const pipeline = this.getCurrentPipeline();
         if (!pipeline) {
-            console.log(chalk.yellow("\n[Engine] Không có Pipeline nào đang chờ xử lý."));
+            logMessage(chalk.yellow("\n[Engine] Không có Pipeline nào đang chờ xử lý."));
             return;
         }
 
-        console.log(boxen(chalk.bold.cyan(`🚀 PIPELINE: ${pipeline.pipeline_name}`), { padding: 1, borderColor: 'cyan' }));
+        logMessage(boxen(chalk.bold.cyan(`🚀 PIPELINE: ${pipeline.pipeline_name}`), { padding: 1, borderColor: 'cyan' }));
 
-        // 🔍 Tạo Trace cho pipeline
         this.currentTraceId = tracer.createTrace(pipeline.pipeline_name, 'CURRENT');
 
         for (let sIdx = 0; sIdx < pipeline.stages.length; sIdx++) {
             const stage = pipeline.stages[sIdx];
             if (stage.status === 'DONE') continue;
 
-            console.log(`\n${chalk.bgBlue.white.bold(` STAGE ${sIdx + 1}: ${stage.name} `)}`);
+            logMessage(`\n${chalk.bgBlue.white.bold(` STAGE ${sIdx + 1}: ${stage.name} `)}`);
 
-            // Tách steps thành sequential và parallel groups
             const stepsToProcess = stage.steps.filter(s => {
                 const st = this.getStepState('CURRENT', s.step_key);
                 return !st || st.state !== 'DONE';
             });
 
-            // QUEUED tất cả steps chưa chạy
             for (const step of stepsToProcess) {
                 const st = this.getStepState('CURRENT', step.step_key);
                 if (st?.state === 'PENDING') {
@@ -459,7 +461,6 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 }
             }
 
-            // Gom parallel groups
             const parallelGroups = {};
             const sequentialSteps = [];
             for (const step of stepsToProcess) {
@@ -471,7 +472,6 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 }
             }
 
-            // Chạy parallel groups trước (các step không có dependency)
             for (const [groupName, groupSteps] of Object.entries(parallelGroups)) {
                 const readySteps = groupSteps.filter(s => this.areDependenciesMet(s));
                 if (readySteps.length === 0) continue;
@@ -495,13 +495,11 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 }
             }
 
-            // Chạy sequential steps (theo thứ tự, kiểm tra depends_on)
             for (const step of sequentialSteps) {
                 if (!this.areDependenciesMet(step)) {
-                    console.log(chalk.yellow(`⏸️ Step "${step.task}" chờ dependencies: ${step.depends_on?.join(', ')}`));
-                    // Check lại sau khi các dependency có thể đã chạy ở parallel group
+                    logMessage(chalk.yellow(`⏸️ Step "${step.task}" chờ dependencies: ${step.depends_on?.join(', ')}`));
                     if (!this.areDependenciesMet(step)) {
-                        console.log(chalk.red(`❌ Dependencies chưa hoàn thành cho step: ${step.task}`));
+                        logMessage(chalk.red(`❌ Dependencies chưa hoàn thành cho step: ${step.task}`), true);
                         continue;
                     }
                 }
@@ -515,16 +513,14 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 }
             }
 
-            // Xong Stage
             stage.status = 'DONE';
             this.updatePipelineStatus(pipeline, 'IN_PROGRESS');
-            console.log(chalk.green(`✅ Hoàn thành Stage: ${stage.name}`));
+            logMessage(chalk.green(`✅ Hoàn thành Stage: ${stage.name}`));
         }
 
-        // Hoàn tất Pipeline
         this.updatePipelineStatus(pipeline, 'DONE');
         if (this.currentTraceId) tracer.completeTrace(this.currentTraceId, 'completed');
         await this.triggerReflection(pipeline, 'SUCCESS');
-        console.log(boxen(chalk.bold.green(`🎉 PIPELINE HOÀN TẤT!`), { padding: 1, borderColor: 'green' }));
+        logMessage(boxen(chalk.bold.green(`🎉 PIPELINE HOÀN TẤT!`), { padding: 1, borderColor: 'green' }));
     }
 }
