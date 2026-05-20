@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import WorkflowEngine from './workflow_engine.js';
 import db from './database.js';
 import telemetry from './telemetry.js';
+import tracer from './tracer.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -638,6 +639,52 @@ app.get('/api/dashboard/sessions', (req, res) => {
     res.json({ sessions, currentGoal: persistentGoal });
 });
 
+// 🔄 PIPELINE STATE MACHINE API (Real-time FSM status)
+app.get('/api/dashboard/pipeline-state', (req, res) => {
+    try {
+        const pipelineRow = db.prepare(`SELECT id, name, status, data FROM pipelines WHERE id = 'CURRENT'`).get();
+        if (!pipelineRow) {
+            return res.json({ active: false, pipeline: null, states: [] });
+        }
+        const states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT' ORDER BY step_key`).all();
+        const pipeline = JSON.parse(pipelineRow.data);
+        res.json({
+            active: pipelineRow.status === 'IN_PROGRESS',
+            pipeline: { name: pipeline.pipeline_name, status: pipelineRow.status, stages: pipeline.stages },
+            states: states.map(s => ({
+                step_key: s.step_key,
+                state: s.state,
+                retry_count: s.retry_count,
+                error_count: JSON.parse(s.error_history || '[]').length,
+                summary: s.summary,
+                updated_at: s.updated_at
+            }))
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// 🔍 TRACES API (Log/Trace viewer)
+app.get('/api/dashboard/traces', (req, res) => {
+    try {
+        const traces = tracer.listTraces(100);
+        res.json({ traces });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/dashboard/traces/:traceId', (req, res) => {
+    try {
+        const detail = tracer.getTraceDetail(req.params.traceId);
+        if (!detail) return res.status(404).json({ error: 'Trace not found' });
+        res.json(detail);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // 📋 COMMAND REFERENCE API
 app.get('/api/dashboard/commands', (req, res) => {
     const cliCommands = [
@@ -701,15 +748,21 @@ app.post('/api/dashboard/chat', async (req, res) => {
         const apiIntent = classifyIntent(message);
         const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
 
+        // 🔍 TRACE: Web terminal trace
+        const webTraceId = tracer.createTrace(`[Web] ${message.substring(0, 60)}`);
+
         const result = await chatWithFailover({
             messages: [{ role: 'user', content: message }],
             skillRegistry: filteredSkills,
             executeSkill: async (funcName, args) => {
                 console.log(chalk.magenta(`[Web Terminal] ⚡ ${funcName}`));
+                const wSpanId = webTraceId ? tracer.startSpan(webTraceId, funcName, 'tool', null, args) : null;
                 if (stream) {
                     res.write(`data: ${JSON.stringify({ type: 'action', tool: funcName })}\n\n`);
                 }
-                return await executeSkillForProvider(funcName, args);
+                const toolResult = await executeSkillForProvider(funcName, args);
+                if (wSpanId) tracer.endSpan(wSpanId, 'completed', { text: String(toolResult).substring(0, 300) });
+                return toolResult;
             },
             systemPrompt,
             maxSteps: 10,
@@ -719,6 +772,7 @@ app.post('/api/dashboard/chat', async (req, res) => {
         });
 
         const clean = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        if (webTraceId) tracer.completeTrace(webTraceId, 'completed');
         if (stream) {
             res.write(`data: ${JSON.stringify({ type: 'done', response: clean })}\n\n`);
             res.end();
@@ -727,6 +781,7 @@ app.post('/api/dashboard/chat', async (req, res) => {
         }
     } catch (err) {
         console.error(chalk.red(`[Web Terminal] ❌ Lỗi xử lý:`), err.message);
+        if (webTraceId) tracer.completeTrace(webTraceId, 'failed');
         if (stream) {
             res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
             res.end();
@@ -1412,6 +1467,9 @@ async function startTerminalChatLoop() {
         let isFirstChunk = true;
         const startTime = Date.now();
 
+        // 🔍 TRACE: Tạo trace cho mỗi lượt chat
+        const chatTraceId = tracer.createTrace(text.substring(0, 80));
+
         let spinner = ora({ text: OC_MUTED.italic('Starting build...'), spinner: 'dots' }).start();
         let isThinkingMode = false;
 
@@ -1431,7 +1489,19 @@ async function startTerminalChatLoop() {
                     spinner.stop();
                     tickHeartbeat();
                     console.log(`\n${OC_THINK.italic('Action:')} ${OC_MUTED.italic(`Executing ${funcName}...`)}\n`);
+                    // 🔍 TRACE: Span cho tool call
+                    const toolSpanId = chatTraceId ? tracer.startSpan(chatTraceId, funcName, 'tool', null, args) : null;
                     const res = await executeSkillForProvider(funcName, args);
+                    if (toolSpanId) {
+                        if (res === "__HANDOVER_TO_ENGINE__") {
+                            tracer.endSpan(toolSpanId, 'completed', { handover: true });
+                        } else {
+                            try {
+                                const parsed = JSON.parse(res);
+                                tracer.endSpan(toolSpanId, parsed.status === 'success' ? 'completed' : 'failed', { status: parsed.status }, parsed.error_message || null);
+                            } catch { tracer.endSpan(toolSpanId, 'completed', { text: String(res).substring(0, 300) }); }
+                        }
+                    }
                     tickHeartbeat();
                     if (res !== "__HANDOVER_TO_ENGINE__") {
                         spinner = ora({ text: OC_MUTED.italic(`Evaluating output...`), spinner: 'dots' }).start();
@@ -1467,6 +1537,8 @@ async function startTerminalChatLoop() {
 
             if (isFirstChunk) spinner.stop();
             stopHeartbeat();
+            // 🔍 TRACE: Hoàn thành trace
+            if (chatTraceId) tracer.completeTrace(chatTraceId, 'completed');
             if (chatResult === "__HANDOVER_TO_ENGINE__" || fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
                 const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text);
                 await engine.run(); // Block Terminal chờ Engine chạy xong
@@ -1527,6 +1599,8 @@ async function startTerminalChatLoop() {
         } catch (error) {
            spinner.stop();
             stopHeartbeat();
+            // 🔍 TRACE: Mark trace as failed
+            if (chatTraceId) tracer.completeTrace(chatTraceId, 'failed');
             
             // Xử lý cướp quyền (Không in lỗi đỏ, chỉ thoát vòng lặp lặng lẽ)
             if (error.message.includes("__HANDOVER_TO_ENGINE__")) {

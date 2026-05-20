@@ -89,4 +89,56 @@ db.exec(`
     );
 `);
 
+// 5. Tạo bảng Agent States — Máy Trạng Thái Tường Minh (Explicit State Machine)
+// Mỗi step trong pipeline có một trạng thái riêng biệt, lưu trữ vào DB để
+// có thể checkpoint, resume, và tránh mất trạng thái khi crash.
+db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_states (
+        pipeline_id TEXT NOT NULL,
+        step_key TEXT NOT NULL,
+        state TEXT DEFAULT 'PENDING',
+        retry_count INTEGER DEFAULT 0,
+        error_history TEXT DEFAULT '[]',
+        last_executor_output TEXT,
+        summary TEXT,
+        updated_at TEXT,
+        PRIMARY KEY (pipeline_id, step_key)
+    );
+`);
+// 6. Tạo bảng Traces — Hệ thống Log/Trace giống OpenAI Traces
+// Mỗi trace = 1 pipeline/session run. Mỗi span = 1 hành động con (tool call, LLM call, agent call).
+db.exec(`
+    CREATE TABLE IF NOT EXISTS traces (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        pipeline_id TEXT,
+        status TEXT DEFAULT 'running',
+        created_at TEXT,
+        completed_at TEXT,
+        total_duration_ms INTEGER DEFAULT 0
+    );
+`);
+
+db.exec(`
+    CREATE TABLE IF NOT EXISTS trace_spans (
+        id TEXT PRIMARY KEY,
+        trace_id TEXT NOT NULL,
+        parent_span_id TEXT,
+        name TEXT NOT NULL,
+        type TEXT DEFAULT 'tool',
+        status TEXT DEFAULT 'running',
+        started_at TEXT,
+        completed_at TEXT,
+        duration_ms INTEGER DEFAULT 0,
+        input TEXT,
+        output TEXT,
+        error TEXT,
+        FOREIGN KEY (trace_id) REFERENCES traces(id)
+    );
+`);
+
+try {
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_trace_spans_trace ON trace_spans(trace_id);`);
+} catch(e) { /* Index đã tồn tại */ }
+
 export default db;
