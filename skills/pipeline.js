@@ -30,7 +30,16 @@ export default {
                                             type: "string", 
                                             description: "Mô tả công việc (BẮT BUỘC: Nếu công việc liên quan đến file/terminal, phải ghi rõ ĐƯỜNG DẪN THƯ MỤC TUYỆT ĐỐI. VD: 'Khởi tạo npm tại C:/Users/Xon/Desktop/test')" 
                                         },
-                                        tool: { type: "string", description: "Tên skill dự kiến sử dụng (VD: read_file, execute_terminal_command)" }
+                                        tool: { type: "string", description: "Tên skill dự kiến sử dụng (VD: read_file, execute_terminal_command)" },
+                                        validation: {
+                                            type: "object",
+                                            description: "Phương thức kiểm tra kết quả bước này (Không bắt buộc, động cơ tự suy luận nếu để trống)",
+                                            properties: {
+                                                type: { type: "string", enum: ["command", "file_exists", "llm_check"], description: "Loại validation: chạy lệnh terminal, kiểm tra file tồn tại, hoặc dùng LLM tự kiểm tra." },
+                                                value: { type: "string", description: "Lệnh chạy, đường dẫn file, hoặc prompt mô tả tiêu chí kiểm tra cho LLM." }
+                                            },
+                                            required: ["type", "value"]
+                                        }
                                     },
                                     required: ["task", "tool"]
                                 }
