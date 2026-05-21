@@ -52,6 +52,7 @@ class CircuitBreaker {
     constructor(maxRetries = 5) {
         this.maxRetries = maxRetries;
     }
+    
 
     shouldBreak(stepState) {
         if (stepState.retry_count >= this.maxRetries) return 'MAX_RETRIES';
@@ -84,6 +85,37 @@ export default class WorkflowEngine {
         return db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = ? AND step_key = ?`).get(pipelineId, stepKey);
     }
 
+    // === FILE-BACKED STATE SYNCHRONIZER ===
+    syncFileBackedState(pipelineId) {
+        try {
+            const stateDir = path.join(process.cwd(), '.agent_memory', 'state');
+            if (!fs.existsSync(stateDir)) fs.mkdirSync(stateDir, { recursive: true });
+
+            const states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = ?`).all(pipelineId);
+            const charter = {
+                pipeline_id: pipelineId,
+                updated_at: new Date().toISOString(),
+                current_active_goal: this.globalContext,
+                steps: states.map(s => ({
+                    step_key: s.step_key,
+                    state: s.state,
+                    retry_count: s.retry_count,
+                    error_count: JSON.parse(s.error_history || '[]').length,
+                    summary: s.summary || null
+                }))
+            };
+
+            // Phản chiếu dữ liệu FSM ra tệp tin tĩnh để LLM đọc trực tiếp
+            fs.writeFileSync(
+                path.join(stateDir, 'runtime_charter.json'),
+                JSON.stringify(charter, null, 2),
+                'utf8'
+            );
+        } catch (e) {
+            console.error(`[FSM] ❌ Không thể đồng bộ hóa File-Backed State: ${e.message}`);
+        }
+    }
+
     transitionState(pipelineId, stepKey, newState, extra = {}) {
         const current = this.getStepState(pipelineId, stepKey);
         const currentState = current?.state || 'PENDING';
@@ -97,6 +129,9 @@ export default class WorkflowEngine {
         const values = Object.values(updates);
         db.prepare(`UPDATE agent_states SET ${setClauses} WHERE pipeline_id = ? AND step_key = ?`)
             .run(...values, pipelineId, stepKey);
+
+        // Đồng bộ hóa ra file vật lý ngay lập tức
+        this.syncFileBackedState(pipelineId);
     }
 
     appendError(pipelineId, stepKey, errorMsg) {
@@ -106,6 +141,9 @@ export default class WorkflowEngine {
         if (history.length > 20) history.shift();
         db.prepare(`UPDATE agent_states SET error_history = ?, retry_count = retry_count + 1, updated_at = ? WHERE pipeline_id = ? AND step_key = ?`)
             .run(JSON.stringify(history), new Date().toISOString(), pipelineId, stepKey);
+
+        // Đồng bộ hóa lỗi ra file vật lý
+        this.syncFileBackedState(pipelineId);
     }
 
     // === GIT HELPERS ===
@@ -139,26 +177,48 @@ export default class WorkflowEngine {
     }
 
     // === SCAN PROTOCOL — Chống Agent Drift ===
-    buildSCANPrompt(step, journalContext) {
-        return `Bạn là một AI Worker CHUYÊN THỰC THI LỆNH.
-[THÔNG TIN DỰ ÁN]
-- Mục tiêu tổng thể: "${this.globalContext}"
-${journalContext}
-[NHIỆM VỤ CỦA BẠN]
-- Nhiệm vụ HIỆN TẠI: "${step.task}"
-- Công cụ NÊN dùng: "${step.tool}"
+    // === SCAN PROTOCOL — Chống Agent Drift & Thu hẹp kỷ luật ===
+    buildDisciplinedPrompt(step, journalContext, retryCount, errorHistory) {
+        let prompt = `Bạn là một AI Worker chuyên biệt, được giao một Nhiệm vụ trong một Hợp đồng thực thi nghiêm ngặt.
+
+[NHIỆM VỤ HIỆN TẠI]
+- Tác vụ: "${step.task}"
+- Công cụ chính: "${step.tool}"
 
 [CHECKPOINT BẮT BUỘC — SCAN Protocol]
-Trước khi thực hiện BẤT KỲ thao tác nào, bạn PHẢI tự xác nhận bằng 2 dòng ngắn gọn:
+Trước khi gọi bất kỳ công cụ nào để thực hiện, bạn BẮT BUỘC phải ghi nhận chính xác 2 dòng sau trong suy nghĩ:
 1. "Mục tiêu lượt này: ___"
 2. "File/resource bị ảnh hưởng: ___"
-Sau đó mới được dùng tool.
-
-[KỶ LUẬT THÉP]
-1. KHÔNG được phân tích, KHÔNG được lên kế hoạch lại.
-2. CHỈ ĐƯỢC PHÉP dùng tool để giải quyết đúng Nhiệm vụ Hiện Tại.
-3. Chú ý các đường dẫn thư mục tuyệt đối trong nhiệm vụ để chạy lệnh cho đúng.
 `;
+
+        if (retryCount === 0) {
+            // Lần đầu tiên chạy: Thu hẹp tối đa thông tin hỗ trợ để tránh quá tải Token
+            prompt += `
+[QUY TẮC KỶ LUẬT]
+- Bạn CHỈ được phép dùng công cụ tối ưu nhất để giải quyết dứt điểm nhiệm vụ này.
+- Tuyệt đối không tự ý phân tích rộng ra ngoài phạm vi hoặc lên kế hoạch lại cho hệ thống.
+`;
+        } else {
+            // Lần thử lại (Retry): Cung cấp chính xác vết lỗi để chẩn đoán, không bơm bừa bãi dữ liệu
+            const errors = JSON.parse(errorHistory || '[]');
+            const lastError = errors[errors.length - 1] || 'Không rõ lỗi cụ thể.';
+            prompt += `
+[⚠️ CẢNH BÁO: LẦN THỬ TRƯỚC BỊ THẤT BẠI]
+Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validator) từ chối vì lý do sau:
+"${lastError}"
+
+[CHỈ THỊ SỬA LỖI ĐẶC BIỆT]
+- Hãy đọc kỹ lỗi trên, phân tích trực diện nguyên nhân gốc rễ (Root Cause Analysis).
+- Tuyệt đối KHÔNG lặp lại phương pháp cũ. Điều chỉnh tham số, sửa lại mã nguồn hoặc dùng thuật toán khác để vượt qua lỗi.
+`;
+        }
+
+        // Bổ sung nhật ký các công việc trước đó nếu có để giữ tính liên tục của dự án lớn
+        if (journalContext) {
+            prompt += `\n${journalContext}`;
+        }
+
+        return prompt;
     }
 
     // === VALIDATOR AGENT ===
@@ -172,18 +232,24 @@ Sau đó mới được dùng tool.
             try { execSync(val.value, { stdio: 'ignore' }); return { passed: true, reason: '' }; }
             catch { return { passed: false, reason: `Lệnh kiểm tra thất bại: ${val.value}` }; }
         }
-        if (val.type === 'llm_check') {
-            logMessage(chalk.blue(`🤖 Khởi chạy Validator Agent...`));
+       if (val.type === 'llm_check') {
+            logMessage(chalk.blue(`🤖 Khởi chạy Validator Agent (Strict Mode)...`));
             const stepState = this.getStepState('CURRENT', step.step_key);
             const errorHistory = JSON.parse(stepState?.error_history || '[]');
-            const errorCtx = errorHistory.length > 0 ? `\n[LỖI ĐÃ GẶP TRƯỚC ĐÓ]: ${errorHistory.slice(-3).join(' | ')}` : '';
+            const errorCtx = errorHistory.length > 0 ? `\n[LỖI ĐÃ GẶP TRƯỚC ĐÓ TRONG CÁC LẦN THỬ TRƯỚC]: ${errorHistory.slice(-3).join(' | ')}` : '';
 
-            const validationPrompt = `Bạn là AI Validator độc lập. Nhiệm vụ: kiểm tra tác vụ sau:
-[TÁC VỤ]: "${step.task}"
-[KẾT QUẢ THỰC THI]: "${executorOutput.substring(0, 1000)}"
-[TIÊU CHÍ]: "${val.value}"${errorCtx}
+            const validationPrompt = `Bạn là một AI Validator độc lập, cực kỳ hoài nghi và nghiêm khắc. Nhiệm vụ của bạn là kiểm tra xem tác vụ sau đã thực sự hoàn tất HOÀN TOÀN và CHÍNH XÁC trong thực tế hay chưa:
 
-Kiểm tra thật nghiêm túc. Nếu ĐẠT → chỉ trả về "PASS". Nếu KHÔNG → trả lý do cụ thể.`;
+[TÁC VỤ YÊU CẦU]: "${step.task}"
+[KẾT QUẢ THỰC THI]: "${executorOutput.substring(0, 2500)}"
+[TIÊU CHÍ KIỂM TRA CHUẨN]: "${val.value}"
+${errorCtx}
+
+🚨 NGUYÊN TẮC KIỂM DUYỆT KHÔNG NHÂN NHƯỢNG (CHỐNG HOÀN THÀNH SỚM):
+1. Tuyệt đối KHÔNG chấp nhận các câu trả lời hứa hẹn hoặc giả định kiểu như: "Tôi đã lên kế hoạch...", "Hệ thống đã sẵn sàng để...", hoặc "Tôi sẽ thực hiện sau khi...".
+2. Chỉ chấp nhận (PASS) khi kết quả thực thi thực tế cho thấy mã nguồn đã được sửa đổi thực sự, tệp tin đã được tạo, hoặc lệnh kiểm thử đã chạy và ra kết quả cụ thể.
+3. Nếu tất cả tiêu chí thực tế đã được đáp ứng hoàn hảo → Hãy trả về duy nhất một từ: "PASS".
+4. Nếu chưa hoàn thành triệt để, hoặc có dấu hiệu làm tắt, đối phó → Trả về chi tiết các điểm chưa đạt và ghi rõ ở cuối: "FAIL: [lý do cụ thể]".`;
             try {
                 const workerSkills = { ...this.skillRegistry };
                 delete workerSkills['create_pipeline_plan'];
@@ -213,7 +279,7 @@ Kiểm tra thật nghiêm túc. Nếu ĐẠT → chỉ trả về "PASS". Nếu 
         try {
             const summary = await this.provider.chat({
                 messages: [{ role: 'user', content: `Tóm tắt 1 câu kết quả kỹ thuật:\n[TÁC VỤ]: "${step.task}"\n[KẾT QUẢ]: "${executorOutput.substring(0, 500)}"` }],
-                skillRegistry: {}, executeSkill: async () => {},
+                skillRegistry: {}, executeSkill: async () => { },
                 systemPrompt: "Trả về đúng 1 câu tóm tắt.", maxSteps: 1, isWorker: true, workerType: 'task'
             });
             return summary.trim();
@@ -320,7 +386,14 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
             const preStepStatus = this.getGitStatus();
             const journalContext = this.buildJournalContext(pipeline);
-            const promptContext = this.buildSCANPrompt(step, journalContext);
+            
+            // Lấy trạng thái hiện tại của Step để biết số lần thử và lịch sử lỗi
+            const currentStepState = this.getStepState('CURRENT', stepKey);
+            const retryCount = currentStepState?.retry_count || 0;
+            const errorHistory = currentStepState?.error_history || '[]';
+
+            // Xây dựng prompt kỷ luật
+            const promptContext = this.buildDisciplinedPrompt(step, journalContext, retryCount, errorHistory);
 
             const stepSpanId = this.currentTraceId ? tracer.startSpan(this.currentTraceId, `${step.task}`, 'agent', null, { tool: step.tool, step_key: stepKey }) : null;
 
@@ -329,9 +402,22 @@ ${error ? `Lỗi: ${error.message}` : ''}
             let execError = null;
 
             try {
-                const workerSkills = { ...this.skillRegistry };
-                delete workerSkills['create_pipeline_plan'];
-                delete workerSkills['update_pipeline_status'];
+                // ==========================================
+                // 🛡️ DISCIPLINED NARROWING: THU HẸP DANH SÁCH SKILLS
+                // Chỉ nạp công cụ được chỉ định + các công cụ thao tác file cốt lõi
+                // ==========================================
+                const workerSkills = {};
+               const vitalSkills = ['read_file', 'read_file_lines', 'replace_by_lines', 'write_file', 'find_files', 'get_os_context', 'execute_terminal_command']; 
+                // Nạp công cụ chính trong hợp đồng
+                if (step.tool && this.skillRegistry[step.tool]) {
+                    workerSkills[step.tool] = this.skillRegistry[step.tool];
+                }
+                // Nạp các công cụ bổ trợ sống còn
+                vitalSkills.forEach(vs => {
+                    if (this.skillRegistry[vs]) {
+                        workerSkills[vs] = this.skillRegistry[vs];
+                    }
+                });
 
                 const llmSpanId = stepSpanId ? tracer.startSpan(this.currentTraceId, `LLM Chat`, 'llm', stepSpanId, { prompt_length: promptContext.length }) : null;
 
@@ -372,6 +458,23 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 if (valResult.passed) {
                     valSpinner.succeed(chalk.green(`Kiểm duyệt thành công!`));
                     const summary = await this.generateStepSummary(step, response);
+
+                    // Tạo tệp tin Artifact đầu ra để làm tài liệu tham khảo đáng tin cậy cho các Step sau
+                    try {
+                        const artifactPath = path.join(process.cwd(), '.agent_memory', 'state', 'artifacts', `${stepKey}_artifact.json`);
+                        const artifactData = {
+                            step_key: stepKey,
+                            task: step.task,
+                            status: "completed",
+                            completed_at: new Date().toISOString(),
+                            summary: summary,
+                            raw_output: response
+                        };
+                        fs.writeFileSync(artifactPath, JSON.stringify(artifactData, null, 2), 'utf8');
+                    } catch (artErr) {
+                        logMessage(chalk.red(`[FSM] ⚠️ Không thể ghi nhận file Artifact: ${artErr.message}`));
+                    }
+
                     this.transitionState('CURRENT', stepKey, 'DONE', { summary });
                     if (stepSpanId) tracer.endSpan(stepSpanId, 'completed', { summary });
                     return { success: true };

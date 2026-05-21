@@ -447,14 +447,23 @@ function renderTraceDetail(data) {
     const totalDur = trace.total_duration_ms ? formatDuration(trace.total_duration_ms) : 'running...';
 
     detail.innerHTML = `
-        <div class="trace-detail-header">
-            <h3>${escHtml(trace.name || 'Trace')}</h3>
-            ${statusBadge}
-            <span style="color:var(--muted);font-size:12px">${totalDur}</span>
-            <span class="trace-id-badge">${trace.id}</span>
+    <div class="trace-detail-header">
+        <h3>${escHtml(trace.name || 'Trace')}</h3>
+        ${statusBadge}
+        <span style="color:var(--muted);font-size:12px">${totalDur}</span>
+        <span class="trace-id-badge">${trace.id}</span>
+    </div>
+    <div class="trace-detail-columns">
+        <div class="span-tree-col">
+            <div class="span-tree" id="span-tree">${treeHtml || '<div class="empty" style="padding:30px"><div class="icon">📭</div>Không có spans</div>'}</div>
         </div>
-        <div class="span-tree" id="span-tree">${treeHtml || '<div class="empty" style="padding:30px"><div class="icon">📭</div>Không có spans</div>'}</div>
-        <div id="span-detail-container"></div>
+        <div class="span-detail-col" id="span-detail-container">
+            <div class="empty" style="padding:80px 20px; text-align:center;">
+                <div class="icon" style="font-size:32px; margin-bottom:8px;">🎯</div>
+                Chọn một mốc (span) để xem thông tin chi tiết
+            </div>
+        </div>
+    </div>
     `;
 }
 

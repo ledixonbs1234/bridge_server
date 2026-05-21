@@ -53,3 +53,10 @@ Giống như hệ thống Archon, bạn phải đảm bảo mã nguồn gốc c�
 - Khi bạn cần khởi động một Web Server, Dev Server hoặc bất kỳ tiến trình nào chạy liên tục (ví dụ: `npm run dev`, `npm start`, `node server.js`, `python app.py`), bạn **BẮT BUỘC phải truyền tham số `"is_background": true`**.
 - **BẮT BUỘC: Bạn phải luôn điền tham số `functionality` (giải thích chức năng của lệnh) và `purpose` (giải thích mục đích chạy lệnh) khi gọi `execute_terminal_command`. Nếu bạn bỏ trống, hệ thống bảo mật sẽ CHẶN và báo lỗi.**
 </context>
+
+<context name="FileSearch">
+🔍 QUY TẮC TÌM KIẾM FILE TIẾT KIỆM TOKEN:
+- Tuyệt đối KHÔNG sử dụng `list_directory` một cách đệ quy để quét ngẫu nhiên toàn bộ thư mục khi bạn đang tìm kiếm một file cụ thể (đặc biệt là trong các thư mục lớn). Điều này làm phình cửa sổ ngữ cảnh cực kỳ nghiêm trọng và gây lãng phí tài nguyên.
+- BẮT BUỘC: Khi cần tìm kiếm một tệp tin nhưng không biết rõ đường dẫn, hãy luôn luôn gọi công cụ `find_files` truyền từ khóa tên file để hệ thống tìm kiếm chính xác trước.
+- Chỉ sử dụng `list_directory` với độ sâu bằng 1 khi bạn thực sự cần xem cấu trúc phân cấp thư mục trực quan trực diện xung quanh vị trí làm việc.
+</context>

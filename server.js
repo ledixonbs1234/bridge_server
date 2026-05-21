@@ -17,6 +17,7 @@ import db from './database.js';
 import telemetry from './telemetry.js';
 import tracer from './tracer.js';
 import { recallMemoryFromGraph } from './neo4j.js';
+import { runMetaHarnessOptimization } from './meta_harness.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,8 +61,8 @@ const originalConsoleLog = console.log;
 // =================================================================
 const SKILL_GROUPS = {
     chat: [],
-    code: ['read_file', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context', 'memorize_lesson', 'memorize_rule', 'rate_memory', 'create_pipeline_plan'],
-    research: ['web_markdown_reader', 'dynamic_browser_controller', 'graphify_query', 'graphify_ingest', 'memorize_lesson', 'create_pipeline_plan'],
+    code: ['read_file', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context', 'memorize_lesson', 'memorize_rule', 'rate_memory', 'create_pipeline_plan', 'load_harness_template'],
+    research: ['web_markdown_reader', 'dynamic_browser_controller', 'graphify_query', 'graphify_ingest', 'memorize_lesson', 'create_pipeline_plan', 'load_harness_template'],
     complex: null
 };
 
@@ -145,7 +146,7 @@ function listSessions() {
             const stat = fs.statSync(path.join(SESSION_DIR, f));
             const allLines = fs.readFileSync(path.join(SESSION_DIR, f), 'utf8').trim().split('\n');
             let meta = null;
-            try { const first = JSON.parse(allLines[0]); if (first._type === 'meta') meta = first; } catch {}
+            try { const first = JSON.parse(allLines[0]); if (first._type === 'meta') meta = first; } catch { }
             const msgCount = meta ? allLines.length - 1 : allLines.length;
             return {
                 file: f,
@@ -471,7 +472,7 @@ await loadProviderConfig();
 // Pre-load các provider backup cho Failover
 for (const pName of Object.keys(providerConfig.providers || {})) {
     if (pName !== providerConfig.activeProvider && providerConfig.providers[pName].enabled) {
-        getProviderInstance(pName).catch(() => {});
+        getProviderInstance(pName).catch(() => { });
     }
 }
 
@@ -486,19 +487,19 @@ global.askPermission = async function (query) {
 
     if (activeWebSession && activeWebSession.res) {
         const permId = 'perm_' + Math.random().toString(36).substring(2, 9);
-        
+
         // Trích xuất toàn bộ log chi tiết (như boxen và source code) thu thập được từ bộ đệm
         const cleanDetails = logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
         logBuffer = []; // Reset bộ đệm sau khi đã đóng gói thành công
-        
+
         // Đẩy thông tin đầy đủ kèm theo tệp tin/mã nguồn qua luồng SSE
-        activeWebSession.res.write(`data: ${JSON.stringify({ 
-            type: 'ask_permission', 
-            id: permId, 
+        activeWebSession.res.write(`data: ${JSON.stringify({
+            type: 'ask_permission',
+            id: permId,
             query: cleanQuery,
-            details: cleanDetails 
+            details: cleanDetails
         })}\n\n`);
-        
+
         return new Promise((resolve) => {
             pendingPermissions.set(permId, resolve);
         });
@@ -618,14 +619,14 @@ fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
         debounceSkillTimer = setTimeout(async () => {
             console.log(chalk.cyan(`\n[Plugin] 🔄 Thay đổi được phát hiện ở skill: ${filename}. Đang reload...`));
             await loadSkills();
-            
+
             try {
                 const botModule = await import('./ai_studio_bot.js');
                 if (botModule.default && botModule.default.setupFlags) {
                     botModule.default.setupFlags.functions = false;
                     console.log(chalk.gray(`[Plugin] ⚙️ Đã báo Gemini Studio cài đặt lại Function Calling trên trình duyệt.`));
                 }
-            } catch(e) {}
+            } catch (e) { }
         }, 1000);
     }
 });
@@ -848,6 +849,7 @@ app.get('/api/dashboard/commands', (req, res) => {
         { cmd: '/goal <text>', alias: null, desc: 'Khóa cứng mục tiêu cho AI (gõ /goal clear để xóa)', category: 'session' },
         { cmd: '/sessions', alias: null, desc: 'Liệt kê các phiên chat đã lưu', category: 'session' },
         { cmd: '/restore', alias: null, desc: 'Khôi phục phiên chat gần nhất', category: 'session' },
+        { cmd: '/optimize', alias: null, desc: 'Tự động chẩn đoán Trace lỗi gần nhất và viết lại luật cho system_prompt.md', category: 'config' }
     ];
     const apiEndpoints = [
         { method: 'GET', path: '/api/skills', desc: 'Danh sách tất cả Skills (Function Calling)' },
@@ -855,6 +857,7 @@ app.get('/api/dashboard/commands', (req, res) => {
         { method: 'GET', path: '/api/config', desc: 'Đọc cấu hình config.json' },
         { method: 'POST', path: '/api/provider/switch', desc: 'Chuyển đổi AI Provider' },
         { method: 'POST', path: '/v1/chat/completions', desc: 'Gửi tin nhắn cho AI (OpenAI-compatible)' },
+        { method: 'POST', path: '/api/dashboard/optimize', desc: 'Kích hoạt chu kỳ tối ưu hóa Meta-Harness' },
         { method: 'GET', path: '/api/dashboard/telemetry', desc: 'Dữ liệu telemetry' },
         { method: 'GET', path: '/api/dashboard/memories', desc: 'Dữ liệu bộ nhớ' },
         { method: 'GET', path: '/api/dashboard/sessions', desc: 'Danh sách phiên chat' },
@@ -928,23 +931,23 @@ app.post('/api/dashboard/chat', async (req, res) => {
         if (currentHistory.length > 15) {
             console.log(chalk.gray(`\n[Memory] Ngữ cảnh quá dài (${currentHistory.length} tin nhắn), đang tự động nén...`));
             const messagesToCompress = currentHistory.slice(0, 10);
-            
+
             if (activeProvider && activeProvider.chat) {
-                const compPrompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` + 
-                               messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
-                
+                const compPrompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` +
+                    messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
+
                 try {
                     let summary = await activeProvider.chat({
                         messages: [{ role: 'user', content: compPrompt }],
                         skillRegistry: {},
-                        executeSkill: async () => {},
+                        executeSkill: async () => { },
                         systemPrompt: "Bạn là công cụ tóm tắt. Trả về đúng nội dung tóm tắt.",
                         maxSteps: 1,
                         isWorker: true,
                         workerType: 'summary'
                     });
                     summary = summary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-                    
+
                     currentHistory.splice(0, 10);
                     currentHistory.unshift({ role: 'system', content: `[Tóm tắt bối cảnh cũ]: ${summary}` });
                     console.log(chalk.green(`[Memory] Nén ngữ cảnh bằng AI thành công! Số tin nhắn hiện tại: ${currentHistory.length}`));
@@ -1024,7 +1027,7 @@ app.post('/api/dashboard/chat', async (req, res) => {
 
         const clean = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         currentHistory.push({ role: 'assistant', content: clean });
-        
+
         activeWebSessionFile = saveSession(currentHistory, persistentGoal, activeWebSessionFile);
 
         if (stream) {
@@ -1198,13 +1201,13 @@ app.post('/v1/chat/completions', async (req, res) => {
         if (spinner) spinner.stop();
 
         if (error.message.includes("__HANDOVER_TO_ENGINE__")) {
-             if (stream) {
-                 res.write('data: [DONE]\n\n');
-                 res.end();
-             } else {
-                 res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: "Đã chuyển giao cho Workflow Engine." } }] });
-             }
-             return;
+            if (stream) {
+                res.write('data: [DONE]\n\n');
+                res.end();
+            } else {
+                res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: "Đã chuyển giao cho Workflow Engine." } }] });
+            }
+            return;
         }
         console.error(chalk.red(`[Node] ❌ Lỗi xử lý:`), error.message);
         if (stream) {
@@ -1214,6 +1217,16 @@ app.post('/v1/chat/completions', async (req, res) => {
         } else {
             res.status(500).json({ error: { message: error.message } });
         }
+    }
+});
+
+// Kích hoạt chu kỳ tự tối ưu hóa Meta-Harness qua Web Console
+app.post('/api/dashboard/optimize', async (req, res) => {
+    try {
+        await runMetaHarnessOptimization(activeProvider);
+        res.json({ success: true, message: 'Tối ưu hóa Meta-Harness hoàn tất!' });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
@@ -1306,6 +1319,10 @@ async function startTerminalChatLoop() {
             telemetry.printTopMemories();
             continue;
         }
+        if (text === '/optimize') {
+            await runMetaHarnessOptimization(activeProvider);
+            continue;
+        }
 
         if (text.startsWith('/goal')) {
             const goalText = text.replace('/goal', '').trim();
@@ -1366,23 +1383,23 @@ async function startTerminalChatLoop() {
         if (cliChatHistory.length > 15) {
             console.log(chalk.gray(`\n[Memory] Ngữ cảnh quá dài (${cliChatHistory.length} tin nhắn), đang tự động nén...`));
             const messagesToCompress = cliChatHistory.slice(0, 10);
-            
+
             if (activeProvider) {
-                const prompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` + 
-                               messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
-                
+                const prompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` +
+                    messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
+
                 try {
                     let summary = await activeProvider.chat({
                         messages: [{ role: 'user', content: prompt }],
                         skillRegistry: {},
-                        executeSkill: async () => {},
+                        executeSkill: async () => { },
                         systemPrompt: "Bạn là công cụ tóm tắt. Trả về đúng nội dung tóm tắt.",
                         maxSteps: 1,
                         isWorker: true,
                         workerType: 'summary'
                     });
                     summary = summary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-                    
+
                     cliChatHistory.splice(0, 10);
                     cliChatHistory.unshift({ role: 'system', content: `[Tóm tắt bối cảnh cũ]: ${summary}` });
                     console.log(chalk.green(`[Memory] Nén ngữ cảnh bằng AI thành công! Số tin nhắn hiện tại: ${cliChatHistory.length}`));
@@ -1488,7 +1505,7 @@ async function startTerminalChatLoop() {
             if (chatResult === "__HANDOVER_TO_ENGINE__" || fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
                 const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text);
                 await engine.run();
-                
+
                 console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal."));
                 continue;
             }
@@ -1518,7 +1535,7 @@ async function startTerminalChatLoop() {
                 const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text);
                 await engine.run();
                 console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal."));
-                continue; 
+                continue;
             }
 
             const endTime = Date.now();
@@ -1541,7 +1558,7 @@ async function startTerminalChatLoop() {
             spinner.stop();
             stopHeartbeat();
             if (chatTraceId) tracer.completeTrace(chatTraceId, 'failed');
-            
+
             if (error.message.includes("__HANDOVER_TO_ENGINE__")) {
                 return;
             }
@@ -1722,19 +1739,19 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
         try {
             if (activeProvider && activeProvider.chat) {
                 const prompt = `Từ yêu cầu sau, hãy trích xuất 2-3 từ khóa kỹ thuật hoặc danh từ ĐẶC TRƯNG NHẤT dùng để tìm kiếm lỗi/giải pháp trong cơ sở dữ liệu. Chỉ trả về các từ khóa viết thường, cách nhau bởi khoảng trắng, không giải thích. Yêu cầu: "${lastUserMessage}"`;
-                
+
                 let keywordResponse = await activeProvider.chat({
                     messages: [{ role: 'user', content: prompt }],
                     skillRegistry: {},
-                    executeSkill: async () => {},
+                    executeSkill: async () => { },
                     systemPrompt: "Bạn là hệ thống trích xuất từ khóa tìm kiếm nội bộ. Chỉ output từ khóa.",
                     maxSteps: 1,
                     isWorker: true,
                     workerType: 'keyword'
                 });
-                
+
                 keywordResponse = keywordResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-                
+
                 const words = keywordResponse.replace(/[^\p{L}\p{N}]/gu, ' ')
                     .trim()
                     .split(/\s+/)
@@ -1800,7 +1817,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
                     console.log(chalk.gray(`[Memory] 🧠 Semantic Search: ${scored.length} kết quả (top similarity: ${scored[0].similarity.toFixed(3)})`));
                 }
             }
-        } catch (embedErr) {}
+        } catch (embedErr) { }
 
         // 3. Tìm kiếm bằng SQLite FTS5 Keyword Search
         if (searchTerms) {
@@ -1816,7 +1833,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
                 `);
                 const ftsResults = stmt.all(searchTerms).map(r => ({ ...r, source: 'keyword' }));
                 allResults.push(...ftsResults);
-            } catch (ftsErr) {}
+            } catch (ftsErr) { }
         }
 
         const seenIds = new Set();
@@ -1853,9 +1870,9 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
 
 async function reformulateQuery(userMessage) {
     if (!activeProvider || !activeProvider.chat) return userMessage;
-    
+
     console.log(chalk.gray(`\n[Reformulator] Đang biên tập lại tin nhắn để làm rõ ngữ cảnh...`));
-    
+
     const systemPrompt = "Bạn là một AI Prompt Engineer. Nhiệm vụ của bạn là đọc tin nhắn của người dùng và thuật lại (reformulate) nó thành một Prompt rõ ràng, rành mạch, đầy đủ ngữ cảnh nhất để một AI khác đọc hiểu và xử lý hiệu quả. Không giải thích thêm, không thay đổi ý định gốc. CHỈ TRẢ VỀ CÂU ĐÃ ĐƯỢC THUẬT LẠI.";
     const prompt = `Tin nhắn gốc của người dùng: "${userMessage}"`;
 
@@ -1863,15 +1880,15 @@ async function reformulateQuery(userMessage) {
         let optimizedMessage = await activeProvider.chat({
             messages: [{ role: 'user', content: prompt }],
             skillRegistry: {},
-            executeSkill: async () => {},
+            executeSkill: async () => { },
             systemPrompt: systemPrompt,
             maxSteps: 1,
             isWorker: true,
             workerType: 'reformulator'
         });
-        
+
         optimizedMessage = optimizedMessage.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-        
+
         if (optimizedMessage && optimizedMessage !== userMessage) {
             console.log(chalk.cyan(`[Reformulator] Viết lại thành công!`));
             return `[User Original]: ${userMessage}\n\n[Optimized Context]: ${optimizedMessage}`;

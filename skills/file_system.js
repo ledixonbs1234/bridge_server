@@ -21,6 +21,34 @@ function aiSafePath(inputPath) {
 }
 
 /**
+ * Hàm tìm kiếm file đệ quy có giới hạn độ sâu và tự động bỏ qua các thư mục rác lớn
+ */
+function searchFilesRecursive(dir, query, maxResults = 40, currentDepth = 0, maxDepth = 4) {
+    let results = [];
+    if (currentDepth > maxDepth) return results;
+    
+    try {
+        const list = fs.readdirSync(dir, { withFileTypes: true });
+        for (const file of list) {
+            const fullPath = path.join(dir, file.name);
+            if (file.isDirectory()) {
+                // Tự động bỏ qua các thư mục chứa cực nhiều file không liên quan để tiết kiệm tài nguyên
+                if (['node_modules', '.git', 'profile', 'dist', 'build', 'out'].includes(file.name)) continue;
+                results = results.concat(searchFilesRecursive(fullPath, query, maxResults, currentDepth + 1, maxDepth));
+            } else if (file.isFile()) {
+                if (file.name.toLowerCase().includes(query.toLowerCase())) {
+                    results.push(aiSafePath(fullPath));
+                }
+            }
+            if (results.length >= maxResults) break;
+        }
+    } catch (e) {
+        // Bỏ qua lỗi truy cập thư mục không có quyền đọc
+    }
+    return results.slice(0, maxResults);
+}
+
+/**
  * Convert input path từ AI thành path hợp lệ cho OS
  */
 function resolveUserPath(inputPath) {
@@ -271,5 +299,38 @@ ${chalk.gray('----------------------------------------')}
                 file: aiSafePath(filePath)
             };
         }
-    }
+    },
+    "find_files": {
+        description: "[ƯU TIÊN DÙNG ĐỂ TÌM FILE] Tìm kiếm tệp tin theo từ khóa tên file (case-insensitive) một cách đệ quy trong thư mục được chỉ định. Hãy LUÔN ƯU TIÊN dùng công cụ này thay vì 'list_directory' khi bạn cần tìm kiếm một tệp tin cụ thể để tránh làm tràn ngữ cảnh (context window).",
+        parameters: {
+            type: "object",
+            properties: {
+                base_path: { 
+                    type: "string", 
+                    description: "Đường dẫn thư mục bắt đầu tìm kiếm. LUÔN dùng slash '/' thay vì '\\'. Ví dụ: C:/Users/Xon/Desktop. Mặc định là thư mục dự án hiện hành." 
+                },
+                query: { 
+                    type: "string", 
+                    description: "Từ khóa hoặc một phần tên của file cần tìm (Ví dụ: 'config', 'test_workflow', 'app')." 
+                }
+            },
+            required: ["query"]
+        },
+        handler: async (args) => {
+            const basePath = args.base_path ? resolveUserPath(args.base_path) : process.cwd();
+            const query = args.query;
+            
+            if (!fs.existsSync(basePath)) {
+                throw new Error(`Thư mục bắt đầu không tồn tại: ${aiSafePath(basePath)}`);
+            }
+
+            const matchedFiles = searchFilesRecursive(basePath, query);
+            return {
+                base_path: aiSafePath(basePath),
+                query: query,
+                matches_found: matchedFiles.length,
+                files: matchedFiles
+            };
+        }
+    },
 };

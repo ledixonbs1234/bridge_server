@@ -26,9 +26,9 @@ export default {
                                 items: {
                                     type: "object",
                                     properties: {
-                                       task: { 
-                                            type: "string", 
-                                            description: "Mô tả công việc (BẮT BUỘC: Nếu công việc liên quan đến file/terminal, phải ghi rõ ĐƯỜNG DẪN THƯ MỤC TUYỆT ĐỐI. VD: 'Khởi tạo npm tại C:/Users/Xon/Desktop/test')" 
+                                        task: {
+                                            type: "string",
+                                            description: "Mô tả công việc (BẮT BUỘC: Nếu công việc liên quan đến file/terminal, phải ghi rõ ĐƯỜNG DẪN THƯ MỤC TUYỆT ĐỐI. VD: 'Khởi tạo npm tại C:/Users/Xon/Desktop/test')"
                                         },
                                         tool: { type: "string", description: "Tên skill dự kiến sử dụng (VD: read_file, execute_terminal_command)" },
                                         parallel_group: {
@@ -99,25 +99,185 @@ export default {
                     throw new Error("PERMISSION_DENIED: Người dùng đã từ chối kế hoạch này. Hãy hỏi họ xem cần điều chỉnh bước nào.");
                 }
             }
-
-            // Lưu kế hoạch vào bộ nhớ
+            // Lưu kế hoạch vào bộ nhớ SQLite
             const stmt = db.prepare(`INSERT OR REPLACE INTO pipelines (id, name, status, data) VALUES (?, ?, ?, ?)`);
             stmt.run('CURRENT', args.pipeline_name, 'IN_PROGRESS', JSON.stringify(args));
 
-            // Khởi tạo agent_states cho mỗi step
+            // Khởi tạo cấu trúc lưu trữ File-Backed State
+            const stateDir = path.join(memoryDir, 'state');
+            const contractsDir = path.join(stateDir, 'contracts');
+            const artifactsDir = path.join(stateDir, 'artifacts');
+
+            if (!fs.existsSync(contractsDir)) fs.mkdirSync(contractsDir, { recursive: true });
+            if (!fs.existsSync(artifactsDir)) fs.mkdirSync(artifactsDir, { recursive: true });
+
+            // Khởi tạo agent_states cho mỗi step & Ghi File-Backed Contracts
             const stateStmt = db.prepare(`INSERT OR REPLACE INTO agent_states (pipeline_id, step_key, state, retry_count, error_history, updated_at) VALUES (?, ?, 'PENDING', 0, '[]', ?)`);
             const now = new Date().toISOString();
+
             for (const stage of args.stages) {
                 for (const step of stage.steps) {
                     stateStmt.run('CURRENT', step.step_key, now);
+
+                    // Thiết lập Hợp đồng thực thi (Execution Contract) tĩnh cho Step
+                    const contract = {
+                        step_key: step.step_key,
+                        task_description: step.task,
+                        target_tool: step.tool,
+                        parallel_group: step.parallel_group,
+                        dependencies: step.depends_on || [],
+                        budget: {
+                            max_retries: step.validation?.max_retries || 3,
+                            allocated_tokens: 8192 // Ngưỡng an toàn cho mô hình
+                        },
+                        completion_criteria: step.validation || {
+                            type: "llm_check",
+                            value: `Kiểm tra xem tác vụ "${step.task}" đã được hoàn thành đúng chưa.`
+                        },
+                        output_artifact_path: path.join(artifactsDir, `${step.step_key}_artifact.json`).replace(/\\/g, '/')
+                    };
+
+                    // Ghi hợp đồng ra file để Agent có thể tự đọc bằng kỹ năng của nó
+                    fs.writeFileSync(
+                        path.join(contractsDir, `${step.step_key}.json`),
+                        JSON.stringify(contract, null, 2),
+                        'utf8'
+                    );
                 }
             }
 
             return {
                 status: "success",
-                message: "Pipeline đã được người dùng PHÊ DUYỆT. Hãy bắt đầu thực thi Stage 1 ngay bây giờ. Nhớ gọi update_pipeline_status sau mỗi Stage."
+                message: "Pipeline đã được người dùng PHÊ DUYỆT. Hệ thống đã khởi tạo các Hợp đồng thực thi (Execution Contracts) tại thư mục '.agent_memory/state/contracts/'. Hãy thực thi Stage 1 ngay."
             };
         }
     },
+    "load_harness_template": {
+        description: "[NLAH] Nạp một Hợp đồng thực thi mẫu (Harness Template) đã được tối ưu hóa từ trước cho một nhóm tác vụ cụ thể (VD: react_setup, bug_fixing). Dùng công cụ này giúp bỏ qua bước lập kế hoạch động để tiết kiệm Token và đảm bảo tính tuần tự chính xác.",
+        parameters: {
+            type: "object",
+            properties: {
+                template_name: { 
+                    type: "string", 
+                    description: "Tên của file cấu hình harness nằm trong thư mục harnesses (VD: react_setup.json)" 
+                }
+            },
+            required: ["template_name"]
+        },
+        handler: async (args) => {
+            const memoryDir = path.join(process.cwd(), '.agent_memory');
+            const harnessesDir = path.join(memoryDir, 'harnesses');
+            
+            if (!fs.existsSync(harnessesDir)) {
+                fs.mkdirSync(harnessesDir, { recursive: true });
+            }
+
+            const templatePath = path.join(harnessesDir, args.template_name.endsWith('.json') ? args.template_name : `${args.template_name}.json`);
+
+            // Nếu chưa có file nào, hệ thống tự động tạo một file mẫu để tham khảo
+            if (!fs.existsSync(templatePath)) {
+                const sampleTemplate = {
+                    pipeline_name: "Khởi tạo dự án React chuẩn hóa",
+                    stages: [
+                        {
+                            name: "Khởi tạo môi trường",
+                            steps: [
+                                {
+                                    task: "Khởi tạo dự án React bằng Vite tại thư mục hiện hành",
+                                    tool: "execute_terminal_command",
+                                    validation: {
+                                        type: "file_exists",
+                                        value: "package.json",
+                                        max_retries: 2
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            name: "Cài đặt & Xác thực",
+                            steps: [
+                                {
+                                    task: "Cài đặt dependencies và chạy thử build kiểm tra lỗi biên dịch",
+                                    tool: "execute_terminal_command",
+                                    validation: {
+                                        type: "command",
+                                        value: "npm run build",
+                                        max_retries: 3
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                };
+                fs.writeFileSync(templatePath, JSON.stringify(sampleTemplate, null, 2), 'utf8');
+                throw new Error(`Template không tồn tại. Hệ thống đã tạo một file mẫu tại: ${templatePath.replace(/\\/g, '/')}. Hãy hiệu chỉnh file này và gọi lại lệnh.`);
+            }
+
+            // Đọc cấu hình NLAH tĩnh từ tệp tin
+            const templateData = JSON.parse(fs.readFileSync(templatePath, 'utf8'));
+
+            // Gán step_key và trạng thái PENDING ban đầu
+            templateData.stages.forEach((stage, sIdx) => {
+                stage.status = "PENDING";
+                stage.steps.forEach((step, stIdx) => {
+                    step.status = "PENDING";
+                    step.step_key = `stage_${sIdx}.step_${stIdx}`;
+                    if (!step.parallel_group) step.parallel_group = null;
+                    if (!step.depends_on) step.depends_on = [];
+                });
+            });
+
+            // Khởi tạo thư mục File-Backed State
+            const stateDir = path.join(memoryDir, 'state');
+            const contractsDir = path.join(stateDir, 'contracts');
+            const artifactsDir = path.join(stateDir, 'artifacts');
+            if (!fs.existsSync(contractsDir)) fs.mkdirSync(contractsDir, { recursive: true });
+            if (!fs.existsSync(artifactsDir)) fs.mkdirSync(artifactsDir, { recursive: true });
+
+            // Lưu kế hoạch tĩnh vào SQLite
+            const stmt = db.prepare(`INSERT OR REPLACE INTO pipelines (id, name, status, data) VALUES (?, ?, ?, ?)`);
+            stmt.run('CURRENT', templateData.pipeline_name, 'IN_PROGRESS', JSON.stringify(templateData));
+
+            // Đồng bộ trạng thái ban đầu ra SQLite và File-backed contracts
+            const stateStmt = db.prepare(`INSERT OR REPLACE INTO agent_states (pipeline_id, step_key, state, retry_count, error_history, updated_at) VALUES (?, ?, 'PENDING', 0, '[]', ?)`);
+            const now = new Date().toISOString();
+
+            for (const stage of templateData.stages) {
+                for (const step of stage.steps) {
+                    stateStmt.run('CURRENT', step.step_key, now);
+
+                    // Thiết lập Hợp đồng thực thi (Execution Contract) tĩnh
+                    const contract = {
+                        step_key: step.step_key,
+                        task_description: step.task,
+                        target_tool: step.tool,
+                        parallel_group: step.parallel_group,
+                        dependencies: step.depends_on || [],
+                        budget: {
+                            max_retries: step.validation?.max_retries || 3,
+                            allocated_tokens: 8192
+                        },
+                        completion_criteria: step.validation || {
+                            type: "llm_check",
+                            value: `Kiểm tra xem tác vụ "${step.task}" đã được hoàn thành đúng chưa.`
+                        },
+                        output_artifact_path: path.join(artifactsDir, `${step.step_key}_artifact.json`).replace(/\\/g, '/')
+                    };
+
+                    fs.writeFileSync(
+                        path.join(contractsDir, `${step.step_key}.json`),
+                        JSON.stringify(contract, null, 2),
+                        'utf8'
+                    );
+                }
+            }
+
+            console.log(`\n[NLAH] 📂 Đã nạp thành công Harness Template: "${templateData.pipeline_name}"`);
+            return {
+                status: "success",
+                message: `Đã nạp thành công Harness Template: "${templateData.pipeline_name}". Toàn bộ Hợp đồng thực thi đã được ghi nhận. Hệ thống đã sẵn sàng bàn giao cho workflow_engine.`
+            };
+        }
+    }
 
 };
