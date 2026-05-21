@@ -1,6 +1,7 @@
 const API = window.location.origin;
 let charts = {};
 let webChatHistory = [];
+let isFirstLoad = true;
 let isGenerating = false;
 let abortController = null;
 
@@ -236,7 +237,12 @@ async function loadSessions() {
 window.restoreSession = async function(filename) {
     if (!confirm(`Bạn có muốn khôi phục lại hội thoại từ session "${filename}"?`)) return;
     try {
-        const r = await fetch(API + `/api/dashboard/sessions/${filename}`).then(r => r.json());
+        const r = await fetch(API + `/api/dashboard/sessions/active`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename })
+        }).then(res => res.json());
+        
         if (r.success) {
             chatMessages.innerHTML = '';
             webChatHistory = r.messages || [];
@@ -254,11 +260,61 @@ window.restoreSession = async function(filename) {
             
             appendSystemMessage(`💾 Đã khôi phục hội thoại từ session: ${filename}`);
             switchTab('terminal');
+            loadSessions();
         } else {
             alert('Khôi phục thất bại: ' + r.error);
         }
     } catch(e) { alert('Lỗi khôi phục session: ' + e.message); }
 };
+
+// Start New Web Session
+window.startNewWebSession = async function() {
+    if (!confirm("Bạn có chắc chắn muốn xóa lịch sử chat hiện tại và bắt đầu một cuộc hội thoại mới không?")) return;
+    try {
+        const r = await fetch(API + '/api/dashboard/sessions/active', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: null })
+        }).then(res => res.json());
+        
+        if (r.success) {
+            chatMessages.innerHTML = '';
+            webChatHistory = [];
+            updateGoalBar(null);
+            appendSystemMessage("✨ Đã tạo phiên chat mới thành công.");
+            loadSessions();
+        } else {
+            alert("Không thể khởi tạo phiên mới: " + r.error);
+        }
+    } catch(e) {
+        alert("Lỗi khi tạo phiên mới: " + e.message);
+    }
+};
+
+// Load Active Session from Server
+async function loadActiveSession() {
+    try {
+        const r = await fetch(API + '/api/dashboard/sessions/active').then(res => res.json());
+        if (r.success && r.active) {
+            chatMessages.innerHTML = '';
+            webChatHistory = r.messages || [];
+            updateGoalBar(r.goal || null);
+            
+            webChatHistory.forEach(m => {
+                if (m.role === 'user') {
+                    appendMsg('user', m.content);
+                } else if (m.role === 'assistant') {
+                    appendMsg('bot', m.content);
+                } else if (m.role === 'system') {
+                    appendSystemMessage(m.content);
+                }
+            });
+            appendSystemMessage(`💾 Đã khôi phục phiên chat đang hoạt động: ${r.filename}`);
+        }
+    } catch(e) {
+        console.error('Lỗi khi tải session đang hoạt động:', e);
+    }
+}
 
 // Commands Loader
 async function loadCommands() {
@@ -454,6 +510,13 @@ const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
 const chatMessages = document.getElementById('chat-messages');
 
+function scrollToBottom(force = false) {
+    const isAtBottom = chatMessages.scrollHeight - chatMessages.clientHeight - chatMessages.scrollTop < 100;
+    if (force || isAtBottom) {
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+}
+
 function appendMsg(role, content, isRawHTML = false) {
     const msgDiv = document.createElement('div');
     msgDiv.className = `chat-msg-row ${role}`;
@@ -473,7 +536,7 @@ function appendMsg(role, content, isRawHTML = false) {
         </div>
     `;
     chatMessages.appendChild(msgDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    scrollToBottom(true);
 
     return role === 'bot' ? msgDiv.querySelector('.ai-response') : msgDiv.querySelector('.chat-bubble');
 }
@@ -483,7 +546,7 @@ function appendSystemMessage(content) {
     msgDiv.className = 'chat-msg-row system';
     msgDiv.innerHTML = `<div class="chat-bubble">${content}</div>`;
     chatMessages.appendChild(msgDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    scrollToBottom(true);
 }
 
 // HÀM NÂNG CẤP: Hiển thị giao diện chi tiết mã nguồn / công cụ thay vì chỉ có nút bấm xác nhận đơn điệu
@@ -527,7 +590,7 @@ function appendPermissionCard(permId, query, details) {
         </div>
     `;
     chatMessages.appendChild(msgDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    scrollToBottom(true);
 }
 
 window.respondPermission = async function(permId, value, buttonEl) {
@@ -612,7 +675,7 @@ async function sendChat() {
         const response = await fetch(API + '/api/dashboard/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: msg, history: webChatHistory, stream: true }),
+            body: JSON.stringify({ message: msg, stream: true }),
             signal: abortController.signal
         });
 
@@ -649,7 +712,7 @@ async function sendChat() {
                     if (parsed.type === 'action') {
                         botBubble.parentElement.parentElement.classList.add('thinking-tool');
                         botBubble.innerHTML = `⚡ AI đang kích hoạt Skill: <span style="font-family:'JetBrains Mono',monospace;font-weight:600">${parsed.tool}</span>...`;
-                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                        scrollToBottom();
                     } 
                     else if (parsed.type === 'chunk') {
                         if (botBubble.parentElement.parentElement.classList.contains('thinking-tool')) {
@@ -682,7 +745,7 @@ async function sendChat() {
                         }
 
                         botBubble.innerHTML = displayHtml + '<span class="cursor-blink" style="display:inline-block;width:8px;height:16px;background:var(--accent);vertical-align:middle;margin-left:4px;"></span>';
-                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                        scrollToBottom();
                     } 
                     else if (parsed.type === 'system') {
                         appendSystemMessage(parsed.content);
@@ -703,12 +766,12 @@ async function sendChat() {
                         }
                         botBubble.innerHTML = displayHtml;
                         webChatHistory = parsed.history || [];
-                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                        scrollToBottom();
                     } 
                     else if (parsed.type === 'error') {
                         botBubble.parentElement.parentElement.classList.replace('bot', 'err');
                         botBubble.textContent = '❌ Lỗi: ' + parsed.error;
-                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                        scrollToBottom();
                     }
                 } catch (errParse) {
                     console.warn("Lỗi parse dòng SSE:", errParse, cleanLine);
@@ -722,7 +785,7 @@ async function sendChat() {
             botBubble.parentElement.parentElement.classList.replace('bot', 'err');
             botBubble.textContent = '❌ Lỗi kết nối: ' + e.message; 
         }
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        scrollToBottom();
     } finally {
         isGenerating = false;
         updateSendButton();
@@ -739,6 +802,10 @@ async function loadAll() {
         loadCommands(),
         loadTraces()
     ]);
+    if (isFirstLoad) {
+        isFirstLoad = false;
+        await loadActiveSession();
+    }
 }
 
 loadAll();

@@ -16,6 +16,7 @@ import WorkflowEngine from './workflow_engine.js';
 import db from './database.js';
 import telemetry from './telemetry.js';
 import tracer from './tracer.js';
+import { recallMemoryFromGraph } from './neo4j.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,8 +60,8 @@ const originalConsoleLog = console.log;
 // =================================================================
 const SKILL_GROUPS = {
     chat: [],
-    code: ['read_file', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context', 'memorize_lesson', 'memorize_rule', 'rate_memory'],
-    research: ['web_markdown_reader', 'dynamic_browser_controller', 'graphify_query', 'graphify_ingest', 'memorize_lesson'],
+    code: ['read_file', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context', 'memorize_lesson', 'memorize_rule', 'rate_memory', 'create_pipeline_plan'],
+    research: ['web_markdown_reader', 'dynamic_browser_controller', 'graphify_query', 'graphify_ingest', 'memorize_lesson', 'create_pipeline_plan'],
     complex: null
 };
 
@@ -91,13 +92,25 @@ function filterSkillsByIntent(intent, fullRegistry) {
 const SESSION_DIR = path.join(__dirname, '.agent_memory', 'sessions');
 if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
 
-function saveSession(chatHistory, goalText) {
-    if (chatHistory.length === 0) return;
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-    const filePath = path.join(SESSION_DIR, `session_${timestamp}.jsonl`);
+let activeWebSessionFile = null;
+let activeWebHistory = [];
+
+function saveSession(chatHistory, goalText, customFileName = null) {
+    if (chatHistory.length === 0) return null;
+    let filePath;
+    let fileName;
+    if (customFileName) {
+        fileName = customFileName;
+        filePath = path.join(SESSION_DIR, customFileName);
+    } else {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+        fileName = `session_${timestamp}.jsonl`;
+        filePath = path.join(SESSION_DIR, fileName);
+    }
     const meta = { _type: 'meta', goal: goalText, provider: activeProvider?.getDisplayName(), savedAt: new Date().toISOString() };
     const lines = [JSON.stringify(meta), ...chatHistory.map(m => JSON.stringify(m))];
     fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
+    return fileName;
 }
 
 function getLatestSession() {
@@ -218,6 +231,7 @@ function getFailoverChain() {
 async function chatWithFailover(options) {
     const chain = getFailoverChain();
     let lastError = null;
+    const MAX_RETRIES = 5;
 
     for (const providerName of chain) {
         const provider = (providerName === providerConfig.activeProvider)
@@ -226,17 +240,34 @@ async function chatWithFailover(options) {
 
         if (!provider || !provider.chat) continue;
 
-        try {
-            console.log(chalk.gray(`[Failover] Đang dùng: ${provider.getDisplayName()}`));
-            const result = await provider.chat(options);
-            return result;
-        } catch (err) {
-            lastError = err;
-            if (err.message?.includes('__HANDOVER_TO_ENGINE__')) throw err;
-            console.warn(chalk.yellow(`[Failover] ❌ ${provider.getDisplayName()} lỗi: ${err.message}`));
-            telemetry.recordToolExecution(`provider:${providerName}`, false, 0, err.message);
-            console.log(chalk.yellow(`[Failover] Đang chuyển sang provider tiếp theo...`));
+        let attempt = 0;
+        let success = false;
+        let result = null;
+
+        while (attempt < MAX_RETRIES && !success) {
+            attempt++;
+            try {
+                if (attempt > 1) {
+                    console.log(chalk.yellow(`[Failover] Thử lại lần ${attempt}/${MAX_RETRIES} cho: ${provider.getDisplayName()}...`));
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } else {
+                    console.log(chalk.gray(`[Failover] Đang dùng: ${provider.getDisplayName()}`));
+                }
+                result = await provider.chat(options);
+                success = true;
+            } catch (err) {
+                lastError = err;
+                if (err.message?.includes('__HANDOVER_TO_ENGINE__')) throw err;
+                console.warn(chalk.yellow(`[Failover] ❌ Lần thử ${attempt}/${MAX_RETRIES} của ${provider.getDisplayName()} thất bại: ${err.message}`));
+                telemetry.recordToolExecution(`provider:${providerName}`, false, 0, err.message);
+            }
         }
+
+        if (success) {
+            return result;
+        }
+
+        console.log(chalk.yellow(`[Failover] ${provider.getDisplayName()} đã thử lại ${MAX_RETRIES} lần nhưng vẫn thất bại. Đang chuyển sang provider tiếp theo...`));
     }
 
     throw lastError || new Error('Tất cả provider đều lỗi!');
@@ -312,14 +343,14 @@ async function loadProviderConfig(showMenu = false) {
         if (fs.existsSync(configPath)) {
             providerConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         } else {
-            providerConfig = { activeProvider: 'deepseek-web', providers: {} };
+            providerConfig = { activeProvider: 'gemini-studio', providers: {} };
         }
     } catch (err) {
-        providerConfig = { activeProvider: 'deepseek-web', providers: {} };
+        providerConfig = { activeProvider: 'gemini-studio', providers: {} };
     }
 
     const providersList = Object.keys(providerConfig.providers || {});
-    let selectedProviderName = providerConfig.activeProvider || 'deepseek-web';
+    let selectedProviderName = providerConfig.activeProvider || 'gemini-studio';
 
     if ((showMenu || !providerConfig.providers[selectedProviderName]) && providersList.length > 0) {
         console.clear();
@@ -427,6 +458,7 @@ async function loadProviderConfig(showMenu = false) {
             const ProviderClass = module.default;
             activeProvider = new ProviderClass(providerSettings);
         }
+        globalThis.activeProvider = activeProvider;
         console.log(`\n🔌 Provider đang chạy: ${chalk.bold.green(activeProvider.getDisplayName())}\n`);
         process.stdin.resume();
     } catch (err) {
@@ -665,6 +697,53 @@ app.get('/api/dashboard/sessions', (req, res) => {
     res.json({ sessions, currentGoal: persistentGoal });
 });
 
+// 💾 LẤY SESSION HOẠT ĐỘNG: Trả về thông tin session đang chạy hoặc session mới nhất
+app.get('/api/dashboard/sessions/active', (req, res) => {
+    if (!activeWebSessionFile) {
+        const latest = getLatestSession();
+        if (latest) {
+            activeWebSessionFile = latest.file;
+            activeWebHistory = latest.messages;
+            if (latest.meta?.goal) persistentGoal = latest.meta.goal;
+            return res.json({ success: true, active: true, filename: activeWebSessionFile, messages: activeWebHistory, goal: persistentGoal });
+        }
+        return res.json({ success: true, active: false, filename: null, messages: [], goal: persistentGoal });
+    }
+    res.json({ success: true, active: true, filename: activeWebSessionFile, messages: activeWebHistory, goal: persistentGoal });
+});
+
+// 💾 THIẾT LẬP SESSION HOẠT ĐỘNG: Kích hoạt một session theo filename, hoặc khởi tạo session mới (filename = null)
+app.post('/api/dashboard/sessions/active', (req, res) => {
+    const { filename } = req.body;
+    if (!filename) {
+        activeWebSessionFile = null;
+        activeWebHistory = [];
+        return res.json({ success: true, filename: null, messages: [] });
+    }
+    const filePath = path.join(SESSION_DIR, filename);
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ success: false, error: 'Không tìm thấy tệp session yêu cầu.' });
+    }
+    try {
+        const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n');
+        let meta = null;
+        const messages = [];
+        for (const line of lines) {
+            try {
+                const obj = JSON.parse(line);
+                if (obj._type === 'meta') { meta = obj; continue; }
+                messages.push(obj);
+            } catch { /* skip */ }
+        }
+        activeWebSessionFile = filename;
+        activeWebHistory = messages;
+        if (meta?.goal) persistentGoal = meta.goal;
+        res.json({ success: true, filename, messages, meta });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
 // 💾 KHÔI PHỤC SESSION: Trả về nội dung tệp session.jsonl
 app.get('/api/dashboard/sessions/:filename', (req, res) => {
     const { filename } = req.params;
@@ -798,7 +877,7 @@ app.get('/api/dashboard/commands', (req, res) => {
 
 // 💬 WEB TERMINAL: Chat từ trình duyệt (Nâng cấp hỗ trợ History, Compaction, Handover)
 app.post('/api/dashboard/chat', async (req, res) => {
-    const { message, stream, history = [] } = req.body;
+    const { message, stream } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
 
     console.log(chalk.magenta(`\n[Web Terminal] 📥 "${message.substring(0, 80)}"${stream ? ' (Stream)' : ''}`));
@@ -813,10 +892,36 @@ app.post('/api/dashboard/chat', async (req, res) => {
     }
 
     try {
-        const currentHistory = [...history];
+        // Xử lý các lệnh đặc biệt /clear và /new
+        if (message.trim() === '/clear' || message.trim() === '/new') {
+            activeWebSessionFile = null;
+            activeWebHistory = [];
+            if (typeof activeProvider.resetSession === 'function') activeProvider.resetSession();
+            persistentGoal = null;
+            if (stream) {
+                res.write(`data: ${JSON.stringify({ type: 'done', response: "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!", history: [] })}\n\n`);
+                res.end();
+            } else {
+                res.json({ success: true, response: "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!", history: [] });
+            }
+            return;
+        }
 
-        // Tự động thuật lại câu hỏi
-        const reformulatedText = await reformulateQuery(message);
+        // Tạo hoặc khôi phục session hoạt động
+        if (!activeWebSessionFile) {
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+            activeWebSessionFile = `session_${timestamp}.jsonl`;
+            activeWebHistory = [];
+        }
+
+        const currentHistory = activeWebHistory;
+
+        // Chạy song song: Tự động thuật lại câu hỏi & Recall memory
+        const [reformulatedText, injectedMemory] = await Promise.all([
+            reformulateQuery(message),
+            recallMemory(message)
+        ]);
+
         currentHistory.push({ role: 'user', content: reformulatedText });
 
         // Tự động tóm tắt/nén context khi lịch sử chat quá dài
@@ -850,8 +955,6 @@ app.post('/api/dashboard/chat', async (req, res) => {
             }
         }
 
-        const lastUserMessage = currentHistory[currentHistory.length - 1].content;
-        const injectedMemory = await recallMemory(message); // Sử dụng tin nhắn gốc để tìm kiếm Hybrid Search hiệu quả nhất
         const enrichedMessages = JSON.parse(JSON.stringify(currentHistory));
         if (injectedMemory) enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
 
@@ -907,6 +1010,8 @@ app.post('/api/dashboard/chat', async (req, res) => {
             const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, message);
             await engine.run();
 
+            activeWebSessionFile = saveSession(currentHistory, persistentGoal, activeWebSessionFile);
+
             if (stream) {
                 res.write(`data: ${JSON.stringify({ type: 'system', content: "✅ Workflow Engine đã xử lý thành công toàn bộ Pipeline!" })}\n\n`);
                 res.write(`data: ${JSON.stringify({ type: 'done', response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: currentHistory })}\n\n`);
@@ -920,7 +1025,7 @@ app.post('/api/dashboard/chat', async (req, res) => {
         const clean = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         currentHistory.push({ role: 'assistant', content: clean });
         
-        saveSession(currentHistory, persistentGoal);
+        activeWebSessionFile = saveSession(currentHistory, persistentGoal, activeWebSessionFile);
 
         if (stream) {
             res.write(`data: ${JSON.stringify({ type: 'done', response: clean, history: currentHistory })}\n\n`);
@@ -993,7 +1098,6 @@ app.post('/api/config', (req, res) => {
 app.post('/v1/chat/completions', async (req, res) => {
     const { messages, stream } = req.body;
     const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
-    const injectedMemory = await recallMemory(lastUserMessage);
     const taskId = Date.now().toString();
 
     if (lastUserMessage.trim() === '/clear' || lastUserMessage.trim() === '/new') {
@@ -1014,7 +1118,10 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()}`);
 
-    const reformulatedMessage = await reformulateQuery(lastUserMessage);
+    const [injectedMemory, reformulatedMessage] = await Promise.all([
+        recallMemory(lastUserMessage),
+        reformulateQuery(lastUserMessage)
+    ]);
 
     const enrichedMessages = messages.map(m => {
         if (m.role === 'user' && m.content === lastUserMessage) {
@@ -1249,7 +1356,11 @@ async function startTerminalChatLoop() {
 
         resetSessionLog();
 
-        const reformulatedText = await reformulateQuery(text);
+        const [reformulatedText, injectedMemory] = await Promise.all([
+            reformulateQuery(text),
+            recallMemory(text)
+        ]);
+
         cliChatHistory.push({ role: 'user', content: reformulatedText });
 
         if (cliChatHistory.length > 15) {
@@ -1282,7 +1393,6 @@ async function startTerminalChatLoop() {
             }
         }
 
-        const injectedMemory = await recallMemory(text);
         const enrichedMessages = JSON.parse(JSON.stringify(cliChatHistory));
         if (injectedMemory) enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
 
@@ -1653,6 +1763,17 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
 
         let allResults = [];
 
+        // 1. Tìm kiếm bằng Neo4j GraphRAG
+        try {
+            const graphResults = await recallMemoryFromGraph(lastUserMessage, allMessagesContext);
+            if (graphResults && graphResults.length > 0) {
+                allResults.push(...graphResults);
+            }
+        } catch (graphErr) {
+            console.warn("[Memory] Neo4j GraphRAG search failed:", graphErr.message);
+        }
+
+        // 2. Tìm kiếm bằng SQLite Semantic Search (Vector)
         try {
             const queryEmbedding = await embedText(lastUserMessage);
             if (queryEmbedding) {
@@ -1681,18 +1802,21 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
             }
         } catch (embedErr) {}
 
+        // 3. Tìm kiếm bằng SQLite FTS5 Keyword Search
         if (searchTerms) {
-            const stmt = db.prepare(`
-                SELECT m.id, m.situation, m.solution, m.trust_score, m.use_count
-                FROM memories_fts f
-                JOIN memories m ON f.rowid = m.rowid
-                WHERE memories_fts MATCH ?
-                AND m.trust_score > 0.3
-                ORDER BY m.trust_score DESC, rank
-                LIMIT 3
-            `);
-            const ftsResults = stmt.all(searchTerms).map(r => ({ ...r, source: 'keyword' }));
-            allResults.push(...ftsResults);
+            try {
+                const stmt = db.prepare(`
+                    SELECT m.id, m.situation, m.solution, m.trust_score, m.use_count
+                    FROM memories_fts f
+                    JOIN memories m ON f.rowid = m.rowid
+                    WHERE memories_fts MATCH ?
+                    AND m.trust_score > 0.3
+                    ORDER BY m.trust_score DESC, rank
+                    LIMIT 3
+                `);
+                const ftsResults = stmt.all(searchTerms).map(r => ({ ...r, source: 'keyword' }));
+                allResults.push(...ftsResults);
+            } catch (ftsErr) {}
         }
 
         const seenIds = new Set();
@@ -1709,7 +1833,12 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
             injectedContext += "\n--- BÀI HỌC TỪ LỖI TRONG QUÁ KHỨ (Hybrid Search) ---\n";
             injectedContext += finalResults.map(r => {
                 const trust = (r.trust_score ?? 0.7).toFixed(2);
-                const tag = r.source === 'semantic' ? `🧠 Semantic | Trust: ${trust}` : `🔤 Keyword | Trust: ${trust}`;
+                let tag = `🔤 Keyword | Trust: ${trust}`;
+                if (r.source === 'graph') {
+                    tag = `🕸️ GraphRAG | Trust: ${trust}`;
+                } else if (r.source === 'semantic') {
+                    tag = `🧠 Semantic | Trust: ${trust}`;
+                }
                 return `- [${tag} | ID: ${r.id}] Vấn đề: "${r.situation}" -> Xử lý: "${r.solution}"`;
             }).join('\n');
             injectedContext += "\n(Lưu ý: Nếu bài học nào GIÚP ÍCH, hãy gọi rate_memory với outcome='success'. Nếu SAI, gọi với outcome='fail'.)";

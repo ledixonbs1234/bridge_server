@@ -107,6 +107,9 @@ class GeminiAPIProvider extends BaseProvider {
                     let result;
                     try {
                         result = await executeSkill(funcName, funcArgs);
+                        if (result === "__HANDOVER_TO_ENGINE__") {
+                            return "__HANDOVER_TO_ENGINE__";
+                        }
                         if (typeof result === 'string') result = JSON.parse(result);
                     } catch (err) {
                         result = { status: "error", error_message: err.message };

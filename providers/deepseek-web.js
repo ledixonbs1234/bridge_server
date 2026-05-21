@@ -110,6 +110,9 @@ QUAN TRỌNG:
 
                     // Thực thi kỹ năng nội bộ
                     const funcRes = await executeSkill(toolJson.name, toolJson.args);
+                    if (funcRes === "__HANDOVER_TO_ENGINE__") {
+                        return "__HANDOVER_TO_ENGINE__";
+                    }
                     const resultString = typeof funcRes === 'object' ? JSON.stringify(funcRes) : String(funcRes);
 
                     // FEEDBACK: Báo cho DeepSeek biết kết quả để nó làm tiếp

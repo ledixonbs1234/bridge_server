@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import db from '../database.js';
+import { saveMemoryToGraph, updateMemoryTrustInGraph } from '../neo4j.js';
+
 // Fix lỗi __dirname trong ES Module
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,6 +47,11 @@ export default {
 
             console.log(`\n[🧠 Memory] AI vừa ghi nhớ vào Database: [${(args.tags || []).join(', ')}] (Trust: 0.70)`);
 
+            // 🕸️ Ghi vào Neo4j GraphDB (async)
+            saveMemoryToGraph(id, date, args.tags, args.situation, args.solution, 0.7).catch(err => {
+                console.error("[🧠 Memory] [Neo4j] ❌ Không thể lưu vào GraphDB:", err.message);
+            });
+
             // 🧠 AUTO-EMBED: Tự động tạo vector embedding cho bài học (async, không block)
             (async () => {
                 try {
@@ -77,7 +84,7 @@ export default {
                 }
             })();
 
-            return { status: "success", memory_id: id, message: "Đã khắc sâu vào Database cục bộ (Trust Score: 0.70)." };
+            return { status: "success", memory_id: id, message: "Đã khắc sâu vào Database cục bộ và GraphDB (Trust Score: 0.70)." };
         }
     },
 
@@ -124,6 +131,11 @@ export default {
 
             const emoji = outcome === 'success' ? '📈' : '📉';
             console.log(`\n[🧠 Memory] ${emoji} Trust Score cập nhật: "${row.situation}" → ${newScore} (Dùng: ${newCount} lần)`);
+
+            // 🕸️ Cập nhật Neo4j GraphDB (async)
+            updateMemoryTrustInGraph(memory_id, newScore, newCount).catch(err => {
+                console.error("[🧠 Memory] [Neo4j] ❌ Không thể cập nhật Trust Score trong GraphDB:", err.message);
+            });
 
             return {
                 status: "success",

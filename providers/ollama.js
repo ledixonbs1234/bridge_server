@@ -88,6 +88,10 @@ class OllamaProvider extends BaseProvider {
                         result = JSON.stringify({ status: "error", error_message: err.message });
                     }
 
+                    if (result === "__HANDOVER_TO_ENGINE__") {
+                        return "__HANDOVER_TO_ENGINE__";
+                    }
+
                     chatMessages.push({
                         role: 'tool',
                         content: typeof result === 'string' ? result : JSON.stringify(result)

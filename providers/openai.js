@@ -144,6 +144,10 @@ class OpenAIProvider extends BaseProvider {
                         result = JSON.stringify({ status: "error", error_message: err.message });
                     }
 
+                    if (result === "__HANDOVER_TO_ENGINE__") {
+                        return "__HANDOVER_TO_ENGINE__";
+                    }
+
                     // Thêm kết quả function vào messages
                     chatMessages.push({
                         role: 'tool',

@@ -130,7 +130,10 @@
         <!-- WEB TERMINAL PANEL -->
         <div class="panel" id="panel-terminal">
             <div class="card chat-box" style="padding:0; overflow:hidden;">
-                <h3 style="font-size:14px;font-weight:600;padding:16px 24px;border-bottom:1px solid var(--border);margin:0;background:var(--surface)">💬 Web Terminal — <span id="chat-provider" style="color:var(--success)"></span></h3>
+                <h3 style="font-size:14px;font-weight:600;padding:16px 24px;border-bottom:1px solid var(--border);margin:0;background:var(--surface);display:flex;align-items:center;justify-content:space-between;width:100%">
+                    <span>💬 Web Terminal — <span id="chat-provider" style="color:var(--success)"></span></span>
+                    <button onclick="startNewWebSession()" class="btn-session-restore" style="padding: 4px 12px; font-weight: 500;">✨ New Chat</button>
+                </h3>
                 <div class="chat-messages" id="chat-messages">
                     <!-- Messages will be added dynamically -->
                 </div>

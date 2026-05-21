@@ -16,7 +16,7 @@
       "name": "OpenAI",
       "enabled": true,
       "apiKey": "",
-      "model": "gemini",
+      "model": "kiro",
       "baseUrl": "http://localhost:20128/v1",
       "maxTokens": 4096,
       "temperature": 0.7
@@ -55,5 +55,10 @@
       "maxTokens": 4096,
       "temperature": 0.7
     }
+  },
+  "neo4j": {
+    "uri": "neo4j+s://dd1d64f1.databases.neo4j.io",
+    "username": "dd1d64f1",
+    "password": "VU8izyu1A9uAC680Z0mNHwoH3UXHQUcBcmun8K1mkGE"
   }
 }
