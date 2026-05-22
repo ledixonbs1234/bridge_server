@@ -1,16 +1,16 @@
 {
-  "activeProvider": "gemini-studio",
+  "activeProvider": "openai",
   "providers": {
     "deepseek-web": {
       "name": "DeepSeek Web (Free Chat)",
       "enabled": true,
-      "description": "Dùng trình duyệt tự động điều khiển chat.deepseek.com (Có giả lập Function Calling)",
+      "description": "Dùng trình duyệt tự động điều khiển chat.deepseek.com",
       "model": "deepseek-chat"
     },
     "gemini-studio": {
       "name": "Gemini Studio (Free Web)",
       "enabled": true,
-      "description": "Dùng Web để điều khiển AI Studio (miễn phí, không cần API key)"
+      "description": "Dùng Web để điều khiển AI Studio"
     },
     "openai": {
       "name": "OpenAI",
@@ -24,7 +24,6 @@
     "gemini-api": {
       "name": "Google Gemini API (Direct)",
       "enabled": false,
-      "apiKey": "",
       "model": "gemini-2.5-flash",
       "maxTokens": 8192,
       "temperature": 0.7
@@ -32,7 +31,6 @@
     "claude": {
       "name": "Anthropic Claude",
       "enabled": false,
-      "apiKey": "",
       "model": "claude-sonnet-4-20250514",
       "baseUrl": "https://api.anthropic.com",
       "maxTokens": 4096,
@@ -49,16 +47,10 @@
     "openai-compatible": {
       "name": "OpenAI-Compatible (DeepSeek, Groq, etc.)",
       "enabled": false,
-      "apiKey": "",
       "model": "deepseek-chat",
       "baseUrl": "https://api.deepseek.com/v1",
       "maxTokens": 4096,
       "temperature": 0.7
     }
-  },
-  "neo4j": {
-    "uri": "neo4j+s://dd1d64f1.databases.neo4j.io",
-    "username": "dd1d64f1",
-    "password": "VU8izyu1A9uAC680Z0mNHwoH3UXHQUcBcmun8K1mkGE"
   }
 }

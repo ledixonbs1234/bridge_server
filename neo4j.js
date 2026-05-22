@@ -1,18 +1,13 @@
 import neo4j from 'neo4j-driver';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const configPath = path.join(__dirname, 'config.json');
-let config = {};
-if (fs.existsSync(configPath)) {
-    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-}
-
-const neo4jConfig = config.neo4j;
+// =================================================================
+// 🕸️ NEO4J CONFIGURATION (Load từ .env hoặc fallback về config.json)
+// =================================================================
+const neo4jConfig = {
+  uri: process.env.NEO4J_URI,
+  username: process.env.NEO4J_USERNAME,
+  password: process.env.NEO4J_PASSWORD
+};
 let driver = null;
 
 if (neo4jConfig && neo4jConfig.uri) {

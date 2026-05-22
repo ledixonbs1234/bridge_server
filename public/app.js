@@ -1004,3 +1004,29 @@ async function loadAll() {
 
 loadAll();
 setInterval(loadAll, 15000);
+// // Health Check Monitor
+// async function checkHealth() {
+//   try {
+//     const r = await fetch(API + '/health').then(r => r.json());
+//     const statusEl = document.getElementById('status');
+    
+//     if (r.status === 'ok') {
+//       statusEl.textContent = 'Online';
+//       statusEl.style.color = 'var(--success)';
+//     } else {
+//       statusEl.textContent = 'Degraded';
+//       statusEl.style.color = 'var(--warn)';
+//     }
+    
+//     // Update every 30 seconds
+//     setTimeout(checkHealth, 30000);
+//   } catch (e) {
+//     const statusEl = document.getElementById('status');
+//     statusEl.textContent = 'Offline';
+//     statusEl.style.color = 'var(--danger)';
+//     setTimeout(checkHealth, 5000); // Retry faster if offline
+//   }
+// }
+
+// // Start health monitoring
+// checkHealth();

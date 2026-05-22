@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
@@ -18,7 +19,7 @@ import telemetry from './telemetry.js';
 import tracer from './tracer.js';
 import { recallMemoryFromGraph } from './neo4j.js';
 import { runMetaHarnessOptimization } from './meta_harness.js';
-
+import { randomUUID } from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -36,7 +37,38 @@ process.on('unhandledRejection', (reason) => {
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+// =================================================================
+// 💓 HEALTH CHECK ENDPOINT
+// =================================================================
+app.get('/health', (req, res) => {
+    const health = {
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memory: {
+            rss: `${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB`,
+            heapUsed: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`,
+            heapTotal: `${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)}MB`
+        },
+        provider: activeProvider?.getDisplayName() || 'unknown',
+        model: activeProvider?.model || 'unknown',
+        database: {
+            status: db.open ? 'connected' : 'disconnected',
+            path: path.join(__dirname, '.agent_memory', 'agent_state.db')
+        },
+        skills: {
+            total: Object.keys(SKILL_REGISTRY).length,
+            hardSkills: Object.keys(SKILL_REGISTRY).filter(k => !k.startsWith('workflow_')).length,
+            softSkills: Object.keys(SKILL_REGISTRY).filter(k => k.startsWith('workflow_')).length
+        },
+        sessions: {
+            active: activeWebSessionFile ? true : false,
+            total: listSessions().length
+        }
+    };
 
+    res.json(health);
+});
 const EXTENSION_PORT = 54321;
 
 // =================================================================
@@ -69,16 +101,16 @@ const SKILL_GROUPS = {
 
 function classifyIntent(userMessage) {
     const msg = userMessage.toLowerCase();
-    
+
     // 1. Nhóm hội thoại, giải thích thông thường (Chat)
     if (msg.match(/^(giải thích|tại sao|là gì|what is|explain|how does|tóm tắt|summarize|dịch|translate|cho tôi biết|kể về)/)) return 'chat';
-    
+
     // 2. Nhóm Lập trình & Thao tác file (Ưu tiên kiểm tra trước nhóm Research để tránh tranh chấp từ khóa như "tìm")
     if (msg.match(/(tạo file|sửa file|viết code|fix|build|deploy|chạy lệnh|npm |pnpm |yarn |cài đặt|install|commit|git |tạo dự án|refactor|debug|compile|lint|test|đăng nhập|login|auth)/)) return 'code';
-    
+
     // 3. Nhóm Nghiên cứu tài liệu & Crawl Web
     if (msg.match(/(tìm trên|search|đọc trang|đọc link|url:|http:|https:|tra cứu|look up|crawl|scrape)/)) return 'research';
-    
+
     return 'complex';
 }
 
@@ -357,6 +389,16 @@ async function loadProviderConfig(showMenu = false) {
     } catch (err) {
         providerConfig = { activeProvider: 'gemini-studio', providers: {} };
     }
+    if (process.env.OPENAI_API_KEY && providerConfig.providers?.openai) {
+        providerConfig.providers.openai.apiKey = process.env.OPENAI_API_KEY;
+    }
+    if (process.env.ANTHROPIC_API_KEY && providerConfig.providers?.claude) {
+        providerConfig.providers.claude.apiKey = process.env.ANTHROPIC_API_KEY;
+    }
+    if (process.env.GEMINI_API_KEY && providerConfig.providers?.['gemini-api']) {
+        providerConfig.providers['gemini-api'].apiKey = process.env.GEMINI_API_KEY;
+    }
+
 
     const providersList = Object.keys(providerConfig.providers || {});
     let selectedProviderName = providerConfig.activeProvider || 'gemini-studio';
@@ -494,7 +536,7 @@ global.askPermission = async function (query) {
     const cleanQuery = query.replace(/\x1b\[[0-9;]*m/g, '');
 
     if (activeWebSession && activeWebSession.res) {
-        const permId = 'perm_' + Math.random().toString(36).substring(2, 9);
+        const permId = 'perm_' + randomUUID();
 
         // Trích xuất toàn bộ log chi tiết (như boxen và source code) thu thập được từ bộ đệm
         const cleanDetails = logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
@@ -928,7 +970,7 @@ app.post('/api/dashboard/chat', async (req, res) => {
 
         // 3. BÀN GIAO TOÀN BỘ LOGIC CHO ORCHESTRATOR TRUNG TÂM
         // (Không khai báo thêm tracer, systemPrompt hay llmSpanId ở đây nữa)
-         const result = await executeAgentTurn({
+        const result = await executeAgentTurn({
             message,
             history: activeWebHistory,
             sessionFile: activeWebSessionFile,
@@ -942,7 +984,7 @@ app.post('/api/dashboard/chat', async (req, res) => {
                 res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
             } : null,
             onAskPermission: async (query) => {
-                const permId = 'perm_' + Math.random().toString(36).substring(2, 9);
+                const permId = 'perm_' + randomUUID();
                 const cleanDetails = logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
                 logBuffer = [];
 
@@ -1074,7 +1116,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         const result = await executeAgentTurn({
             message: lastUserMessage,
             // Trích xuất lịch sử trước lượt hiện tại để tránh bị lặp tin nhắn vừa nhận
-            history: messages.slice(0, -1), 
+            history: messages.slice(0, -1),
             onChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({
                     id: "chatcmpl-" + taskId,
@@ -1270,7 +1312,7 @@ async function startTerminalChatLoop() {
             recallMemory(text)
         ]);
 
-       // BÀN GIAO CHO ENGINE TRUNG TÂM ĐỂ XỬ LÝ LƯỢT CHAT
+        // BÀN GIAO CHO ENGINE TRUNG TÂM ĐỂ XỬ LÝ LƯỢT CHAT
         let isFirstChunk = true;
         const startTime = Date.now();
         let spinner = ora({ text: OC_MUTED.italic('Starting build...'), spinner: 'dots' }).start();
@@ -1360,6 +1402,67 @@ async function startTerminalChatLoop() {
     }
 }
 
+// =================================================================
+// 🛑 GRACEFUL SHUTDOWN (Xử lý Ctrl+C an toàn)
+// =================================================================
+async function gracefulShutdown(signal) {
+    console.log(chalk.yellow(`\n${signal} received. Đang shutdown an toàn...`));
+
+    try {
+        // 1. Lưu session đang hoạt động
+        if (activeWebHistory.length > 0) {
+            const savedFile = saveSession(activeWebHistory, persistentGoal);
+            console.log(chalk.green(`✓ Đã lưu session: ${savedFile}`));
+        }
+
+        // 2. Đóng browser contexts (tránh memory leak)
+        try {
+            const { default: aiStudioBot } = await import('./ai_studio_bot.js');
+            if (aiStudioBot.context) {
+                await aiStudioBot.context.close();
+                console.log(chalk.green('✓ Đã đóng AI Studio browser context'));
+            }
+        } catch (e) { /* Bỏ qua nếu chưa khởi tạo */ }
+
+        try {
+            const { default: deepseekBot } = await import('./deepseek_web_bot.js');
+            if (deepseekBot.context) {
+                await deepseekBot.context.close();
+                console.log(chalk.green('✓ Đã đóng DeepSeek browser context'));
+            }
+        } catch (e) { /* Bỏ qua nếu chưa khởi tạo */ }
+
+        // 3. Kill tất cả child processes
+        const { activeProcesses } = await import('./skills/terminal.js');
+        if (activeProcesses && activeProcesses.size > 0) {
+            console.log(chalk.yellow(`Đang tắt ${activeProcesses.size} tiến trình ngầm...`));
+            for (const [procId, proc] of activeProcesses.entries()) {
+                try {
+                    proc.child.kill('SIGTERM');
+                    console.log(chalk.gray(`  ✓ Đã tắt: ${proc.command} (${procId})`));
+                } catch (e) { /* Bỏ qua */ }
+            }
+        }
+
+        // 4. Đóng database connection
+        if (db && db.open) {
+            db.close();
+            console.log(chalk.green('✓ Đã đóng database connection'));
+        }
+
+        console.log(chalk.green('\n👋 Goodbye! Server đã shutdown an toàn.\n'));
+        process.exit(0);
+
+    } catch (error) {
+        console.error(chalk.red('❌ Lỗi khi shutdown:'), error.message);
+        process.exit(1);
+    }
+}
+
+// Đăng ký signal handlers
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));    // Ctrl+C
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));  // kill command
+
 // 🎯 CLI OPT-IN CHECK: Chỉ mở Terminal loop nếu chạy server bằng flag --cli
 const isCliMode = process.argv.includes('--cli');
 
@@ -1441,7 +1544,7 @@ Chỉ trả lời cực ngắn gọn (1-2 câu).`;
 
 async function executeSkillForProvider(functionName, funcArgs, onLog) {
     const logger = onLog || global.logToWebChat;
-    
+
     // Tự động phân tích các tham số để hiển thị chi tiết đích đến của Tool
     let targetDetail = "";
     if (funcArgs) {

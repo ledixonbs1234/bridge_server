@@ -2,15 +2,39 @@ import { exec, spawn } from 'child_process';
 import os from 'os';
 import boxen from 'boxen';
 import chalk from 'chalk';
-
+import { analyzeCommand, printCommandWarning, getCommandTimeout } from './command_guard.js';
 // 1. Quản lý các tiến trình đang chạy ngầm
 const activeProcesses = new Map();
 let processCounter = 1;
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
+const __filename_audit = fileURLToPath(import.meta.url);
+const __dirname_audit = path.dirname(__filename_audit);
+const AUDIT_LOG_PATH = path.join(__dirname_audit, '..', '.agent_memory', 'command_audit.log');
+
+function auditLog(command, cwd, result, duration) {
+    try {
+        const logEntry = {
+            timestamp: new Date().toISOString(),
+            command,
+            cwd,
+            success: result.status !== 'error',
+            duration,
+            exitCode: result.exitCode || (result.error ? 1 : 0)
+        };
+        const logDir = path.dirname(AUDIT_LOG_PATH);
+        if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+        fs.appendFileSync(AUDIT_LOG_PATH, JSON.stringify(logEntry) + '\n', 'utf8');
+    } catch (e) {
+        // Ignore audit log errors
+    }
+}
 // Hàm hỗ trợ tắt tiến trình ngầm (chống kẹt Port trên Windows/Mac)
 function killProcess(child) {
     if (os.platform() === 'win32') {
-        exec(`taskkill /PID ${child.pid} /T /F`, () => {}); // /T tắt cả cây tiến trình (cmd.exe và node.exe)
+        exec(`taskkill /PID ${child.pid} /T /F`, () => { }); // /T tắt cả cây tiến trình (cmd.exe và node.exe)
     } else {
         child.kill('SIGKILL');
     }
@@ -49,7 +73,7 @@ export default {
             activeProcesses.delete(pid);
 
             console.log(chalk.red(`\n[Terminal] 🛑 Đã tắt tiến trình ngầm: ${proc.command} (${pid})`));
-            
+
             return { status: "success", message: `Đã tắt thành công tiến trình: ${proc.command}` };
         }
     },
@@ -75,13 +99,34 @@ export default {
                     description: "BẮT BUỘC VIẾT BẰNG TIẾNG VIỆT: Mục đích (vì sao phải chạy lệnh này trong ngữ cảnh hiện tại)."
                 }
             },
-            required: ["command", "functionality", "purpose"] 
+            required: ["command", "functionality", "purpose"]
         },
         handler: async (args) => {
             const command = args.command;
             const cwd = args.working_directory || os.homedir();
             const isBackground = args.is_background || false;
+            const analysis = analyzeCommand(command);
 
+            if (analysis.level === 'danger') {
+                printCommandWarning(analysis, command);
+                auditLog(command, cwd, { status: 'error', error: 'BLOCKED_BY_GUARD' }, 0);
+                throw new Error(
+                    `COMMAND_BLOCKED: Command bị chặn bởi Command Guard vì lý do an toàn. ` +
+                    `Lý do: ${analysis.reason}. ` +
+                    `Nếu bạn thực sự cần chạy lệnh này, hãy chia nhỏ thành các lệnh an toàn hơn.`
+                );
+            }
+
+            if (analysis.level === 'warn' && !global.isAutoApproveAll) {
+                printCommandWarning(analysis, command);
+                // Nếu đang ở web session, askPermission sẽ tự xử lý qua SSE
+                const answer = await global.askPermission(
+                    chalk.bold.yellow(`⚠️ Command này cần xác nhận. Cho phép chạy? [y/n] : `)
+                );
+                if (answer !== 'y' && answer !== 'a') {
+                    throw new Error("PERMISSION_DENIED: User từ chối command cần xác nhận.");
+                }
+            }
             if (!args.functionality || !args.purpose) {
                 throw new Error("LỖI NGHIÊM TRỌNG: Bạn ĐÃ QUÊN truyền tham số 'functionality' và 'purpose'. Hệ thống từ chối cấp quyền. Hãy GỌI LẠI LỆNH NÀY và BẮT BUỘC GIẢI THÍCH BẰNG TIẾNG VIỆT!");
             }
@@ -116,8 +161,12 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
             // XỬ LÝ CHẠY NGẦM VÀ AUTO-PING (Đã nâng cấp)
             if (isBackground) {
                 return new Promise((resolve) => {
-                    const child = spawn(command, { cwd, shell: true });
-                    
+                    const child = spawn(command, {
+                        cwd,
+                        shell: true,
+                        timeout: getCommandTimeout(command, true)
+                    });
+
                     // 2. LƯU LẠI TIẾN TRÌNH VÀO BỘ NHỚ ĐỂ CÓ THỂ TẮT SAU NÀY
                     const procId = `process_${processCounter++}`;
                     activeProcesses.set(procId, { child, command });
@@ -164,10 +213,41 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
 
             // XỬ LÝ CHẠY BÌNH THƯỜNG
             return new Promise((resolve) => {
-                exec(command, { cwd }, (error, stdout, stderr) => {
-                    resolve({ command, stdout: stdout || "", stderr: stderr || "", error: error ? error.message : null });
+                const startTime = Date.now();
+                const timeout = getCommandTimeout(command, false);
+
+                const childProcess = exec(command, {
+                    cwd,
+                    timeout,
+                    maxBuffer: 10 * 1024 * 1024  // 10MB buffer
+                }, (error, stdout, stderr) => {
+                    const duration = Date.now() - startTime;
+                    const result = {
+                        command,
+                        stdout: stdout || "",
+                        stderr: stderr || "",
+                        error: error ? error.message : null,
+                        exitCode: error?.code || 0,
+                        duration_ms: duration
+                    };
+
+                    // Audit log
+                    auditLog(command, cwd, result, duration);
+
+                    // Timeout warning
+                    if (error?.killed) {
+                        result.error = `Command bị timeout sau ${timeout / 1000}s. Hãy thử chia nhỏ task hoặc dùng is_background=true cho long-running tasks.`;
+                    }
+
+                    resolve(result);
+                });
+
+                // Safety: Ensure process is killed on timeout
+                childProcess.on('error', (err) => {
+                    console.error(chalk.red(`[Terminal] Process error: ${err.message}`));
                 });
             });
         }
     }
 };
+export { activeProcesses };
