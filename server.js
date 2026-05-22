@@ -61,16 +61,24 @@ const originalConsoleLog = console.log;
 // =================================================================
 const SKILL_GROUPS = {
     chat: [],
-    code: ['read_file', 'read_multiple_files', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context', 'memorize_lesson', 'memorize_rule', 'rate_memory', 'create_pipeline_plan', 'load_harness_template'],
-    research: ['web_markdown_reader', 'dynamic_browser_controller', 'graphify_query', 'graphify_ingest', 'memorize_lesson', 'create_pipeline_plan', 'load_harness_template'],
+    code: ['read_file', 'read_multiple_files', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context', 'memorize_lesson', 'memorize_rule', 'rate_memory', 'create_pipeline_plan', 'load_harness_template', 'find_files'],
+    // BẢO VỆ DỰ PHÒNG: Thêm các công cụ tìm & đọc file cơ bản vào nhóm research
+    research: ['web_markdown_reader', 'dynamic_browser_controller', 'graphify_query', 'graphify_ingest', 'memorize_lesson', 'create_pipeline_plan', 'load_harness_template', 'read_file', 'read_file_lines', 'find_files', 'list_directory'],
     complex: null
 };
 
 function classifyIntent(userMessage) {
     const msg = userMessage.toLowerCase();
+    
+    // 1. Nhóm hội thoại, giải thích thông thường (Chat)
     if (msg.match(/^(giải thích|tại sao|là gì|what is|explain|how does|tóm tắt|summarize|dịch|translate|cho tôi biết|kể về)/)) return 'chat';
+    
+    // 2. Nhóm Lập trình & Thao tác file (Ưu tiên kiểm tra trước nhóm Research để tránh tranh chấp từ khóa như "tìm")
+    if (msg.match(/(tạo file|sửa file|viết code|fix|build|deploy|chạy lệnh|npm |pnpm |yarn |cài đặt|install|commit|git |tạo dự án|refactor|debug|compile|lint|test|đăng nhập|login|auth)/)) return 'code';
+    
+    // 3. Nhóm Nghiên cứu tài liệu & Crawl Web
     if (msg.match(/(tìm trên|search|đọc trang|đọc link|url:|http:|https:|tra cứu|look up|crawl|scrape)/)) return 'research';
-    if (msg.match(/(tạo file|sửa file|viết code|fix|build|deploy|chạy lệnh|npm |pnpm |yarn |cài đặt|install|commit|git |tạo dự án|refactor|debug|compile|lint|test)/)) return 'code';
+    
     return 'complex';
 }
 
@@ -1862,7 +1870,7 @@ async function executeAgentTurn({
             messages: enrichedMessages,
             skillRegistry: filteredSkills,
             systemPrompt,
-            maxSteps: 15,
+            maxSteps: 25,
             onStreamChunk: onChunk,
             executeSkill: async (funcName, args) => {
                 if (onAction) onAction(funcName);

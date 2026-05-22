@@ -173,7 +173,7 @@ app.post('/api/dashboard/chat', async (req, res) => {
             return toolResult;
         },
         systemPrompt,
-        maxSteps: 15,
+        maxSteps: 25,
         onStreamChunk: (chunk) => {
             // Gửi từng chunk text qua SSE
             res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);

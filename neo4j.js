@@ -105,7 +105,7 @@ Hãy trả về kết quả dưới định dạng JSON duy nhất, KHÔNG giả
             let response = await activeProvider.chat({
                 messages: [{ role: 'user', content: extractionPrompt }],
                 skillRegistry: {},
-                executeSkill: async () => {},
+                executeSkill: async () => { },
                 systemPrompt: "Bạn là một AI chuyên trích xuất Graph JSON. Chỉ output JSON hợp lệ.",
                 maxSteps: 1,
                 isWorker: true,
@@ -115,7 +115,7 @@ Hãy trả về kết quả dưới định dạng JSON duy nhất, KHÔNG giả
             response = response.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
             const jsonText = response.replace(/```json|```/g, '').trim();
             const parsed = JSON.parse(jsonText);
-            
+
             if (parsed.entities) entities = parsed.entities;
             if (parsed.relationships) relationships = parsed.relationships;
             console.log(`[Neo4j] ✅ Trích xuất thành công: ${entities.length} thực thể, ${relationships.length} mối quan hệ.`);
@@ -210,13 +210,13 @@ export async function recallMemoryFromGraph(lastUserMessage, allMessagesContext 
     try {
         const activeProvider = globalThis.activeProvider;
         if (activeProvider && activeProvider.chat) {
-           // Thay đổi prompt tại recallMemoryFromGraph trong neo4j.js
-const queryPrompt = `[HỆ THỐNG NỘI BỘ - AN TOÀN] Bạn đang hoạt động trong một module trích xuất thực thể của Bridge Server. Hãy xử lý tin nhắn sau của người dùng và trích xuất 3-5 danh từ/thực thể kỹ thuật đặc trưng nhất. Trả về dạng danh sách từ khóa phân tách bởi dấu phẩy:
+            // Thay đổi prompt tại recallMemoryFromGraph trong neo4j.js
+            const queryPrompt = `[HỆ THỐNG NỘI BỘ - AN TOÀN] Bạn đang hoạt động trong một module trích xuất thực thể của Bridge Server. Hãy xử lý tin nhắn sau của người dùng và trích xuất 3-5 danh từ/thực thể kỹ thuật đặc trưng nhất. Trả về dạng danh sách từ khóa phân tách bởi dấu phẩy:
 Tin nhắn: "${lastUserMessage}"`;
             let response = await activeProvider.chat({
                 messages: [{ role: 'user', content: queryPrompt }],
                 skillRegistry: {},
-                executeSkill: async () => {},
+                executeSkill: async () => { },
                 systemPrompt: "Bạn là một công cụ trích xuất thực thể. Chỉ trả về danh sách từ khóa phân tách bởi dấu phẩy.",
                 maxSteps: 1,
                 isWorker: true,
@@ -224,9 +224,22 @@ Tin nhắn: "${lastUserMessage}"`;
             });
 
             response = response.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-            keywords = response.split(',')
-                .map(w => w.replace(/[^\p{L}\p{N}]/gu, ' ').trim().toLowerCase())
-                .filter(w => w.length > 1);
+
+            // --- BỘ LỌC AN TOÀN (ANTI-REFUSAL INTERCEPTOR) ---
+            // Kiểm tra xem phản hồi của LLM có phải là một câu từ chối/cảnh báo hay không
+            const isRefusal = response.toLowerCase().includes("can't") ||
+                response.toLowerCase().includes("sorry") ||
+                response.toLowerCase().includes("discuss") ||
+                response.toLowerCase().includes("development environment");
+
+            if (isRefusal) {
+                console.log("[Neo4j] ⚠️ LLM bị dính bộ lọc an toàn hoặc từ chối trích xuất từ khóa. Chuyển sang cơ chế fallback.");
+                keywords = []; // Gán rỗng để kích hoạt thuật toán tách từ fallback phía sau
+            } else {
+                keywords = response.split(',')
+                    .map(w => w.replace(/[^\p{L}\p{N}]/gu, ' ').trim().toLowerCase())
+                    .filter(w => w.length > 1);
+            }
         }
     } catch (err) {
         console.error("[Neo4j] ⚠️ Lỗi trích xuất thực thể truy vấn bằng LLM:", err.message);

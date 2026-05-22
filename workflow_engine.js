@@ -222,37 +222,50 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
         return prompt;
     }
     // === VALIDATOR AGENT ===
- async validateStep(step, executorOutput) {
+ // === VALIDATOR AGENT (Cải tiến xử lý CWD) ===
+    async validateStep(step, executorOutput) {
         const val = step.validation || { type: 'llm_check', value: `Kiểm tra xem tác vụ "${step.task}" đã được hoàn thành đúng chưa.` };
+
+        // --- CHUẨN HÓA ĐƯỜNG DẪN DỰ ÁN ĐÍCH (Xử lý được cả dấu \ trên Windows) ---
+        const normalizedTask = step.task.replace(/\\/g, '/');
+        const pathRegex = /(?:[a-zA-Z]:\/|\/)[^\s"']+/g;
+        const matches = normalizedTask.match(pathRegex);
+        let detectedWorkspace = process.cwd().replace(/\\/g, '/'); // Mặc định là thư mục chạy server nếu không tìm thấy bối cảnh
+
+        if (matches && matches.length > 0) {
+            const firstMatch = matches[0];
+            if (path.extname(firstMatch)) {
+                detectedWorkspace = path.dirname(firstMatch).replace(/\\/g, '/');
+            } else {
+                detectedWorkspace = firstMatch;
+            }
+        }
+
+        // 1. Kiểm tra sự tồn tại của file
         if (val.type === 'file_exists') {
             const exists = fs.existsSync(val.value.trim());
             return { passed: exists, reason: exists ? '' : `File không tồn tại: ${val.value}` };
         }
+
+        // 2. Chạy lệnh kiểm thử terminal trực tiếp
         if (val.type === 'command') {
-            try { execSync(val.value, { stdio: 'ignore' }); return { passed: true, reason: '' }; }
-            catch { return { passed: false, reason: `Lệnh kiểm tra thất bại: ${val.value}` }; }
+            try { 
+                // Khắc phục: Gán đúng thư mục làm việc của dự án đích thay vì chạy tại bridge_server
+                execSync(val.value, { cwd: detectedWorkspace, stdio: 'ignore' }); 
+                return { passed: true, reason: '' }; 
+            }
+            catch { 
+                return { passed: false, reason: `Lệnh kiểm tra thất bại: ${val.value} (Thư mục chạy: ${detectedWorkspace})` }; 
+            }
         }
+
+        // 3. Sử dụng LLM độc lập để kiểm duyệt
         if (val.type === 'llm_check') {
             logMessage(chalk.blue(`🤖 Khởi chạy Validator Agent (Strict Mode)...`));
             const stepState = this.getStepState('CURRENT', step.step_key);
             const errorHistory = JSON.parse(stepState?.error_history || '[]');
             const errorCtx = errorHistory.length > 0 ? `\n[LỖI ĐÃ GẶP TRƯỚC ĐÓ TRONG CÁC LẦN THỬ TRƯỚC]: ${errorHistory.slice(-3).join(' | ')}` : '';
 
-            // --- THUẬT TOÁN TỰ ĐỘNG TRÍCH XUẤT ĐƯỜNG DẪN DỰ ÁN ĐÍCH ---
-            const pathRegex = /(?:[a-zA-Z]:\/|\/)[^\s"']+/g;
-            const matches = step.task.match(pathRegex);
-            let detectedWorkspace = "Chưa phát hiện (Hãy sử dụng đường dẫn tuyệt đối ghi trong mô tả tác vụ)";
-            
-            if (matches && matches.length > 0) {
-                const firstMatch = matches[0].replace(/\\/g, '/');
-                if (path.extname(firstMatch)) {
-                    detectedWorkspace = path.dirname(firstMatch).replace(/\\/g, '/');
-                } else {
-                    detectedWorkspace = firstMatch;
-                }
-            }
-
-            // Sử dụng đối tượng toàn cục process thay thế hoàn toàn cho thư viện os
             const platform = process.platform;
             const homeDir = (process.env.USERPROFILE || process.env.HOME || '').replace(/\\/g, '/');
             const cwd = process.cwd().replace(/\\/g, '/');
@@ -281,6 +294,7 @@ ${errorCtx}
 2. Chỉ chấp nhận (PASS) khi kết quả thực thi thực tế cho thấy mã nguồn đã được sửa đổi thực sự, tệp tin đã được tạo, hoặc lệnh kiểm thử đã chạy và ra kết quả cụ thể.
 3. Nếu tất cả tiêu chí thực tế đã được đáp ứng hoàn hảo → Hãy trả về duy nhất một từ: "PASS".
 4. Nếu chưa hoàn thành triệt để, hoặc có dấu hiệu làm tắt, đối phó → Trả về chi tiết các điểm chưa đạt và ghi rõ ở cuối: "FAIL: [lý do cụ thể]".`;
+
             try {
                 const workerSkills = { ...this.skillRegistry };
                 delete workerSkills['create_pipeline_plan'];
@@ -289,11 +303,17 @@ ${errorCtx}
                     messages: [{ role: 'user', content: validationPrompt }],
                     skillRegistry: workerSkills,
                     executeSkill: async (fn, args) => {
+                        // SAFETY INTERCEPTOR: Tự động phát hiện và sửa chữa đường dẫn nếu AI bỏ quên working_directory
+                        if (fn === 'execute_terminal_command') {
+                            if (!args.working_directory || args.working_directory === 'desktop') {
+                                args.working_directory = detectedWorkspace;
+                            }
+                        }
                         logMessage(chalk.yellow(`\n⚙️ Validator gọi Tool: ${fn}...`));
                         return await this.executeSkillFn(fn, args);
                     },
                     systemPrompt: "Bạn là Validator. Nếu đạt → PASS. Nếu không → chỉ ra lỗi.",
-                    maxSteps: 3, isWorker: true, workerType: 'task'
+                    maxSteps: 10, isWorker: true, workerType: 'task'
                 });
                 return resp.trim().toUpperCase().includes('PASS')
                     ? { passed: true, reason: '' }
