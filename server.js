@@ -61,7 +61,7 @@ const originalConsoleLog = console.log;
 // =================================================================
 const SKILL_GROUPS = {
     chat: [],
-    code: ['read_file', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context', 'memorize_lesson', 'memorize_rule', 'rate_memory', 'create_pipeline_plan', 'load_harness_template'],
+    code: ['read_file', 'read_multiple_files', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context', 'memorize_lesson', 'memorize_rule', 'rate_memory', 'create_pipeline_plan', 'load_harness_template'],
     research: ['web_markdown_reader', 'dynamic_browser_controller', 'graphify_query', 'graphify_ingest', 'memorize_lesson', 'create_pipeline_plan', 'load_harness_template'],
     complex: null
 };
@@ -878,7 +878,7 @@ app.get('/api/dashboard/commands', (req, res) => {
     });
 });
 
-// 💬 WEB TERMINAL: Chat từ trình duyệt (Nâng cấp hỗ trợ History, Compaction, Handover)
+// 💬 WEB TERMINAL: Chat từ trình duyệt (Đã dọn dẹp sạch toàn bộ biến dư thừa)
 app.post('/api/dashboard/chat', async (req, res) => {
     const { message, stream } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
@@ -895,150 +895,83 @@ app.post('/api/dashboard/chat', async (req, res) => {
     }
 
     try {
-        // Xử lý các lệnh đặc biệt /clear và /new
+        // 1. Xử lý các lệnh đặc biệt xóa lịch sử /clear và /new
         if (message.trim() === '/clear' || message.trim() === '/new') {
             activeWebSessionFile = null;
             activeWebHistory = [];
             if (typeof activeProvider.resetSession === 'function') activeProvider.resetSession();
             persistentGoal = null;
+            const respMsg = "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";
             if (stream) {
-                res.write(`data: ${JSON.stringify({ type: 'done', response: "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!", history: [] })}\n\n`);
+                res.write(`data: ${JSON.stringify({ type: 'done', response: respMsg, history: [] })}\n\n`);
                 res.end();
             } else {
-                res.json({ success: true, response: "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!", history: [] });
+                res.json({ success: true, response: respMsg, history: [] });
             }
             return;
         }
 
-        // Tạo hoặc khôi phục session hoạt động
+        // 2. Tạo hoặc khôi phục session hoạt động
         if (!activeWebSessionFile) {
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
             activeWebSessionFile = `session_${timestamp}.jsonl`;
             activeWebHistory = [];
         }
 
-        const currentHistory = activeWebHistory;
-
-        // Chạy song song: Tự động thuật lại câu hỏi & Recall memory
-        const [reformulatedText, injectedMemory] = await Promise.all([
-            reformulateQuery(message),
-            recallMemory(message)
-        ]);
-
-        currentHistory.push({ role: 'user', content: reformulatedText });
-
-        // Tự động tóm tắt/nén context khi lịch sử chat quá dài
-        if (currentHistory.length > 15) {
-            console.log(chalk.gray(`\n[Memory] Ngữ cảnh quá dài (${currentHistory.length} tin nhắn), đang tự động nén...`));
-            const messagesToCompress = currentHistory.slice(0, 10);
-
-            if (activeProvider && activeProvider.chat) {
-                const compPrompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` +
-                    messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
-
-                try {
-                    let summary = await activeProvider.chat({
-                        messages: [{ role: 'user', content: compPrompt }],
-                        skillRegistry: {},
-                        executeSkill: async () => { },
-                        systemPrompt: "Bạn là công cụ tóm tắt. Trả về đúng nội dung tóm tắt.",
-                        maxSteps: 1,
-                        isWorker: true,
-                        workerType: 'summary'
-                    });
-                    summary = summary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-
-                    currentHistory.splice(0, 10);
-                    currentHistory.unshift({ role: 'system', content: `[Tóm tắt bối cảnh cũ]: ${summary}` });
-                    console.log(chalk.green(`[Memory] Nén ngữ cảnh bằng AI thành công! Số tin nhắn hiện tại: ${currentHistory.length}`));
-                } catch (err) {
-                    console.warn(chalk.yellow(`[Memory] Lỗi khi nén ngữ cảnh: ${err.message}`));
-                    currentHistory.splice(0, 10);
-                }
-            }
-        }
-
-        const enrichedMessages = JSON.parse(JSON.stringify(currentHistory));
-        if (injectedMemory) enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
-
-        let systemPrompt = "";
-        const promptPath = path.join(__dirname, 'system_prompt.md');
-        if (fs.existsSync(promptPath)) systemPrompt = fs.readFileSync(promptPath, 'utf8');
-
-        systemPrompt = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPrompt;
-
-        if (persistentGoal) {
-            systemPrompt = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên.\n\n` + systemPrompt;
-        }
-
-        const apiIntent = classifyIntent(message);
-        const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
-
-        const webTraceId = tracer.createTrace(`[Web] ${message.substring(0, 60)}`);
-
-        // Đăng ký cổng log truyền trực tiếp log từ WorkflowEngine lên giao diện Web
-        global.logToWebChat = (text) => {
-            if (stream) {
-                res.write(`data: ${JSON.stringify({ type: 'system', content: text })}\n\n`);
-            }
-        };
-
-        const result = await chatWithFailover({
-            messages: enrichedMessages,
-            skillRegistry: filteredSkills,
-            executeSkill: async (funcName, args) => {
-                console.log(chalk.magenta(`[Web Terminal] ⚡ ${funcName}`));
-                const wSpanId = webTraceId ? tracer.startSpan(webTraceId, funcName, 'tool', null, args) : null;
-                if (stream) {
-                    res.write(`data: ${JSON.stringify({ type: 'action', tool: funcName })}\n\n`);
-                }
-                const toolResult = await executeSkillForProvider(funcName, args);
-                if (wSpanId) tracer.endSpan(wSpanId, 'completed', { text: String(toolResult).substring(0, 300) });
-                return toolResult;
-            },
-            systemPrompt,
-            maxSteps: 15,
-            onStreamChunk: stream ? (chunk) => {
+        // 3. BÀN GIAO TOÀN BỘ LOGIC CHO ORCHESTRATOR TRUNG TÂM
+        // (Không khai báo thêm tracer, systemPrompt hay llmSpanId ở đây nữa)
+         const result = await executeAgentTurn({
+            message,
+            history: activeWebHistory,
+            sessionFile: activeWebSessionFile,
+            onChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
+            } : null,
+            onAction: stream ? (tool) => {
+                res.write(`data: ${JSON.stringify({ type: 'action', tool })}\n\n`);
+            } : null,
+            onSystem: stream ? (content) => {
+                res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
+            } : null,
+            onAskPermission: async (query) => {
+                const permId = 'perm_' + Math.random().toString(36).substring(2, 9);
+                const cleanDetails = logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+                logBuffer = [];
+
+                res.write(`data: ${JSON.stringify({ type: 'ask_permission', id: permId, query: query.replace(/\x1b\[[0-9;]*m/g, ''), details: cleanDetails })}\n\n`);
+                return new Promise((resolve) => pendingPermissions.set(permId, resolve));
+            },
+            // THÊM THAM SỐ NÀY ĐỂ TRUYỀN LOG SSE VỀ CLIENT:
+            onLog: stream ? (text) => {
+                res.write(`data: ${JSON.stringify({ type: 'log', content: text })}\n\n`);
             } : null
         });
 
-        if (webTraceId) tracer.completeTrace(webTraceId, 'completed');
+        // 4. Đồng bộ lại dữ liệu sau khi Orchestrator xử lý xong
+        activeWebHistory = result.history;
+        activeWebSessionFile = result.sessionFile;
 
-        // BÀN GIAO SANG WORKFLOW ENGINE NẾU CÓ TÍN HIỆU KHỞI TẠO PIPELINE
-        if (result === "__HANDOVER_TO_ENGINE__" || (typeof result === 'string' && result.includes("__HANDOVER_TO_ENGINE__"))) {
-            if (stream) {
-                res.write(`data: ${JSON.stringify({ type: 'system', content: "🔄 Đang khởi tạo và cấu hình Workflow Engine..." })}\n\n`);
-            }
-            const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, message);
-            await engine.run();
-
-            activeWebSessionFile = saveSession(currentHistory, persistentGoal, activeWebSessionFile);
-
+        // 5. Phản hồi kết quả cuối cùng về phía giao diện Web UI
+        if (result.type === 'handover') {
             if (stream) {
                 res.write(`data: ${JSON.stringify({ type: 'system', content: "✅ Workflow Engine đã xử lý thành công toàn bộ Pipeline!" })}\n\n`);
-                res.write(`data: ${JSON.stringify({ type: 'done', response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: currentHistory })}\n\n`);
+                res.write(`data: ${JSON.stringify({ type: 'done', response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: activeWebHistory })}\n\n`);
                 res.end();
             } else {
-                res.json({ success: true, response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: currentHistory });
+                res.json({ success: true, response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: activeWebHistory });
             }
-            return;
-        }
-
-        const clean = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-        currentHistory.push({ role: 'assistant', content: clean });
-
-        activeWebSessionFile = saveSession(currentHistory, persistentGoal, activeWebSessionFile);
-
-        if (stream) {
-            res.write(`data: ${JSON.stringify({ type: 'done', response: clean, history: currentHistory })}\n\n`);
-            res.end();
         } else {
-            res.json({ success: true, response: clean, history: currentHistory });
+            if (stream) {
+                res.write(`data: ${JSON.stringify({ type: 'done', response: result.response, history: activeWebHistory })}\n\n`);
+                res.end();
+            } else {
+                res.json({ success: true, response: result.response, history: activeWebHistory });
+            }
         }
+
     } catch (err) {
+        // Khối catch được dọn dẹp sạch sẽ, hoàn toàn không gọi đến các biến chưa khai báo
         console.error(chalk.red(`[Web Terminal] ❌ Lỗi xử lý:`), err.message);
-        if (webTraceId) tracer.completeTrace(webTraceId, 'failed');
         if (stream) {
             res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
             res.end();
@@ -1046,10 +979,7 @@ app.post('/api/dashboard/chat', async (req, res) => {
             res.status(500).json({ success: false, error: err.message });
         }
     } finally {
-        if (stream && activeWebSession.res === res) {
-            activeWebSession.res = null;
-        }
-        global.logToWebChat = null;
+        activeWebSession.res = null;
     }
 });
 
@@ -1103,10 +1033,9 @@ app.post('/v1/chat/completions', async (req, res) => {
     const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
     const taskId = Date.now().toString();
 
+    // Xử lý phím tắt /clear hoặc /new
     if (lastUserMessage.trim() === '/clear' || lastUserMessage.trim() === '/new') {
-        if (typeof activeProvider.resetSession === 'function') {
-            activeProvider.resetSession();
-        }
+        if (typeof activeProvider.resetSession === 'function') activeProvider.resetSession();
         const clearMsg = "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";
         if (stream) {
             res.setHeader('Content-Type', 'text/event-stream');
@@ -1119,37 +1048,7 @@ app.post('/v1/chat/completions', async (req, res) => {
         return;
     }
 
-    console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Provider: ${activeProvider.getDisplayName()}`);
-
-    const [injectedMemory, reformulatedMessage] = await Promise.all([
-        recallMemory(lastUserMessage),
-        reformulateQuery(lastUserMessage)
-    ]);
-
-    const enrichedMessages = messages.map(m => {
-        if (m.role === 'user' && m.content === lastUserMessage) {
-            let finalContent = reformulatedMessage;
-            if (injectedMemory) finalContent += injectedMemory;
-            return { ...m, content: finalContent };
-        }
-        return m;
-    });
-
-    let systemPrompt = "";
-    const promptPath = path.join(__dirname, 'system_prompt.md');
-    if (fs.existsSync(promptPath)) {
-        systemPrompt = fs.readFileSync(promptPath, 'utf8');
-    }
-
-    systemPrompt = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPrompt;
-
-    if (persistentGoal) {
-        systemPrompt = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên. Nếu bạn thấy mình đang đi lạc hướng, hãy dừng lại và quay về mục tiêu.\n\n` + systemPrompt;
-    }
-
-    const apiIntent = classifyIntent(lastUserMessage);
-    const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
-    if (apiIntent !== 'complex') console.log(chalk.gray(`[Router] Intent: ${apiIntent} → ${Object.keys(filteredSkills).length} tools`));
+    console.log(`\n[Node] 📥 Nhận request mới (ID: ${taskId}) - Giao diện v1 API`);
 
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
@@ -1159,56 +1058,41 @@ app.post('/v1/chat/completions', async (req, res) => {
 
     let spinner = null;
     if (!stream) {
-        spinner = ora({
-            text: chalk.yellow(`AI đang phân tích và suy nghĩ...`),
-            spinner: 'dots'
-        }).start();
+        spinner = ora({ text: chalk.yellow(`AI đang suy nghĩ và thực thi các công cụ...`), spinner: 'dots' }).start();
     }
 
     try {
-        const resultText = await chatWithFailover({
-            messages: enrichedMessages,
-            skillRegistry: filteredSkills,
-            executeSkill: async (funcName, args) => {
-                if (spinner) spinner.stop();
-                tickHeartbeat();
-                const res = await executeSkillForProvider(funcName, args);
-                tickHeartbeat();
-                if (spinner) spinner.start(chalk.yellow(`Đang xử lý kết quả của ${funcName}...`));
-                return res;
-            },
-            systemPrompt: systemPrompt,
-            maxSteps: 15,
-            onStreamChunk: stream ? (chunk) => {
-                tickHeartbeat();
+        // BÀN GIAO TOÀN BỘ CHO ENGINE TRUNG TÂM
+        const result = await executeAgentTurn({
+            message: lastUserMessage,
+            // Trích xuất lịch sử trước lượt hiện tại để tránh bị lặp tin nhắn vừa nhận
+            history: messages.slice(0, -1), 
+            onChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({
                     id: "chatcmpl-" + taskId,
                     object: "chat.completion.chunk",
                     choices: [{ delta: { content: chunk }, finish_reason: null }]
                 })}\n\n`);
-            } : null
+            } : null,
+            onAction: (tool) => {
+                if (spinner) {
+                    spinner.text = chalk.yellow(`Đang xử lý kết quả hoạt động của công cụ ${tool}...`);
+                }
+            }
         });
 
-        if (spinner) spinner.succeed(chalk.green('AI đã trả lời xong!'));
+        if (spinner) spinner.succeed(chalk.green('Hoàn thành!'));
 
         if (stream) {
             res.write('data: [DONE]\n\n');
             res.end();
         } else {
-            res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: resultText } }] });
+            const outText = result.type === 'handover' ? "Pipeline hoàn thành thành công." : result.response;
+            res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: outText } }] });
         }
+
     } catch (error) {
         if (spinner) spinner.stop();
-
-        if (error.message.includes("__HANDOVER_TO_ENGINE__")) {
-            if (stream) {
-                res.write('data: [DONE]\n\n');
-                res.end();
-            } else {
-                res.json({ id: "chatcmpl-" + taskId, object: "chat.completion", choices: [{ message: { role: "assistant", content: "Đã chuyển giao cho Workflow Engine." } }] });
-            }
-            return;
-        }
         console.error(chalk.red(`[Node] ❌ Lỗi xử lý:`), error.message);
         if (stream) {
             res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[LỖI: ${error.message}]` }, finish_reason: "stop" }] })}\n\n`);
@@ -1378,63 +1262,9 @@ async function startTerminalChatLoop() {
             recallMemory(text)
         ]);
 
-        cliChatHistory.push({ role: 'user', content: reformulatedText });
-
-        if (cliChatHistory.length > 15) {
-            console.log(chalk.gray(`\n[Memory] Ngữ cảnh quá dài (${cliChatHistory.length} tin nhắn), đang tự động nén...`));
-            const messagesToCompress = cliChatHistory.slice(0, 10);
-
-            if (activeProvider) {
-                const prompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` +
-                    messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
-
-                try {
-                    let summary = await activeProvider.chat({
-                        messages: [{ role: 'user', content: prompt }],
-                        skillRegistry: {},
-                        executeSkill: async () => { },
-                        systemPrompt: "Bạn là công cụ tóm tắt. Trả về đúng nội dung tóm tắt.",
-                        maxSteps: 1,
-                        isWorker: true,
-                        workerType: 'summary'
-                    });
-                    summary = summary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-
-                    cliChatHistory.splice(0, 10);
-                    cliChatHistory.unshift({ role: 'system', content: `[Tóm tắt bối cảnh cũ]: ${summary}` });
-                    console.log(chalk.green(`[Memory] Nén ngữ cảnh bằng AI thành công! Số tin nhắn hiện tại: ${cliChatHistory.length}`));
-                } catch (err) {
-                    console.warn(chalk.yellow(`[Memory] Lỗi khi nén ngữ cảnh: ${err.message}`));
-                    cliChatHistory.splice(0, 10);
-                }
-            }
-        }
-
-        const enrichedMessages = JSON.parse(JSON.stringify(cliChatHistory));
-        if (injectedMemory) enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
-
-        let systemPromptText = "";
-        const promptPath = path.join(__dirname, 'system_prompt.md');
-        if (fs.existsSync(promptPath)) systemPromptText = fs.readFileSync(promptPath, 'utf8');
-
-        systemPromptText = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Node Version: ${process.version}\n- Current Working Directory (CWD): ${process.cwd()}\n\n` + systemPromptText;
-
-        if (persistentGoal) {
-            systemPromptText = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên. Nếu bạn thấy mình đang đi lạc hướng, hãy dừng lại và quay về mục tiêu.\n\n` + systemPromptText;
-        }
-
-        const cliIntent = classifyIntent(text);
-        const cliFilteredSkills = filterSkillsByIntent(cliIntent, SKILL_REGISTRY);
-        if (cliIntent !== 'complex') {
-            console.log(chalk.gray(`[Router] 🧭 Intent: ${cliIntent} → ${Object.keys(cliFilteredSkills).length}/${Object.keys(SKILL_REGISTRY).length} tools`));
-        }
-
-        let fullAiResponse = '';
+       // BÀN GIAO CHO ENGINE TRUNG TÂM ĐỂ XỬ LÝ LƯỢT CHAT
         let isFirstChunk = true;
         const startTime = Date.now();
-
-        const chatTraceId = tracer.createTrace(text.substring(0, 80));
-
         let spinner = ora({ text: OC_MUTED.italic('Starting build...'), spinner: 'dots' }).start();
         let isThinkingMode = false;
 
@@ -1446,39 +1276,11 @@ async function startTerminalChatLoop() {
         startHeartbeat();
 
         try {
-            const chatResult = await chatWithFailover({
-                messages: enrichedMessages,
-                skillRegistry: cliFilteredSkills,
-                executeSkill: async (funcName, args) => {
-                    if (!isFirstChunk) console.log('\n');
-                    spinner.stop();
-                    tickHeartbeat();
-                    console.log(`\n${OC_THINK.italic('Action:')} ${OC_MUTED.italic(`Executing ${funcName}...`)}\n`);
-                    const toolSpanId = chatTraceId ? tracer.startSpan(chatTraceId, funcName, 'tool', null, args) : null;
-                    const res = await executeSkillForProvider(funcName, args);
-                    if (toolSpanId) {
-                        if (res === "__HANDOVER_TO_ENGINE__") {
-                            tracer.endSpan(toolSpanId, 'completed', { handover: true });
-                        } else {
-                            try {
-                                const parsed = JSON.parse(res);
-                                tracer.endSpan(toolSpanId, parsed.status === 'success' ? 'completed' : 'failed', { status: parsed.status }, parsed.error_message || null);
-                            } catch { tracer.endSpan(toolSpanId, 'completed', { text: String(res).substring(0, 300) }); }
-                        }
-                    }
-                    tickHeartbeat();
-                    if (res !== "__HANDOVER_TO_ENGINE__") {
-                        spinner = ora({ text: OC_MUTED.italic(`Evaluating output...`), spinner: 'dots' }).start();
-                    }
-                    isFirstChunk = true;
-                    return res;
-                },
-                systemPrompt: systemPromptText,
-                maxSteps: 15,
-                onStreamChunk: (chunk) => {
-                    tickHeartbeat();
+            const result = await executeAgentTurn({
+                message: text,
+                history: cliChatHistory,
+                onChunk: (chunk) => {
                     if (isFirstChunk) { spinner.stop(); isFirstChunk = false; }
-                    fullAiResponse += chunk;
 
                     if (chunk.includes('<think>')) { isThinkingMode = true; process.stdout.write(OC_THINK.italic('Thinking:\n')); return; }
                     if (chunk.includes('</think>')) { isThinkingMode = false; process.stdout.write('\n\n'); return; }
@@ -1496,46 +1298,44 @@ async function startTerminalChatLoop() {
                             if (currentLineLen >= terminalCols) { printedRows++; currentLineLen = 0; }
                         }
                     }
+                },
+                onAction: (tool) => {
+                    if (!isFirstChunk) console.log('\n');
+                    spinner.stop();
+                    console.log(`\n${OC_THINK.italic('Action:')} ${OC_MUTED.italic(`Executing ${tool}...`)}\n`);
+                    isFirstChunk = true;
                 }
             });
 
             if (isFirstChunk) spinner.stop();
             stopHeartbeat();
-            if (chatTraceId) tracer.completeTrace(chatTraceId, 'completed');
-            if (chatResult === "__HANDOVER_TO_ENGINE__" || fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
-                const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text);
-                await engine.run();
 
-                console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal."));
+            if (result.type === 'handover') {
+                cliChatHistory.length = 0;
+                cliChatHistory.push(...result.history);
+                console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal sau khi Pipeline hoàn tất."));
                 continue;
             }
-            const cleanResponseForHistory = fullAiResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
-            let polishedMarkdown = cleanResponseForHistory
-                .replace(/^\s*\*\s/gm, '- ')
-                .replace(/```[a-z]*\n/g, '\n');
+            // Đồng bộ lịch sử
+            cliChatHistory.length = 0;
+            cliChatHistory.push(...result.history);
 
-            const printBeautiful = (text) => {
-                let parsedText = marked.parse(text).trim();
+            // Xóa phần text thô vừa in ra để render bằng markdown đẹp mắt hơn
+            const printBeautiful = (txt) => {
+                let parsedText = marked.parse(txt).trim();
                 parsedText = parsedText.replace(/^\s*-\s/gm, chalk.cyan('  • '));
                 console.log(parsedText);
             };
 
             if (printedRows > 0 && printedRows < terminalRowsMax - 3) {
                 process.stdout.write(`\r\x1b[${printedRows}A\x1b[0J`);
-                printBeautiful(polishedMarkdown);
+                printBeautiful(result.response);
             } else if (printedRows > 0) {
                 console.log(OC_MUTED(`\n\n--- Formatting Markdown ---\n`));
-                printBeautiful(polishedMarkdown);
-            } else if (polishedMarkdown) {
-                printBeautiful(polishedMarkdown);
-            }
-
-            if (fullAiResponse.includes("__HANDOVER_TO_ENGINE__")) {
-                const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, text);
-                await engine.run();
-                console.log(chalk.cyan("\n[Hệ thống] Trả lại quyền điều khiển cho Terminal."));
-                continue;
+                printBeautiful(result.response);
+            } else if (result.response) {
+                printBeautiful(result.response);
             }
 
             const endTime = Date.now();
@@ -1544,27 +1344,10 @@ async function startTerminalChatLoop() {
 
             console.log(`\n\n${OC_BLUE('■')}  ${OC_TEXT('Build')} · ${OC_MUTED(modelName + ' · ' + duration + 's')}\n`);
 
-            cliChatHistory.push({ role: 'assistant', content: cleanResponseForHistory });
-
-            saveSession(cliChatHistory, persistentGoal);
-
-            if (currentSessionLog.some(entry => entry.success === false)) {
-                runCriticAgent([...currentSessionLog]).catch(err => {
-                    console.warn(chalk.yellow(`[Critic Agent] Lỗi ngầm: ${err.message}`));
-                });
-            }
-
         } catch (error) {
             spinner.stop();
             stopHeartbeat();
-            if (chatTraceId) tracer.completeTrace(chatTraceId, 'failed');
-
-            if (error.message.includes("__HANDOVER_TO_ENGINE__")) {
-                return;
-            }
-
             console.error(chalk.red(`\n❌ Error: ${error.message}\n`));
-            cliChatHistory.pop();
         }
     }
 }
@@ -1592,13 +1375,15 @@ function resetSessionLog() {
 // =================================================================
 // 🧠 CRITIC AGENT (Hard Loop — Tự động phân tích lỗi & ghi bài học)
 // =================================================================
-async function runCriticAgent(sessionLog) {
+async function runCriticAgent(sessionLog, onLog) {
+    const logger = onLog || global.logToWebChat;
     if (!activeProvider || !activeProvider.chat) return;
 
     const errorEntries = sessionLog.filter(e => e.success === false);
     if (errorEntries.length === 0) return;
 
     console.log(chalk.magenta(`\n[Critic Agent] 🧠 Phát hiện ${errorEntries.length} lỗi trong phiên vừa rồi. Đang tự động phân tích...`));
+    if (logger) logger(`🧠 [Sub-Agent: Critic] Phát hiện có tác vụ bị lỗi. Đang tự động phân tích hành vi...`);
 
     const logSummary = sessionLog.map(e => {
         const status = e.success ? '✅' : '❌';
@@ -1618,16 +1403,17 @@ Nhiệm vụ:
 Chỉ trả lời cực ngắn gọn (1-2 câu).`;
 
     try {
-        const criticSkills = {};
+        const skills = {};
         if (SKILL_REGISTRY['memorize_lesson']) skills['memorize_lesson'] = SKILL_REGISTRY['memorize_lesson'];
-        if (SKILL_REGISTRY['rate_memory']) criticSkills['rate_memory'] = SKILL_REGISTRY['rate_memory'];
+        if (SKILL_REGISTRY['rate_memory']) skills['rate_memory'] = SKILL_REGISTRY['rate_memory'];
 
         const response = await activeProvider.chat({
             messages: [{ role: 'user', content: criticPrompt }],
             skillRegistry: skills,
             executeSkill: async (funcName, args) => {
                 console.log(chalk.magenta(`[Critic Agent] 💡 Tự động gọi: ${funcName}`));
-                return await executeSkillForProvider(funcName, args);
+                if (logger) logger(`💡 [Critic Agent] Đang thực hiện lưu trữ bài học: ${funcName}...`);
+                return await executeSkillForProvider(funcName, args, logger);
             },
             systemPrompt: "Bạn là Critic Agent (Quality Monitor). Phân tích log lỗi và tự rút kinh nghiệm. Trả lời cực ngắn.",
             maxSteps: 2,
@@ -1638,13 +1424,34 @@ Chỉ trả lời cực ngắn gọn (1-2 câu).`;
         const cleanResponse = response.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
         if (cleanResponse) {
             console.log(chalk.gray(`[Critic Agent] Kết luận: ${cleanResponse}`));
+            if (logger) logger(`📈 [Critic Agent] Hoàn tất chẩn đoán: "${cleanResponse}"`);
         }
     } catch (e) {
         console.warn(chalk.yellow(`[Critic Agent] Lỗi khi chạy Critic: ${e.message}`));
     }
 }
 
-async function executeSkillForProvider(functionName, funcArgs) {
+async function executeSkillForProvider(functionName, funcArgs, onLog) {
+    const logger = onLog || global.logToWebChat;
+    
+    // Tự động phân tích các tham số để hiển thị chi tiết đích đến của Tool
+    let targetDetail = "";
+    if (funcArgs) {
+        if (funcArgs.file_path) {
+            targetDetail = ` 📂 File: "${funcArgs.file_path}"`;
+        } else if (funcArgs.file_paths && Array.isArray(funcArgs.file_paths)) {
+            targetDetail = ` 📂 Files: [${funcArgs.file_paths.map(f => `"${f}"`).join(', ')}]`;
+        } else if (funcArgs.target) {
+            targetDetail = ` 🎯 Target: "${funcArgs.target}"`;
+        } else if (funcArgs.command) {
+            targetDetail = ` 💻 Lệnh: "${funcArgs.command.substring(0, 120)}"`;
+        } else if (funcArgs.url) {
+            targetDetail = ` 🌐 Link: "${funcArgs.url}"`;
+        }
+    }
+
+    if (logger) logger(`⚙️ [Tool Call] Kích hoạt: ${functionName}${targetDetail}`);
+
     const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines', 'get_os_context'];
     if (!silentFunctions.includes(functionName) && !functionName.startsWith('workflow_')) {
         console.log(chalk.gray(`[Node] 📦 Tham số:`), funcArgs);
@@ -1657,15 +1464,18 @@ async function executeSkillForProvider(functionName, funcArgs) {
     }
 
     const startTime = Date.now();
-
-    // Khởi tạo đánh chặn console.log để thu thập thông tin chi tiết (cho Web Chat)
     const isWebSessionActive = activeWebSession && activeWebSession.res;
+
     if (isWebSessionActive) {
         logBuffer = [];
         console.log = (...args) => {
             originalConsoleLog(...args);
             const str = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
             logBuffer.push(str);
+            if (logger) {
+                const cleanStr = str.replace(/\x1b\[[0-9;]*m/g, '');
+                logger(`📝 [Tool Output] ${cleanStr}`);
+            }
         };
     }
 
@@ -1702,14 +1512,31 @@ async function executeSkillForProvider(functionName, funcArgs) {
         return JSON.stringify({ status: "error", error_message: error.message, suggestion });
     } finally {
         if (isWebSessionActive) {
-            console.log = originalConsoleLog; // Khôi phục lại console.log gốc của tiến trình
+            console.log = originalConsoleLog;
         }
     }
 }
 
-async function recallMemory(lastUserMessage, allMessagesContext = "") {
+async function recallMemory(lastUserMessage, allMessagesContext = "", onLog) {
+    const logger = onLog || global.logToWebChat;
     const memoryDir = path.join(__dirname, '.agent_memory');
     if (!fs.existsSync(memoryDir)) return "";
+
+    const msgLower = lastUserMessage.toLowerCase().trim();
+
+    const isContinuationOrSimpleCmd = msgLower.length < 40 && (
+        /^(tiếp tục|chạy tiếp|chạy nữa|tiếp|tiếp đi|continue|go on|next|chạy đi)$/.test(msgLower) ||
+        /^(ok|được|được rồi|yes|y|no|n|sure|đồng ý|hủy)$/.test(msgLower) ||
+        /^(hãy )?(fix lỗi|sửa lỗi|sửa lỗi này|fix lỗi này|fix bug|sửa bug|chạy lại)$/.test(msgLower)
+    );
+
+    if (isContinuationOrSimpleCmd) {
+        console.log(chalk.gray(`\n[Memory] Nhận diện câu lệnh đơn giản/tiếp tục. Bỏ qua tìm kiếm và nạp bộ nhớ.`));
+        if (logger) logger(`🔍 [Memory Recall] Bỏ qua truy cập bộ nhớ đối với câu lệnh tiếp tục.`);
+        return "";
+    }
+
+    if (logger) logger(`🧠 [Memory Recall] Đang tiến hành truy xuất bối cảnh bộ nhớ (Semantic + Keyword + GraphRAG)...`);
 
     let injectedContext = "\n\n[HỆ THỐNG TRÍ NHỚ (CONTEXTUAL MEMORY)]:\nLưu ý: Đây là những nguyên tắc bắt buộc từ người dùng. Hãy áp dụng ngay:\n";
     let hasMemory = false;
@@ -1718,6 +1545,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
     if (fs.existsSync(globalFile)) {
         injectedContext += `\n--- QUY TẮC CHUNG ---\n${fs.readFileSync(globalFile, 'utf8')}\n`;
         hasMemory = true;
+        if (logger) logger(`📖 Đã tải bộ quy tắc phát triển chung (rules_global.md)`);
     }
 
     const rulesDir = path.join(memoryDir, 'rules');
@@ -1730,6 +1558,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
             if (searchSpace.includes(keyword)) {
                 injectedContext += `\n--- QUY TẮC CHO [${keyword.toUpperCase()}] ---\n${fs.readFileSync(path.join(rulesDir, file), 'utf8')}\n`;
                 hasMemory = true;
+                if (logger) logger(`📖 Đã tải bối cảnh quy định cho công nghệ: [${keyword.toUpperCase()}]`);
             }
         }
     }
@@ -1738,6 +1567,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
         let searchTerms = "";
         try {
             if (activeProvider && activeProvider.chat) {
+                if (logger) logger(`🕵️ [Memory Recall] Đang phân tích từ khóa kỹ thuật bằng AI...`);
                 const prompt = `Từ yêu cầu sau, hãy trích xuất 2-3 từ khóa kỹ thuật hoặc danh từ ĐẶC TRƯNG NHẤT dùng để tìm kiếm lỗi/giải pháp trong cơ sở dữ liệu. Chỉ trả về các từ khóa viết thường, cách nhau bởi khoảng trắng, không giải thích. Yêu cầu: "${lastUserMessage}"`;
 
                 let keywordResponse = await activeProvider.chat({
@@ -1751,8 +1581,8 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
                 });
 
                 keywordResponse = keywordResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-
-                const words = keywordResponse.replace(/[^\p{L}\p{N}]/gu, ' ')
+                let cleanKeywords = keywordResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+                const words = cleanKeywords.replace(/[^\p{L}\p{N}]/gu, ' ')
                     .trim()
                     .split(/\s+/)
                     .filter(w => w.length > 1);
@@ -1760,6 +1590,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
                 if (words.length > 0) {
                     searchTerms = words.map(w => '"' + w + '"*').join(' OR ');
                     console.log(chalk.gray(`\n[Memory] AI Keyword Extraction: "${searchTerms}"`));
+                    if (logger) logger(`🔑 [Memory Recall] Đã xác định từ khóa tìm kiếm: [${words.join(', ')}]`);
                 }
             }
         } catch (apiErr) {
@@ -1782,9 +1613,11 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
 
         // 1. Tìm kiếm bằng Neo4j GraphRAG
         try {
+            if (logger) logger(`🕸️ [Memory Recall] Đang thực hiện tìm kiếm GraphRAG (Neo4j)...`);
             const graphResults = await recallMemoryFromGraph(lastUserMessage, allMessagesContext);
             if (graphResults && graphResults.length > 0) {
                 allResults.push(...graphResults);
+                if (logger) logger(`🕸️ GraphRAG: Đã tìm thấy ${graphResults.length} bối cảnh lỗi liên quan.`);
             }
         } catch (graphErr) {
             console.warn("[Memory] Neo4j GraphRAG search failed:", graphErr.message);
@@ -1792,6 +1625,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
 
         // 2. Tìm kiếm bằng SQLite Semantic Search (Vector)
         try {
+            if (logger) logger(`🧠 [Memory Recall] Đang tiến hành Semantic Vector Search (Gemini embeddings)...`);
             const queryEmbedding = await embedText(lastUserMessage);
             if (queryEmbedding) {
                 const allMemories = db.prepare(`
@@ -1815,6 +1649,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
                 allResults.push(...scored);
                 if (scored.length > 0) {
                     console.log(chalk.gray(`[Memory] 🧠 Semantic Search: ${scored.length} kết quả (top similarity: ${scored[0].similarity.toFixed(3)})`));
+                    if (logger) logger(`🧠 Semantic Search: Phát hiện ${scored.length} bối cảnh tương quan nghĩa.`);
                 }
             }
         } catch (embedErr) { }
@@ -1822,6 +1657,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
         // 3. Tìm kiếm bằng SQLite FTS5 Keyword Search
         if (searchTerms) {
             try {
+                if (logger) logger(`🔍 [Memory Recall] Đang tiến hành Full-Text Keyword Search (SQLite FTS5)...`);
                 const stmt = db.prepare(`
                     SELECT m.id, m.situation, m.solution, m.trust_score, m.use_count
                     FROM memories_fts f
@@ -1833,6 +1669,9 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
                 `);
                 const ftsResults = stmt.all(searchTerms).map(r => ({ ...r, source: 'keyword' }));
                 allResults.push(...ftsResults);
+                if (ftsResults.length > 0 && logger) {
+                    logger(`🔍 Keyword Search: Phát hiện ${ftsResults.length} bối cảnh lỗi liên quan.`);
+                }
             } catch (ftsErr) { }
         }
 
@@ -1860,6 +1699,9 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
             }).join('\n');
             injectedContext += "\n(Lưu ý: Nếu bài học nào GIÚP ÍCH, hãy gọi rate_memory với outcome='success'. Nếu SAI, gọi với outcome='fail'.)";
             hasMemory = true;
+            if (logger) logger(`💡 [Memory Recall] Đã khôi phục thành công ${finalResults.length} bài học kinh nghiệm trong quá khứ.`);
+        } else {
+            if (logger) logger(`💤 [Memory Recall] Chưa phát hiện bài học kinh nghiệm tương đồng trong quá khứ.`);
         }
     } catch (e) {
         console.warn("[Node] Lỗi truy vấn bộ nhớ DB:", e.message);
@@ -1867,11 +1709,27 @@ async function recallMemory(lastUserMessage, allMessagesContext = "") {
 
     return hasMemory ? injectedContext : "";
 }
-
-async function reformulateQuery(userMessage) {
+// 1. Thay thế hàm reformulateQuery cũ:
+async function reformulateQuery(userMessage, onLog) {
+    const logger = onLog || global.logToWebChat;
     if (!activeProvider || !activeProvider.chat) return userMessage;
 
+    const msgLower = userMessage.toLowerCase().trim();
+
+    const isContinuationOrSimpleCmd = msgLower.length < 40 && (
+        /^(tiếp tục|chạy tiếp|chạy nữa|tiếp|continue|go on|next|chạy đi)$/.test(msgLower) ||
+        /^(ok|được|được rồi|yes|y|no|n|sure|đồng ý|hủy)$/.test(msgLower) ||
+        /^(hãy )?(fix lỗi|sửa lỗi|sửa lỗi này|fix lỗi này|fix bug|sửa bug|chạy lại)$/.test(msgLower)
+    );
+
+    if (isContinuationOrSimpleCmd) {
+        console.log(chalk.gray(`\n[Reformulator] Nhận diện câu lệnh tiếp tục hoặc phản hồi ngắn. Bỏ qua biên tập.`));
+        if (logger) logger(`🔍 [Reformulator] Phát hiện câu lệnh ngắn hoặc điều hướng đơn giản. Giữ nguyên bối cảnh.`);
+        return userMessage;
+    }
+
     console.log(chalk.gray(`\n[Reformulator] Đang biên tập lại tin nhắn để làm rõ ngữ cảnh...`));
+    if (logger) logger(`🤖 [Sub-Agent: Reformulator] Đang phân tích và tối ưu cấu trúc câu hỏi...`);
 
     const systemPrompt = "Bạn là một AI Prompt Engineer. Nhiệm vụ của bạn là đọc tin nhắn của người dùng và thuật lại (reformulate) nó thành một Prompt rõ ràng, rành mạch, đầy đủ ngữ cảnh nhất để một AI khác đọc hiểu và xử lý hiệu quả. Không giải thích thêm, không thay đổi ý định gốc. CHỈ TRẢ VỀ CÂU ĐÃ ĐƯỢC THUẬT LẠI.";
     const prompt = `Tin nhắn gốc của người dùng: "${userMessage}"`;
@@ -1891,10 +1749,182 @@ async function reformulateQuery(userMessage) {
 
         if (optimizedMessage && optimizedMessage !== userMessage) {
             console.log(chalk.cyan(`[Reformulator] Viết lại thành công!`));
+            if (logger) logger(`✨ [Reformulator] Đã làm rõ ngữ cảnh câu hỏi: "${optimizedMessage.substring(0, 80)}..."`);
             return `[User Original]: ${userMessage}\n\n[Optimized Context]: ${optimizedMessage}`;
         }
     } catch (e) {
         console.warn(chalk.yellow(`[Reformulator] Lỗi khi thuật lại câu hỏi: ${e.message}`));
+        if (logger) logger(`⚠️ [Reformulator] Không thể viết lại ngữ cảnh: ${e.message}`);
     }
     return userMessage;
+}
+
+
+// =================================================================
+// 🧠 CORE AGENT ORCHESTRATION FUNCTIONS (Central Engine)
+// =================================================================
+/**
+ * Biên dịch và định dạng nhất quán System Prompt từ tệp cấu hình và mục tiêu khóa cứng.
+ * @returns {string} System Prompt hoàn chỉnh
+ */
+function getCompiledSystemPrompt() {
+    let systemPrompt = "";
+    const promtPath = path.join(__dirname, 'system_prompt.md');
+    if (fs.existsSync(promtPath)) {
+        systemPrompt = fs.readFileSync(promtPath, 'utf8')
+    }
+
+    // 1. Tự động cung cấp ngữ cảnh môi trường
+    const systemContext = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n\n`;
+    systemPrompt = systemContext + systemPrompt;
+
+    if (persistentGoal) {
+        systemPrompt = `[🎯 MỤC TIÊU KHÓA CỨNG — KHÔNG ĐƯỢC QUÊN]: "${persistentGoal}"\nMọi hành động của bạn PHẢI hướng tới mục tiêu trên. Nếu bạn thấy mình đang đi lạc hướng, hãy dừng lại và quay về mục tiêu.\n\n` + systemPrompt;
+    }
+
+    return systemPrompt;
+}
+
+/**
+ * Hàm điều phối trung tâm thực hiện một lượt xử lý (turn) của Agent.
+ * Tách biệt hoàn toàn logic logic nghiệp vụ (domain logic) khỏi giao diện truyền thông.
+ */
+async function executeAgentTurn({
+    message,
+    history = [],
+    sessionFile = null,
+    onChunk = null,
+    onAction = null,
+    onSystem = null,
+    onAskPermission = null,
+    onLog = null // Nhận hàm đẩy log
+}) {
+    const traceId = tracer.createTrace(message.substring(0, 80));
+
+    // Đăng ký bộ phát log toàn cục để WorkflowEngine tự động phát hiện và gửi dữ liệu FSM
+    if (onLog) {
+        global.logToWebChat = onLog;
+    }
+
+    try {
+        if (onSystem) onSystem("🔍 Đang chuẩn bị bối cảnh và trích xuất bộ nhớ...");
+        if (onLog) onLog("🔍 Đang chuẩn bị bối cảnh và trích xuất bộ nhớ...");
+
+        // Chuyển tiếp onLog vào hai tác vụ tiền xử lý
+        const [reformulatedText, injectedMemory] = await Promise.all([
+            reformulateQuery(message, onLog),
+            recallMemory(message, history.map(m => m.content).join(' '), onLog)
+        ]);
+
+        const currentHistory = [...history];
+        currentHistory.push({ role: 'user', content: reformulatedText });
+
+        if (currentHistory.length > 15) {
+            if (onSystem) onSystem("⚙️ Lịch sử hội thoại quá dài, đang nén ngữ cảnh...");
+            if (onLog) onLog("⚙️ Lịch sử hội thoại quá dài, đang nén ngữ cảnh...");
+            const messagesToCompress = currentHistory.slice(0, 10);
+            if (activeProvider && activeProvider.chat) {
+                const compPrompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` +
+                    messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
+                try {
+                    let summary = await activeProvider.chat({
+                        messages: [{ role: 'user', content: compPrompt }],
+                        skillRegistry: {},
+                        executeSkill: async () => { },
+                        systemPrompt: "Bạn là chuyên viên tóm tắt. Trả về đúng nội dung tóm tắt.",
+                        maxSteps: 1, isWorker: true, workerType: 'summary'
+                    });
+                    summary = summary.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+
+                    currentHistory.splice(0, 10);
+                    currentHistory.unshift({ role: 'system', content: `[Tóm tắt bối cảnh cũ]: ${summary}` });
+                } catch (err) {
+                    currentHistory.splice(0, 10);
+                }
+            }
+        }
+
+        const enrichedMessages = JSON.parse(JSON.stringify(currentHistory));
+        if (injectedMemory) {
+            enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
+        }
+
+        const systemPrompt = getCompiledSystemPrompt();
+        const apiIntent = classifyIntent(message);
+        const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
+
+        const llmSpanId = traceId ? tracer.startSpan(traceId, `LLM Chat (Full Context)`, 'llm', null, {
+            system_prompt: systemPrompt,
+            messages: enrichedMessages
+        }) : null;
+
+        const result = await chatWithFailover({
+            messages: enrichedMessages,
+            skillRegistry: filteredSkills,
+            systemPrompt,
+            maxSteps: 15,
+            onStreamChunk: onChunk,
+            executeSkill: async (funcName, args) => {
+                if (onAction) onAction(funcName);
+
+                const toolSpanId = traceId ? tracer.startSpan(traceId, funcName, 'tool', llmSpanId, args) : null;
+
+                const originalAskPermission = global.askPermission;
+                if (onAskPermission) {
+                    global.askPermission = onAskPermission;
+                }
+
+                try {
+                    // Truyền onLog vào hàm chạy tool
+                    const toolResult = await executeSkillForProvider(funcName, args, onLog);
+                    if (toolSpanId) {
+                        try {
+                            const parsed = JSON.parse(toolResult);
+                            tracer.endSpan(toolSpanId, parsed.status === 'success' ? 'completed' : 'failed', parsed);
+                        } catch {
+                            tracer.endSpan(toolSpanId, 'completed', { text: String(toolResult).substring(0, 1000) });
+                        }
+                    }
+                    return toolResult;
+                } catch (toolErr) {
+                    if (toolSpanId) tracer.endSpan(toolSpanId, 'failed', null, toolErr.message);
+                    throw toolErr;
+                } finally {
+                    global.askPermission = originalAskPermission;
+                }
+            }
+        });
+
+        if (llmSpanId) {
+            tracer.endSpan(llmSpanId, 'completed', { response: result });
+        }
+        if (traceId) tracer.completeTrace(traceId, 'completed');
+
+        if (result === "__HANDOVER_TO_ENGINE__" || (typeof result === 'string' && result.includes("__HANDOVER_TO_ENGINE__"))) {
+            if (onSystem) onSystem("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
+            if (onLog) onLog("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
+            const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, executeSkillForProvider, message);
+            await engine.run();
+
+            const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
+            return { type: 'handover', history: currentHistory, sessionFile: savedFile };
+        }
+
+        const cleanResponse = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        currentHistory.push({ role: 'assistant', content: cleanResponse });
+
+        const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
+
+        // Chuyển tiếp onLog vào Critic Agent phân tích hành vi sau phiên
+        if (currentSessionLog.some(entry => !entry.success)) {
+            runCriticAgent([...currentSessionLog], onLog).catch(() => { });
+        }
+        return { type: 'text', response: cleanResponse, history: currentHistory, sessionFile: savedFile };
+
+    } catch (err) {
+        if (traceId) tracer.completeTrace(traceId, 'failed');
+        throw err;
+    } finally {
+        global.logToWebChat = null; // Luôn xóa bộ lắng nghe khi kết thúc lượt chạy để tránh rò rỉ bộ nhớ
+    }
 }

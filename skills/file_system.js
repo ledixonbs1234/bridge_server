@@ -129,6 +129,52 @@ export default {
                 content: numberedLines.join('\n')}
         }
     },
+    "read_multiple_files": {
+        description: "[ĐỌC NHIỀU FILE] Đọc nội dung của nhiều file cùng một lúc. Dữ liệu trả về của mỗi file sẽ được tự động đánh số dòng làm mỏ neo (Line Anchors). Hãy ưu tiên dùng công cụ này thay vì gọi liên tiếp nhiều lệnh read_file độc lập để tối ưu hiệu suất và tiết kiệm tài nguyên hệ thống.",
+        parameters: {
+            type: "object",
+            properties: {
+                file_paths: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Mảng chứa danh sách các đường dẫn tuyệt đối đến các file cần đọc."
+                }
+            },
+            required: ["file_paths"]
+        },
+        handler: async (args) => {
+            const results = [];
+            for (const inputPath of args.file_paths) {
+                try {
+                    const filePath = resolveUserPath(inputPath);
+                    if (!fs.existsSync(filePath)) {
+                        results.push({
+                            file: aiSafePath(filePath),
+                            status: "error",
+                            error_message: "File không tồn tại"
+                        });
+                        continue;
+                    }
+                    const content = fs.readFileSync(filePath, 'utf8');
+                    const lines = content.split(/\r?\n/);
+                    const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`);
+                    results.push({
+                        file: aiSafePath(filePath),
+                        status: "success",
+                        total_lines: lines.length,
+                        content: numberedLines.join('\n')
+                    });
+                } catch (e) {
+                    results.push({
+                        file: inputPath,
+                        status: "error",
+                        error_message: e.message
+                    });
+                }
+            }
+            return { results };
+        }
+    },
 
     "read_file_lines": {
         description: "Đọc một phần của file. LUÔN DÙNG công cụ này trước khi sửa file để biết CHÍNH XÁC SỐ DÒNG (Line Anchors).",

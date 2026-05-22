@@ -370,3 +370,163 @@ tr:hover td { background: rgba(59,130,246,0.04); }
     box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.5);
     border-left: 4px solid var(--accent);
 }
+/* ===== HỘP HIỂN THỊ TƯ DUY CỦA AI TRONG TAB TRACE ===== */
+.span-thought-box {
+    background: rgba(245, 158, 11, 0.04);
+    border-left: 4px solid var(--warn);
+    border-radius: 8px;
+    padding: 14px 18px;
+    font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+    font-size: 12px;
+    color: #cbd5e1;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 280px;
+    overflow-y: auto;
+    margin-top: 10px;
+    margin-bottom: 16px;
+    line-height: 1.6;
+    box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+/* ===== ĐỊNH DẠNG MỞ RỘNG VÀ HỖ TRỢ COPY CHO TRACE DETAIL ===== */
+.trace-code-wrapper {
+    position: relative;
+    background: #0d1117;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    font-family: sans-serif;
+    display: flex;
+    flex-direction: column;
+}
+
+.trace-code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+}
+
+.trace-copy-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.trace-copy-btn:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* Span detail code block - Tối ưu hóa rộng rãi chiều cao */
+.span-detail-pane pre {
+    background: var(--bg);
+    padding: 16px;
+    margin: 0 !important;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    color: #cbd5e1;
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: 550px !important; /* Tăng giới hạn chiều cao từ 200px lên 550px */
+    line-height: 1.5;
+    border: none !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+}
+
+.span-detail-pane pre.error-text {
+    color: var(--danger);
+    background: rgba(239, 68, 68, 0.02);
+}
+
+/* Tự điều chỉnh lại vùng chứa thought process nằm trong Wrapper mới */
+.span-detail-pane .span-thought-box {
+    margin: 0 !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    max-height: 350px !important;
+}
+/* ===== LIVE EXECUTION LOGS STYLING ===== */
+.log-group-row {
+    margin-bottom: 12px !important;
+    justify-content: flex-start !important;
+}
+
+.log-group-container {
+    background: #090d16;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: 100%;
+    max-width: 90%;
+    overflow: hidden;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.log-group-header {
+    background: var(--surface2);
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12px;
+    font-weight: 600;
+    border-bottom: 1px solid rgba(30, 58, 95, 0.4);
+}
+
+.log-group-header:hover {
+    background: #24334a;
+}
+
+.log-group-icon {
+    font-size: 14px;
+}
+
+.log-group-title {
+    flex: 1;
+    color: var(--text);
+}
+
+.log-group-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: pulse 1.5s infinite;
+}
+
+.log-console-content {
+    padding: 12px;
+    font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+    font-size: 11px;
+    color: #cbd5e1;
+    max-height: 250px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: #060910;
+    border-top: 1px solid rgba(30, 58, 95, 0.2);
+}
+
+.log-line {
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.5;
+    border-left: 2px solid transparent;
+    padding-left: 6px;
+}

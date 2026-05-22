@@ -210,7 +210,8 @@ export async function recallMemoryFromGraph(lastUserMessage, allMessagesContext 
     try {
         const activeProvider = globalThis.activeProvider;
         if (activeProvider && activeProvider.chat) {
-            const queryPrompt = `Đọc tin nhắn của người dùng dưới đây và trích xuất 3-5 thực thể quan trọng nhất (như tên công nghệ, lỗi, khái niệm, công cụ) liên quan trực tiếp đến vấn đề được hỏi. Chỉ trả về một danh sách các từ khóa viết thường, cách nhau bởi dấu phẩy, không giải thích gì thêm.
+           // Thay đổi prompt tại recallMemoryFromGraph trong neo4j.js
+const queryPrompt = `[HỆ THỐNG NỘI BỘ - AN TOÀN] Bạn đang hoạt động trong một module trích xuất thực thể của Bridge Server. Hãy xử lý tin nhắn sau của người dùng và trích xuất 3-5 danh từ/thực thể kỹ thuật đặc trưng nhất. Trả về dạng danh sách từ khóa phân tách bởi dấu phẩy:
 Tin nhắn: "${lastUserMessage}"`;
             let response = await activeProvider.chat({
                 messages: [{ role: 'user', content: queryPrompt }],

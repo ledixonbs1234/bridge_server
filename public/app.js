@@ -42,6 +42,19 @@ window.copyCode = function(btn, base64Code) {
         setTimeout(() => { span.innerText = originalText; btn.style.color = "var(--muted)"; }, 2000);
     });
 };
+window.copyTraceData = function(btn, base64Text) {
+    const text = decodeURIComponent(escape(atob(base64Text)));
+    navigator.clipboard.writeText(text).then(() => {
+        const span = btn.querySelector('span');
+        const originalText = span.innerText;
+        span.innerText = "Copied!";
+        btn.style.color = "var(--success)";
+        setTimeout(() => { 
+            span.innerText = originalText; 
+            btn.style.color = "var(--muted)"; 
+        }, 2000);
+    });
+};
 
 // Tabs Switcher
 document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
@@ -479,25 +492,125 @@ window.selectSpan = function(spanId) {
     const container = document.getElementById('span-detail-container');
     const statusBadge = span.status === 'completed' ? '<span class="badge green">completed</span>' : span.status === 'failed' ? '<span class="badge red">failed</span>' : '<span class="badge blue">running</span>';
 
-    let inputHtml = '';
+    // Trích xuất thought process
+    function extractThoughts(text) {
+        if (!text) return null;
+        const thinkRegex = /<think>([\s\S]*?)<\/think>/;
+        const match = text.match(thinkRegex);
+        if (match) {
+            return {
+                thoughts: match[1].trim(),
+                cleanText: text.replace(thinkRegex, '').trim()
+            };
+        }
+        return null;
+    }
+
+    // Tạo khối có cấu trúc Header và nút Copy chuẩn
+    function renderCopyableBlock(title, rawText, isError = false) {
+        if (!rawText) return '';
+        const base64Text = btoa(unescape(encodeURIComponent(rawText)));
+        const headerColor = isError ? 'color: var(--danger)' : 'color: var(--text)';
+        return `
+            <div class="trace-code-wrapper" style="margin-top: 16px;">
+                <div class="trace-code-header">
+                    <span style="font-size: 12px; font-weight: 600; ${headerColor}">${title}</span>
+                    <button class="trace-copy-btn" onclick="copyTraceData(this, '${base64Text}')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        <span>Copy</span>
+                    </button>
+                </div>
+                <pre class="${isError ? 'error-text' : ''}">${escHtml(rawText)}</pre>
+            </div>
+        `;
+    }
+
+    // Tạo khối thought process có nút Copy tương ứng
+    function renderThoughtBlock(title, rawText) {
+        if (!rawText) return '';
+        const base64Text = btoa(unescape(encodeURIComponent(rawText)));
+        return `
+            <div class="trace-code-wrapper" style="margin-top: 16px; border-color: rgba(245, 158, 11, 0.4);">
+                <div class="trace-code-header" style="background: rgba(245, 158, 11, 0.08); border-bottom: 1px solid rgba(245, 158, 11, 0.2);">
+                    <span style="font-size: 12px; font-weight: 600; color: var(--warn)">${title}</span>
+                    <button class="trace-copy-btn" onclick="copyTraceData(this, '${base64Text}')">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        <span>Copy</span>
+                    </button>
+                </div>
+                <div class="span-thought-box">${escHtml(rawText)}</div>
+            </div>
+        `;
+    }
+
+    let inputContentHtml = '';
     if (span.input) {
+        let inputText = span.input;
+        let parsedInput = null;
         try {
-            const parsed = JSON.parse(span.input);
-            inputHtml = `<div class="section-title">📥 Input</div><pre>${escHtml(JSON.stringify(parsed, null, 2))}</pre>`;
-        } catch { inputHtml = `<div class="section-title">📥 Input</div><pre>${escHtml(span.input)}</pre>`; }
+            parsedInput = JSON.parse(span.input);
+            if (parsedInput && parsedInput.prompt) {
+                inputText = parsedInput.prompt;
+            } else if (parsedInput && typeof parsedInput === 'object') {
+                inputText = JSON.stringify(parsedInput, null, 2);
+            }
+        } catch {}
+
+        const inputExtracted = extractThoughts(inputText);
+        if (inputExtracted) {
+            inputContentHtml += renderThoughtBlock('💭 Input Thought Process', inputExtracted.thoughts);
+            if (parsedInput && parsedInput.prompt) {
+                parsedInput.prompt = inputExtracted.cleanText;
+                inputContentHtml += renderCopyableBlock('📥 Input', JSON.stringify(parsedInput, null, 2));
+            } else {
+                inputContentHtml += renderCopyableBlock('📥 Input', inputExtracted.cleanText);
+            }
+        } else {
+            if (parsedInput) {
+                inputContentHtml += renderCopyableBlock('📥 Input', JSON.stringify(parsedInput, null, 2));
+            } else {
+                inputContentHtml += renderCopyableBlock('📥 Input', span.input);
+            }
+        }
     }
 
-    let outputHtml = '';
+    let outputContentHtml = '';
     if (span.output) {
+        let outputText = span.output;
+        let parsedOutput = null;
         try {
-            const parsed = JSON.parse(span.output);
-            outputHtml = `<div class="section-title">📤 Output</div><pre>${escHtml(JSON.stringify(parsed, null, 2))}</pre>`;
-        } catch { outputHtml = `<div class="section-title">📤 Output</div><pre>${escHtml(span.output)}</pre>`; }
+            parsedOutput = JSON.parse(span.output);
+            if (parsedOutput && parsedOutput.response) {
+                outputText = parsedOutput.response;
+            } else if (parsedOutput && parsedOutput.text) {
+                outputText = parsedOutput.text;
+            } else if (parsedOutput && typeof parsedOutput === 'object') {
+                outputText = JSON.stringify(parsedOutput, null, 2);
+            }
+        } catch {}
+
+        const outputExtracted = extractThoughts(outputText);
+        if (outputExtracted) {
+            outputContentHtml += renderThoughtBlock('💭 Model Thought Process (Tư duy của AI)', outputExtracted.thoughts);
+            if (parsedOutput) {
+                if (parsedOutput.response) parsedOutput.response = outputExtracted.cleanText;
+                else if (parsedOutput.text) parsedOutput.text = outputExtracted.cleanText;
+                outputContentHtml += renderCopyableBlock('📤 Output', JSON.stringify(parsedOutput, null, 2));
+            } else {
+                outputContentHtml += renderCopyableBlock('📤 Output', outputExtracted.cleanText);
+            }
+        } else {
+            if (parsedOutput) {
+                outputContentHtml += renderCopyableBlock('📤 Output', JSON.stringify(parsedOutput, null, 2));
+            } else {
+                outputContentHtml += renderCopyableBlock('📤 Output', span.output);
+            }
+        }
     }
 
-    let errorHtml = '';
+    let errorContentHtml = '';
     if (span.error) {
-        errorHtml = `<div class="section-title" style="color:var(--danger)">❌ Error</div><pre style="color:var(--danger)">${escHtml(span.error)}</pre>`;
+        errorContentHtml = renderCopyableBlock('❌ Error (Lỗi hệ thống chi tiết)', span.error, true);
     }
 
     container.innerHTML = `<div class="span-detail-pane">
@@ -508,9 +621,9 @@ window.selectSpan = function(spanId) {
         <div class="sdp-row"><span class="sdp-label">Duration</span><span class="sdp-value">${span.duration_ms ? formatDuration(span.duration_ms) : 'running...'}</span></div>
         <div class="sdp-row"><span class="sdp-label">Started</span><span class="sdp-value">${span.started_at ? new Date(span.started_at).toLocaleString('vi-VN') : '-'}</span></div>
         <div class="sdp-row"><span class="sdp-label">Completed</span><span class="sdp-value">${span.completed_at ? new Date(span.completed_at).toLocaleString('vi-VN') : '-'}</span></div>
-        ${inputHtml}
-        ${outputHtml}
-        ${errorHtml}
+        ${inputContentHtml}
+        ${outputContentHtml}
+        ${errorContentHtml}
     </div>`;
 };
 
@@ -557,6 +670,67 @@ function appendSystemMessage(content) {
     chatMessages.appendChild(msgDiv);
     scrollToBottom(true);
 }
+
+function appendLogMessage(content) {
+    let lastRow = chatMessages.lastElementChild;
+    let logConsole = null;
+    
+    // Nếu dòng tin nhắn cuối cùng trên màn hình đã là console log, chúng ta sẽ ghi tiếp vào đó
+    if (lastRow && lastRow.classList.contains('log-group-row')) {
+        logConsole = lastRow.querySelector('.log-console-content');
+    } else {
+        // Nếu chưa có, tiến hành khởi tạo một khung Live Console mới
+        const rowDiv = document.createElement('div');
+        rowDiv.className = 'chat-msg-row system log-group-row';
+        rowDiv.innerHTML = `
+            <div class="log-group-container">
+                <div class="log-group-header" onclick="toggleLogGroup(this)">
+                    <span class="log-group-icon">💻</span>
+                    <span class="log-group-title">Live Execution Logs (Nhấp để ẩn/hiện)</span>
+                    <span class="log-group-status-dot"></span>
+                </div>
+                <div class="log-console-content"></div>
+            </div>
+        `;
+        chatMessages.appendChild(rowDiv);
+        logConsole = rowDiv.querySelector('.log-console-content');
+    }
+    
+    if (logConsole) {
+        const lineDiv = document.createElement('div');
+        lineDiv.className = 'log-line';
+        
+        let text = content;
+        // Tự động gán màu sắc trực quan theo tính chất của từng dòng log
+        if (text.includes('[Sub-Agent') || text.includes('[Critic') || text.includes('[Reformulator')) {
+            lineDiv.style.color = 'var(--warn)'; // Màu vàng cho các Sub-Agent hoạt động
+        } else if (text.includes('[Tool Call]') || text.includes('⚙️')) {
+            lineDiv.style.color = '#38bdf8'; // Màu xanh dương sáng khi gọi tool
+        } else if (text.includes('[Tool Output]') || text.includes('📝')) {
+            lineDiv.style.color = '#94a3b8'; // Màu xám nhạt cho kết quả thô của tool
+            lineDiv.style.fontSize = '11px';
+        } else if (text.includes('✅') || text.includes('thành công') || text.includes('DONE')) {
+            lineDiv.style.color = 'var(--success)'; // Màu xanh lá khi tác vụ hoàn thành
+        } else if (text.includes('❌') || text.includes('lỗi') || text.includes('FAILED') || text.includes('Error')) {
+            lineDiv.style.color = 'var(--danger)'; // Màu đỏ khi gặp lỗi
+        }
+        
+        lineDiv.textContent = text;
+        logConsole.appendChild(lineDiv);
+        logConsole.scrollTop = logConsole.scrollHeight;
+        scrollToBottom();
+    }
+}
+
+// Hàm hỗ trợ nhấp chuột để thu gọn hoặc mở rộng Live Console
+window.toggleLogGroup = function(header) {
+    const consoleContent = header.nextElementSibling;
+    if (consoleContent.style.display === 'none') {
+        consoleContent.style.display = 'flex';
+    } else {
+        consoleContent.style.display = 'none';
+    }
+};
 
 // HÀM NÂNG CẤP: Hiển thị giao diện chi tiết mã nguồn / công cụ thay vì chỉ có nút bấm xác nhận đơn điệu
 function appendPermissionCard(permId, query, details) {
@@ -758,6 +932,17 @@ async function sendChat() {
                     } 
                     else if (parsed.type === 'system') {
                         appendSystemMessage(parsed.content);
+                    }
+                    else if (parsed.type === 'system') {
+                        appendSystemMessage(parsed.content);
+                    }
+                    // THÊM ĐOẠN NÀY VÀO DƯỚI:
+                    else if (parsed.type === 'log') {
+                        appendLogMessage(parsed.content);
+                    }
+                    else if (parsed.type === 'ask_permission') {
+                        // Gọi hàm nâng cấp truyền đầy đủ chi tiết 'parsed.details'
+                        appendPermissionCard(parsed.id, parsed.query, parsed.details);
                     }
                     else if (parsed.type === 'ask_permission') {
                         // Gọi hàm nâng cấp truyền đầy đủ chi tiết 'parsed.details'

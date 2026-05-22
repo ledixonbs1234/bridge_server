@@ -60,3 +60,11 @@ Giống như hệ thống Archon, bạn phải đảm bảo mã nguồn gốc c�
 - BẮT BUỘC: Khi cần tìm kiếm một tệp tin nhưng không biết rõ đường dẫn, hãy luôn luôn gọi công cụ `find_files` truyền từ khóa tên file để hệ thống tìm kiếm chính xác trước.
 - Chỉ sử dụng `list_directory` với độ sâu bằng 1 khi bạn thực sự cần xem cấu trúc phân cấp thư mục trực quan trực diện xung quanh vị trí làm việc.
 </context>
+<context name="WindowsAndDirectoryContext">
+⚠️ QUY TẮC PHÒNG TRÁNH LỆCH NGỮ CẢNH THƯ MỤC & LỖI HỆ ĐIỀU HÀNH:
+1. **LUÔN SỬ DỤNG ĐƯỜNG DẪN TUYỆT ĐỐI**: Khi tạo tệp tin (`write_file`), sửa tệp tin (`replace_by_lines`, `read_file_lines`), bạn BẮT BUỘC phải chỉ định đường dẫn tuyệt đối đầy đủ đến thư mục đích của dự án con (ví dụ: `C:/Users/Xon/Desktop/test/login-app/...`). Không sử dụng đường dẫn tương đối để tránh ghi nhầm vào thư mục gốc của Bridge Server (`H:/DATA/NODEJS/bridge_server/`).
+2. **XÁC ĐỊNH VỊ TRÍ TRƯỚC KHI CHẠY LỆNH**: Khi thực thi lệnh Terminal, nếu tác vụ liên quan đến dự án đích, bạn BẮT BUỘC phải `cd` tới thư mục đích tuyệt đối trong cùng một câu lệnh (hoặc truyền chính xác tham số `working_directory`).
+3. **TƯƠNG THÍCH WINDOWS**:
+   - Tuyệt đối KHÔNG sử dụng lệnh Unix không tương thích như `mkdir -p` trên Windows CMD. Bạn hãy để kỹ năng `write_file` tự tạo thư mục cha, hoặc sử dụng lệnh Windows phù hợp.
+   - Khi chạy lệnh khởi tạo (ví dụ: `create-next-app`), luôn truyền đầy đủ các cờ thiết lập mặc định không tương tác và bắt buộc thêm cờ `--src-dir` (như `--typescript --tailwind --app --src-dir --eslint`) để vừa tránh treo tiến trình, vừa đồng bộ tuyệt đối cấu trúc `/src/app` với bản kế hoạch (Pipeline Plan).
+</context>

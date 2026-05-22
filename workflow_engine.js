@@ -6,7 +6,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import { select } from '@inquirer/prompts';
 import tracer from './tracer.js';
-
+import path from 'path';
 // =================================================================
 // ⚙️ LOG MESSAGE HELPER: Đồng bộ log ra cả Terminal lẫn Web Chat
 // =================================================================
@@ -52,7 +52,7 @@ class CircuitBreaker {
     constructor(maxRetries = 5) {
         this.maxRetries = maxRetries;
     }
-    
+
 
     shouldBreak(stepState) {
         if (stepState.retry_count >= this.maxRetries) return 'MAX_RETRIES';
@@ -176,7 +176,6 @@ export default class WorkflowEngine {
         }
     }
 
-    // === SCAN PROTOCOL — Chống Agent Drift ===
     // === SCAN PROTOCOL — Chống Agent Drift & Thu hẹp kỷ luật ===
     buildDisciplinedPrompt(step, journalContext, retryCount, errorHistory) {
         let prompt = `Bạn là một AI Worker chuyên biệt, được giao một Nhiệm vụ trong một Hợp đồng thực thi nghiêm ngặt.
@@ -191,17 +190,20 @@ Trước khi gọi bất kỳ công cụ nào để thực hiện, bạn BẮT B
 2. "File/resource bị ảnh hưởng: ___"
 `;
 
-        if (retryCount === 0) {
-            // Lần đầu tiên chạy: Thu hẹp tối đa thông tin hỗ trợ để tránh quá tải Token
+        const errors = JSON.parse(errorHistory || '[]');
+        const lastError = errors[errors.length - 1] || '';
+        const isLastSystemError = lastError.startsWith('[SYSTEM_ERROR]');
+
+        // NẾU LÀ LẦN ĐẦU TIÊN HOẶC LẦN THỬ TRƯỚC BỊ LỖI HỆ THỐNG (KHÔNG PHẢI LỖI AI):
+        // Hệ thống sẽ âm thầm thử lại bằng prompt kỷ luật sạch ban đầu
+        if (retryCount === 0 || isLastSystemError) {
             prompt += `
 [QUY TẮC KỶ LUẬT]
 - Bạn CHỈ được phép dùng công cụ tối ưu nhất để giải quyết dứt điểm nhiệm vụ này.
 - Tuyệt đối không tự ý phân tích rộng ra ngoài phạm vi hoặc lên kế hoạch lại cho hệ thống.
 `;
         } else {
-            // Lần thử lại (Retry): Cung cấp chính xác vết lỗi để chẩn đoán, không bơm bừa bãi dữ liệu
-            const errors = JSON.parse(errorHistory || '[]');
-            const lastError = errors[errors.length - 1] || 'Không rõ lỗi cụ thể.';
+            // CHỈ HIỂN THỊ CẢNH BÁO NẾU LỖI DO VALIDATOR TỪ CHỐI (LỖI LOGIC CỦA AI)
             prompt += `
 [⚠️ CẢNH BÁO: LẦN THỬ TRƯỚC BỊ THẤT BẠI]
 Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validator) từ chối vì lý do sau:
@@ -213,16 +215,14 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
 `;
         }
 
-        // Bổ sung nhật ký các công việc trước đó nếu có để giữ tính liên tục của dự án lớn
         if (journalContext) {
             prompt += `\n${journalContext}`;
         }
 
         return prompt;
     }
-
     // === VALIDATOR AGENT ===
-    async validateStep(step, executorOutput) {
+ async validateStep(step, executorOutput) {
         const val = step.validation || { type: 'llm_check', value: `Kiểm tra xem tác vụ "${step.task}" đã được hoàn thành đúng chưa.` };
         if (val.type === 'file_exists') {
             const exists = fs.existsSync(val.value.trim());
@@ -232,13 +232,44 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
             try { execSync(val.value, { stdio: 'ignore' }); return { passed: true, reason: '' }; }
             catch { return { passed: false, reason: `Lệnh kiểm tra thất bại: ${val.value}` }; }
         }
-       if (val.type === 'llm_check') {
+        if (val.type === 'llm_check') {
             logMessage(chalk.blue(`🤖 Khởi chạy Validator Agent (Strict Mode)...`));
             const stepState = this.getStepState('CURRENT', step.step_key);
             const errorHistory = JSON.parse(stepState?.error_history || '[]');
             const errorCtx = errorHistory.length > 0 ? `\n[LỖI ĐÃ GẶP TRƯỚC ĐÓ TRONG CÁC LẦN THỬ TRƯỚC]: ${errorHistory.slice(-3).join(' | ')}` : '';
 
-            const validationPrompt = `Bạn là một AI Validator độc lập, cực kỳ hoài nghi và nghiêm khắc. Nhiệm vụ của bạn là kiểm tra xem tác vụ sau đã thực sự hoàn tất HOÀN TOÀN và CHÍNH XÁC trong thực tế hay chưa:
+            // --- THUẬT TOÁN TỰ ĐỘNG TRÍCH XUẤT ĐƯỜNG DẪN DỰ ÁN ĐÍCH ---
+            const pathRegex = /(?:[a-zA-Z]:\/|\/)[^\s"']+/g;
+            const matches = step.task.match(pathRegex);
+            let detectedWorkspace = "Chưa phát hiện (Hãy sử dụng đường dẫn tuyệt đối ghi trong mô tả tác vụ)";
+            
+            if (matches && matches.length > 0) {
+                const firstMatch = matches[0].replace(/\\/g, '/');
+                if (path.extname(firstMatch)) {
+                    detectedWorkspace = path.dirname(firstMatch).replace(/\\/g, '/');
+                } else {
+                    detectedWorkspace = firstMatch;
+                }
+            }
+
+            // Sử dụng đối tượng toàn cục process thay thế hoàn toàn cho thư viện os
+            const platform = process.platform;
+            const homeDir = (process.env.USERPROFILE || process.env.HOME || '').replace(/\\/g, '/');
+            const cwd = process.cwd().replace(/\\/g, '/');
+
+            const systemContext = `[NGỮ CẢNH HỆ THỐNG]: 
+- OS Platform: ${platform}
+- Bridge Server Root (CWD chạy server): ${cwd}
+- Target Project Workspace (Dự án đích của User): ${detectedWorkspace}
+- Home Directory: ${homeDir}
+
+⚠️ LƯU Ý QUAN TRỌNG VỀ BẢO MẬT & ĐƯỜNG DẪN:
+1. "Bridge Server Root" chỉ là nơi chạy mã nguồn của hệ thống Bridge Server. Bạn TUYỆT ĐỐI không được tìm kiếm, đọc hay viết tệp tin ở thư mục này.
+2. Để thực hiện kiểm duyệt tệp tin, bạn BẮT BUỘC phải sử dụng ĐƯỜNG DẪN TUYỆT ĐỐI của dự án dựa trên "Target Project Workspace" hoặc đường dẫn ghi trong [TÁC VỤ YÊU CẦU].
+3. Tuyệt đối KHÔNG sử dụng đường dẫn tương đối (relative path) vì nó sẽ trỏ sai về Bridge Server Root và làm hỏng toàn bộ tiến trình.
+4. Bạn đã biết toàn bộ thông tin bối cảnh hệ điều hành ở trên. Tuyệt đối KHÔNG ĐƯỢC gọi lại công cụ "get_os_context" để tránh làm chậm tiến trình kiểm duyệt.`;
+
+            const validationPrompt = `${systemContext}\n\nBạn là một AI Validator độc lập, cực kỳ hoài nghi và nghiêm khắc. Nhiệm vụ của bạn là kiểm tra xem tác vụ sau đã thực sự hoàn tất HOÀN TOÀN và CHÍNH XÁC trong thực tế hay chưa:
 
 [TÁC VỤ YÊU CẦU]: "${step.task}"
 [KẾT QUẢ THỰC THI]: "${executorOutput.substring(0, 2500)}"
@@ -356,12 +387,20 @@ ${error ? `Lỗi: ${error.message}` : ''}
     }
 
     // === EXECUTE SINGLE STEP ===
-    async executeStep(step, pipeline) {
+   async executeStep(step, pipeline) {
         const stepKey = step.step_key;
         const maxRetries = (step.validation?.max_retries) || 3;
 
         while (true) {
             const stepState = this.getStepState('CURRENT', stepKey);
+            
+            // XÁC ĐỊNH SỐ LẦN RETRY TỐI ĐA THỰC TẾ DỰA TRÊN LOẠI LỖI GẦN NHẤT
+            const errors = JSON.parse(stepState?.error_history || '[]');
+            const lastError = errors[errors.length - 1] || '';
+            const isLastSystemError = lastError.startsWith('[SYSTEM_ERROR]');
+            const effectiveMaxRetries = isLastSystemError ? 5 : maxRetries;
+
+            // Circuit Breaker check
             const breakReason = this.circuitBreaker.shouldBreak(stepState);
             if (breakReason) {
                 this.transitionState('CURRENT', stepKey, 'BLOCKED');
@@ -382,19 +421,16 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
             this.transitionState('CURRENT', stepKey, 'RUNNING');
             const currentRetry = (this.getStepState('CURRENT', stepKey)?.retry_count || 0);
-            logMessage(chalk.yellow(`\n⏳ Step: ${step.task} (Lần ${currentRetry + 1}/${maxRetries})`));
+            logMessage(chalk.yellow(`\n⏳ Step: ${step.task} (Lần ${currentRetry + 1}/${effectiveMaxRetries})`));
 
             const preStepStatus = this.getGitStatus();
             const journalContext = this.buildJournalContext(pipeline);
             
-            // Lấy trạng thái hiện tại của Step để biết số lần thử và lịch sử lỗi
             const currentStepState = this.getStepState('CURRENT', stepKey);
             const retryCount = currentStepState?.retry_count || 0;
             const errorHistory = currentStepState?.error_history || '[]';
 
-            // Xây dựng prompt kỷ luật
             const promptContext = this.buildDisciplinedPrompt(step, journalContext, retryCount, errorHistory);
-
             const stepSpanId = this.currentTraceId ? tracer.startSpan(this.currentTraceId, `${step.task}`, 'agent', null, { tool: step.tool, step_key: stepKey }) : null;
 
             let spinner = ora(`AI đang xử lý: ${step.tool}...`).start();
@@ -402,17 +438,11 @@ ${error ? `Lỗi: ${error.message}` : ''}
             let execError = null;
 
             try {
-                // ==========================================
-                // 🛡️ DISCIPLINED NARROWING: THU HẸP DANH SÁCH SKILLS
-                // Chỉ nạp công cụ được chỉ định + các công cụ thao tác file cốt lõi
-                // ==========================================
                 const workerSkills = {};
-               const vitalSkills = ['read_file', 'read_file_lines', 'replace_by_lines', 'write_file', 'find_files', 'get_os_context', 'execute_terminal_command']; 
-                // Nạp công cụ chính trong hợp đồng
+                const vitalSkills = ['read_file', 'read_file_lines', 'replace_by_lines', 'write_file', 'find_files', 'get_os_context', 'execute_terminal_command']; 
                 if (step.tool && this.skillRegistry[step.tool]) {
                     workerSkills[step.tool] = this.skillRegistry[step.tool];
                 }
-                // Nạp các công cụ bổ trợ sống còn
                 vitalSkills.forEach(vs => {
                     if (this.skillRegistry[vs]) {
                         workerSkills[vs] = this.skillRegistry[vs];
@@ -439,7 +469,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
                         }
                     },
                     systemPrompt: "Bạn là Worker. Chỉ thực thi, không giải thích dài dòng.",
-                    maxSteps: 3, isWorker: true, workerType: 'task'
+                    maxSteps: 10, isWorker: true, workerType: 'task'
                 });
                 if (llmSpanId) tracer.endSpan(llmSpanId, 'completed', { response_length: response.length });
                 spinner.succeed(chalk.green(`Worker hoàn thành: ${step.task}`));
@@ -451,6 +481,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 if (stepSpanId) tracer.endSpan(stepSpanId, 'failed', null, err.message);
             }
 
+            // XỬ LÝ KIỂM DUYỆT (VALIDATION) NẾU CHƯA CÓ LỖI CHẠY API
             if (!execError) {
                 this.transitionState('CURRENT', stepKey, 'VALIDATING');
                 const valSpinner = ora(`Kiểm duyệt (Validator)...`).start();
@@ -459,7 +490,6 @@ ${error ? `Lỗi: ${error.message}` : ''}
                     valSpinner.succeed(chalk.green(`Kiểm duyệt thành công!`));
                     const summary = await this.generateStepSummary(step, response);
 
-                    // Tạo tệp tin Artifact đầu ra để làm tài liệu tham khảo đáng tin cậy cho các Step sau
                     try {
                         const artifactPath = path.join(process.cwd(), '.agent_memory', 'state', 'artifacts', `${stepKey}_artifact.json`);
                         const artifactData = {
@@ -480,18 +510,36 @@ ${error ? `Lỗi: ${error.message}` : ''}
                     return { success: true };
                 } else {
                     valSpinner.fail(chalk.red(`Kiểm duyệt thất bại: ${valResult.reason}`));
-                    execError = new Error(valResult.reason);
+                    execError = new Error(valResult.reason); // Normal execution logic error
                 }
             } else {
                 db.prepare(`UPDATE agent_states SET state = 'VALIDATING', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
                     .run(new Date().toISOString(), stepKey);
             }
 
-            this.appendError('CURRENT', stepKey, execError.message);
-            this.rollbackChanges(preStepStatus);
+            // GHI NHẬN LỖI VÀ CHUẨN HÓA LOẠI LỖI (SYSTEM_ERROR)
+            if (execError) {
+                const isSystemError = execError.message.includes('API Error') || 
+                                      execError.message.includes('Improperly formed request') || 
+                                      execError.message.includes('403') || 
+                                      execError.message.includes('400') ||
+                                      execError.message.includes('fetch') ||
+                                      execError.message.includes('ECONNRESET');
 
+                const formattedError = isSystemError ? `[SYSTEM_ERROR] ${execError.message}` : execError.message;
+                
+                this.appendError('CURRENT', stepKey, formattedError);
+                this.rollbackChanges(preStepStatus);
+            }
+
+            // KIỂM TRA LẠI SỐ LẦN THỬ THEO CHỈ TIÊU HIỆN TẠI
             const updatedState = this.getStepState('CURRENT', stepKey);
-            if (updatedState.retry_count >= maxRetries) {
+            const updatedErrors = JSON.parse(updatedState?.error_history || '[]');
+            const updatedLastError = updatedErrors[updatedErrors.length - 1] || '';
+            const updatedIsSystemError = updatedLastError.startsWith('[SYSTEM_ERROR]');
+            const finalMaxLimit = updatedIsSystemError ? 5 : maxRetries;
+
+            if (updatedState.retry_count >= finalMaxLimit) {
                 this.transitionState('CURRENT', stepKey, 'BLOCKED');
                 const choice = await this.handleHITL(step, 'MAX_RETRIES');
                 if (choice === 'retry') {
@@ -505,6 +553,12 @@ ${error ? `Lỗi: ${error.message}` : ''}
                     this.transitionState('CURRENT', stepKey, 'FAILED');
                     return { success: false, terminated: true };
                 }
+            }
+
+            // Cooldown một khoảng ngắn 2 giây nếu gặp sự cố hệ thống để tránh bị dồn dập
+            if (updatedIsSystemError) {
+                logMessage(chalk.gray(`\n[Hệ thống] Tự động tạm hoãn 2 giây trước khi thử lại phiên API tiếp theo...`));
+                await new Promise(res => setTimeout(res, 2000));
             }
 
             this.transitionState('CURRENT', stepKey, 'QUEUED');
