@@ -130,72 +130,10 @@
         <!-- WEB TERMINAL PANEL -->
         <div class="panel" id="panel-terminal">
             <div class="chat-layout-container">
-                <!-- LEFT SIDEBAR PANEL -->
-                <div class="chat-left-sidebar">
-                    <!-- Terminal Status Box -->
-                    <div class="terminal-status-box">
-                        <div class="terminal-file-path mono">C:/Users/Xon/Desktop/prime_checker.py</div>
-                        <div class="terminal-label">[Tool Output]</div>
-                        <div class="auto-run-indicator">
-                            <span class="lightning-icon">⚡</span>
-                            <span>Auto-running: python</span>
-                        </div>
-                    </div>
-
-                    <!-- Progress Card -->
-                    <div class="progress-card accordion">
-                        <div class="accordion-header">
-                            <span class="progress-title">Work completed · 2m11s</span>
-                            <span class="accordion-icon">▼</span>
-                        </div>
-                        <div class="accordion-content">
-                            <p class="progress-description">
-                                AI đã hoàn thành phân tích và sửa lỗi trong file của bạn. 
-                                Các thay đổi bao gồm việc tối ưu hóa hàm kiểm tra số nguyên tố 
-                                và cải thiện hiệu suất tổng thể.
-                            </p>
-                        </div>
-                    </div>
-
-                    <!-- Code Tool Record -->
-                    <div class="code-tool-record accordion accordion-open">
-                        <div class="accordion-header">
-                            <span class="record-title">Code Tool Record</span>
-                            <span class="accordion-icon">▲</span>
-                        </div>
-                        <div class="accordion-content">
-                            <div class="file-changes-list">
-                                <div class="file-change-item">
-                                    <span class="file-name mono">.gitignore</span>
-                                    <div class="change-badges">
-                                        <span class="badge-add">+3</span>
-                                        <span class="badge-remove">-55</span>
-                                    </div>
-                                </div>
-                                <div class="file-change-item">
-                                    <span class="file-name mono">server.js</span>
-                                    <div class="change-badges">
-                                        <span class="badge-add">+0</span>
-                                        <span class="badge-remove">-3</span>
-                                    </div>
-                                </div>
-                                <div class="file-change-item">
-                                    <span class="file-name mono">terminal.js</span>
-                                    <div class="change-badges">
-                                        <span class="badge-add">+57</span>
-                                        <span class="badge-remove">-18</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="interaction-actions">
-                                <button class="action-btn" title="Like">👍</button>
-                                <button class="action-btn" title="Dislike">👎</button>
-                                <button class="action-btn" title="Refresh">↻</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Prompt Input Area -->
+                <!-- LEFT SIDEBAR PANEL - Chat History & Progress -->
+                <div class="chat-left-sidebar" id="chat-left-sidebar">
+                    <!-- Dynamic content will be inserted here -->
+                    <!-- Prompt Input Area (fixed at bottom) -->
                     <div class="prompt-input-area">
                         <div class="input-wrapper">
                             <textarea 
@@ -213,13 +151,13 @@
                     </div>
                 </div>
 
-                <!-- RIGHT CONTENT PANEL -->
-                <div class="chat-right-content">
+                <!-- RIGHT CONTENT PANEL - Live Logs -->
+                <div class="chat-right-content" id="chat-right-content">
                     <!-- Top Bar with Tabs -->
                     <div class="content-top-bar">
                         <div class="tab-switcher">
-                            <button class="tab-btn">Difference</button>
-                            <button class="tab-btn active">Log</button>
+                            <button class="tab-btn active" data-tab="difference">Difference</button>
+                            <button class="tab-btn" data-tab="log">Log</button>
                         </div>
                         <button class="expand-btn" title="Expand">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -228,55 +166,21 @@
                         </button>
                     </div>
 
-                    <!-- Main Explanation Text -->
-                    <div class="explanation-content">
-                        <h4 class="explanation-title">Phân tích lỗi</h4>
-                        <div class="explanation-body">
-                            <p>Đã phát hiện các vấn đề sau trong code của bạn:</p>
-                            <ol class="numbered-list">
-                                <li>
-                                    Hàm <code class="inline-code">execute_terminal_command</code> 
-                                    không xử lý đúng trường hợp lỗi khi gọi lệnh 
-                                    <code class="inline-code">exit</code>.
-                                </li>
-                                <li>
-                                    File <code class="inline-code">server.js</code> có đoạn code 
-                                    thừa cần được xóa để tối ưu hiệu suất.
-                                </li>
-                            </ol>
-                        </div>
-                    </div>
-
-                    <!-- Shell Terminal Component -->
-                    <div class="shell-terminal">
-                        <div class="terminal-header">
-                            <span class="terminal-label-text">Shell</span>
-                        </div>
-                        <div class="terminal-body mono">
-                            <div class="terminal-command">
-                                <span class="command-prompt">$</span>
-                                <span class="command-text">grep -n "execute_terminal_command" server.js</span>
-                            </div>
-                            <div class="terminal-output">
-                                <div class="output-line">
-                                    <span class="line-number">91:</span>
-                                    <span class="code-line">function execute_terminal_command(cmd) {</span>
-                                </div>
-                                <div class="output-line">
-                                    <span class="line-number">599:</span>
-                                    <span class="code-line">    const result = await execute_terminal_command(command);</span>
-                                </div>
-                                <div class="output-line">
-                                    <span class="line-number">926:</span>
-                                    <span class="code-line">export { execute_terminal_command };</span>
-                                </div>
+                    <!-- Difference Tab Content -->
+                    <div class="tab-content" id="tab-difference">
+                        <div class="diff-container" id="diff-container">
+                            <div class="empty-state">
+                                <div class="icon">📝</div>
+                                <p>Chưa có thay đổi nào. Các file được chỉnh sửa sẽ hiển thị ở đây.</p>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Chat Messages (hidden by default, shown when chatting) -->
-                    <div class="chat-messages" id="chat-messages" style="display: none;">
-                        <!-- Messages will be added dynamically -->
+                    <!-- Log Tab Content -->
+                    <div class="tab-content" id="tab-log" style="display: none;">
+                        <div class="log-stream" id="log-stream">
+                            <!-- Dynamic log entries will be appended here -->
+                        </div>
                     </div>
                 </div>
             </div>
