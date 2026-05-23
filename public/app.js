@@ -71,6 +71,11 @@ function switchTab(panelId) {
     if (activeTab && activePanel) {
         activeTab.classList.add('active');
         activePanel.classList.add('active');
+        
+        // Show chat messages container when switching to terminal tab
+        if (panelId === 'terminal' && chatMessages && chatMessages.style.display === 'none') {
+            chatMessages.style.display = 'flex';
+        }
     }
 }
 
@@ -291,6 +296,10 @@ window.startNewWebSession = async function() {
         }).then(res => res.json());
         
         if (r.success) {
+            // Show chat messages container when starting new session
+            if (chatMessages.style.display === 'none') {
+                chatMessages.style.display = 'flex';
+            }
             chatMessages.innerHTML = '';
             webChatHistory = [];
             updateGoalBar(null);
@@ -632,7 +641,13 @@ const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
 const chatMessages = document.getElementById('chat-messages');
 
+// Initialize send button state on page load
+if (chatSend) {
+    updateSendButton();
+}
+
 function scrollToBottom(force = false) {
+    if (!chatMessages) return;
     const isAtBottom = chatMessages.scrollHeight - chatMessages.clientHeight - chatMessages.scrollTop < 100;
     if (force || isAtBottom) {
         chatMessages.scrollTop = chatMessages.scrollHeight;
@@ -807,7 +822,17 @@ window.respondPermission = async function(permId, value, buttonEl) {
     }
 };
 
-appendMsg('bot', 'Xin chào! Hãy trò chuyện trực tiếp tại đây. Tất cả các yêu cầu cấp quyền chạy tool của Agent sẽ được tương tác trực tiếp trong khung chat này.');
+// Initialize chat with welcome message (only show when terminal tab is active)
+function initChat() {
+    // Show chat messages container for initial welcome message
+    if (chatMessages && chatMessages.style.display === 'none') {
+        chatMessages.style.display = 'flex';
+    }
+    appendMsg('bot', 'Xin chào! Hãy trò chuyện trực tiếp tại đây. Tất cả các yêu cầu cấp quyền chạy tool của Agent sẽ được tương tác trực tiếp trong khung chat này.');
+}
+
+// Initialize chat on page load
+initChat();
 
 function updateSendButton() {
     if (isGenerating) {
@@ -843,6 +868,11 @@ chatSend.addEventListener('click', () => {
 async function sendChat() {
     const msg = chatInput.value.trim();
     if (!msg) return;
+    
+    // Show chat messages container when user sends first message
+    if (chatMessages.style.display === 'none') {
+        chatMessages.style.display = 'flex';
+    }
     
     appendMsg('user', msg);
     chatInput.value = '';

@@ -129,24 +129,159 @@
 
         <!-- WEB TERMINAL PANEL -->
         <div class="panel" id="panel-terminal">
-            <div class="card chat-box" style="padding:0; overflow:hidden;">
-                <h3 style="font-size:14px;font-weight:600;padding:16px 24px;border-bottom:1px solid var(--border);margin:0;background:var(--surface);display:flex;align-items:center;justify-content:space-between;width:100%">
-                    <span>💬 Web Terminal — <span id="chat-provider" style="color:var(--success)"></span></span>
-                    <button onclick="startNewWebSession()" class="btn-session-restore" style="padding: 4px 12px; font-weight: 500;">✨ New Chat</button>
-                </h3>
-                <div class="chat-messages" id="chat-messages">
-                    <!-- Messages will be added dynamically -->
+            <div class="chat-layout-container">
+                <!-- LEFT SIDEBAR PANEL -->
+                <div class="chat-left-sidebar">
+                    <!-- Terminal Status Box -->
+                    <div class="terminal-status-box">
+                        <div class="terminal-file-path mono">C:/Users/Xon/Desktop/prime_checker.py</div>
+                        <div class="terminal-label">[Tool Output]</div>
+                        <div class="auto-run-indicator">
+                            <span class="lightning-icon">⚡</span>
+                            <span>Auto-running: python</span>
+                        </div>
+                    </div>
+
+                    <!-- Progress Card -->
+                    <div class="progress-card accordion">
+                        <div class="accordion-header">
+                            <span class="progress-title">Work completed · 2m11s</span>
+                            <span class="accordion-icon">▼</span>
+                        </div>
+                        <div class="accordion-content">
+                            <p class="progress-description">
+                                AI đã hoàn thành phân tích và sửa lỗi trong file của bạn. 
+                                Các thay đổi bao gồm việc tối ưu hóa hàm kiểm tra số nguyên tố 
+                                và cải thiện hiệu suất tổng thể.
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Code Tool Record -->
+                    <div class="code-tool-record accordion accordion-open">
+                        <div class="accordion-header">
+                            <span class="record-title">Code Tool Record</span>
+                            <span class="accordion-icon">▲</span>
+                        </div>
+                        <div class="accordion-content">
+                            <div class="file-changes-list">
+                                <div class="file-change-item">
+                                    <span class="file-name mono">.gitignore</span>
+                                    <div class="change-badges">
+                                        <span class="badge-add">+3</span>
+                                        <span class="badge-remove">-55</span>
+                                    </div>
+                                </div>
+                                <div class="file-change-item">
+                                    <span class="file-name mono">server.js</span>
+                                    <div class="change-badges">
+                                        <span class="badge-add">+0</span>
+                                        <span class="badge-remove">-3</span>
+                                    </div>
+                                </div>
+                                <div class="file-change-item">
+                                    <span class="file-name mono">terminal.js</span>
+                                    <div class="change-badges">
+                                        <span class="badge-add">+57</span>
+                                        <span class="badge-remove">-18</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="interaction-actions">
+                                <button class="action-btn" title="Like">👍</button>
+                                <button class="action-btn" title="Dislike">👎</button>
+                                <button class="action-btn" title="Refresh">↻</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Prompt Input Area -->
+                    <div class="prompt-input-area">
+                        <div class="input-wrapper">
+                            <textarea 
+                                id="chat-input" 
+                                rows="3" 
+                                placeholder="Code your creativity here."
+                                class="chat-textarea"></textarea>
+                            <button id="chat-send" class="send-button" disabled>
+                                Coding ➔
+                            </button>
+                        </div>
+                        <div class="input-disclaimer">
+                            AI-generated content may contain inaccuracies.
+                        </div>
+                    </div>
                 </div>
-                <div class="chat-input-container">
-                    <div class="chat-input-glow"></div>
-                    <div class="chat-input-wrapper">
-                        <textarea id="chat-input" rows="1" placeholder="Nhập tin nhắn cho AI... (Nhấn Enter để gửi)"></textarea>
-                        <button id="chat-send">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 2px;"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+
+                <!-- RIGHT CONTENT PANEL -->
+                <div class="chat-right-content">
+                    <!-- Top Bar with Tabs -->
+                    <div class="content-top-bar">
+                        <div class="tab-switcher">
+                            <button class="tab-btn">Difference</button>
+                            <button class="tab-btn active">Log</button>
+                        </div>
+                        <button class="expand-btn" title="Expand">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                            </svg>
                         </button>
+                    </div>
+
+                    <!-- Main Explanation Text -->
+                    <div class="explanation-content">
+                        <h4 class="explanation-title">Phân tích lỗi</h4>
+                        <div class="explanation-body">
+                            <p>Đã phát hiện các vấn đề sau trong code của bạn:</p>
+                            <ol class="numbered-list">
+                                <li>
+                                    Hàm <code class="inline-code">execute_terminal_command</code> 
+                                    không xử lý đúng trường hợp lỗi khi gọi lệnh 
+                                    <code class="inline-code">exit</code>.
+                                </li>
+                                <li>
+                                    File <code class="inline-code">server.js</code> có đoạn code 
+                                    thừa cần được xóa để tối ưu hiệu suất.
+                                </li>
+                            </ol>
+                        </div>
+                    </div>
+
+                    <!-- Shell Terminal Component -->
+                    <div class="shell-terminal">
+                        <div class="terminal-header">
+                            <span class="terminal-label-text">Shell</span>
+                        </div>
+                        <div class="terminal-body mono">
+                            <div class="terminal-command">
+                                <span class="command-prompt">$</span>
+                                <span class="command-text">grep -n "execute_terminal_command" server.js</span>
+                            </div>
+                            <div class="terminal-output">
+                                <div class="output-line">
+                                    <span class="line-number">91:</span>
+                                    <span class="code-line">function execute_terminal_command(cmd) {</span>
+                                </div>
+                                <div class="output-line">
+                                    <span class="line-number">599:</span>
+                                    <span class="code-line">    const result = await execute_terminal_command(command);</span>
+                                </div>
+                                <div class="output-line">
+                                    <span class="line-number">926:</span>
+                                    <span class="code-line">export { execute_terminal_command };</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Chat Messages (hidden by default, shown when chatting) -->
+                    <div class="chat-messages" id="chat-messages" style="display: none;">
+                        <!-- Messages will be added dynamically -->
                     </div>
                 </div>
             </div>
+            
+            <!-- Quick API Test Card (below main layout) -->
             <div class="card" style="margin-top:16px">
                 <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">🔍 Quick API Test</h3>
                 <div style="display:flex;gap:8px;flex-wrap:wrap" id="quick-tests"></div>
