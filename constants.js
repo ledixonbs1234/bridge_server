@@ -43,9 +43,7 @@ export const SKILL_GROUPS = {
         'list_directory',
         'execute_terminal_command',
         'get_os_context',
-        'memorize_lesson',
         'memorize_rule',
-        'rate_memory',
         'create_pipeline_plan',
         'load_harness_template',
         'find_files'
@@ -53,9 +51,6 @@ export const SKILL_GROUPS = {
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
         'dynamic_browser_controller',
-        'graphify_query',
-        'graphify_ingest',
-        'memorize_lesson',
         'create_pipeline_plan',
         'load_harness_template',
         'read_file',

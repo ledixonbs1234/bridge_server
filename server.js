@@ -14,10 +14,9 @@ import { markedTerminal } from 'marked-terminal';
 import TerminalRenderer from 'marked-terminal';
 import { fileURLToPath, pathToFileURL } from 'url';
 import WorkflowEngine from './workflow_engine.js';
-import db from './database.js';
 import telemetry from './telemetry.js';
 import tracer from './tracer.js';
-import { recallMemoryFromGraph } from './neo4j.js';
+
 import { runMetaHarnessOptimization } from './meta_harness.js';
 import { randomUUID } from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
@@ -52,10 +51,6 @@ app.get('/health', (req, res) => {
         },
         provider: activeProvider?.getDisplayName() || 'unknown',
         model: activeProvider?.model || 'unknown',
-        database: {
-            status: db.open ? 'connected' : 'disconnected',
-            path: path.join(__dirname, '.agent_memory', 'agent_state.db')
-        },
         skills: {
             total: Object.keys(SKILL_REGISTRY).length,
             hardSkills: Object.keys(SKILL_REGISTRY).filter(k => !k.startsWith('workflow_')).length,
@@ -93,9 +88,9 @@ const originalConsoleLog = console.log;
 // =================================================================
 const SKILL_GROUPS = {
     chat: [],
-    code: ['read_file', 'read_multiple_files', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context', 'memorize_lesson', 'memorize_rule', 'rate_memory', 'create_pipeline_plan', 'load_harness_template', 'find_files'],
+    code: ['read_file', 'read_multiple_files', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context'],
     // BẢO VỆ DỰ PHÒNG: Thêm các công cụ tìm & đọc file cơ bản vào nhóm research
-    research: ['web_markdown_reader', 'dynamic_browser_controller', 'graphify_query', 'graphify_ingest', 'memorize_lesson', 'create_pipeline_plan', 'load_harness_template', 'read_file', 'read_file_lines', 'find_files', 'list_directory'],
+    research: ['web_markdown_reader', 'dynamic_browser_controller', 'create_pipeline_plan', 'load_harness_template', 'read_file', 'read_file_lines', 'find_files', 'list_directory'],
     complex: null
 };
 
@@ -312,40 +307,6 @@ async function chatWithFailover(options) {
     }
 
     throw lastError || new Error('Tất cả provider đều lỗi!');
-}
-
-// =================================================================
-// 🧠 SEMANTIC MEMORY EMBEDDING (Vector Search cho bộ nhớ)
-// =================================================================
-async function embedText(text) {
-    const geminiConfig = providerConfig.providers?.['gemini-api'];
-    if (!geminiConfig?.apiKey) return null;
-
-    try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${geminiConfig.apiKey}`;
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                content: { parts: [{ text }] },
-                taskType: 'RETRIEVAL_QUERY'
-            })
-        });
-        if (!response.ok) return null;
-        const data = await response.json();
-        return data.embedding?.values || null;
-    } catch { return null; }
-}
-
-function cosineSimilarity(a, b) {
-    if (!a || !b || a.length !== b.length) return 0;
-    let dotProduct = 0, normA = 0, normB = 0;
-    for (let i = 0; i < a.length; i++) {
-        dotProduct += a[i] * b[i];
-        normA += a[i] * a[i];
-        normB += b[i] * b[i];
-    }
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB) || 1);
 }
 
 // Cấu hình Render Markdown
@@ -721,26 +682,11 @@ app.use('/dashboard', express.static(path.join(__dirname, 'public')));
 
 app.get('/api/dashboard/telemetry', (req, res) => {
     const report = telemetry.getToolReliabilityReport();
-    const timeline = db.prepare(`
-        SELECT tool_name, timestamp, success, duration_ms 
-        FROM tool_telemetry ORDER BY timestamp DESC LIMIT 200
-    `).all();
-    res.json({ report, timeline });
+    res.json({ report, timeline: [] });
 });
 
 app.get('/api/dashboard/memories', (req, res) => {
-    const memories = db.prepare(`
-        SELECT id, date, tags, situation, solution, trust_score, use_count,
-               CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END as has_embedding
-        FROM memories ORDER BY trust_score DESC, date DESC LIMIT 100
-    `).all();
-    const stats = db.prepare(`
-        SELECT COUNT(*) as total,
-               AVG(trust_score) as avg_trust,
-               SUM(CASE WHEN embedding IS NOT NULL THEN 1 ELSE 0 END) as embedded_count
-        FROM memories
-    `).get();
-    res.json({ memories, stats });
+    res.json({ memories: [], stats: { total: 0, avg_trust: 0, embedded_count: 0 } });
 });
 
 app.get('/api/dashboard/sessions', (req, res) => {
@@ -869,24 +815,7 @@ app.post('/api/dashboard/permission/respond', (req, res) => {
 // 🔄 PIPELINE STATE MACHINE API (Real-time FSM status)
 app.get('/api/dashboard/pipeline-state', (req, res) => {
     try {
-        const pipelineRow = db.prepare(`SELECT id, name, status, data FROM pipelines WHERE id = 'CURRENT'`).get();
-        if (!pipelineRow) {
-            return res.json({ active: false, pipeline: null, states: [] });
-        }
-        const states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT' ORDER BY step_key`).all();
-        const pipeline = JSON.parse(pipelineRow.data);
-        res.json({
-            active: pipelineRow.status === 'IN_PROGRESS',
-            pipeline: { name: pipeline.pipeline_name, status: pipelineRow.status, stages: pipeline.stages },
-            states: states.map(s => ({
-                step_key: s.step_key,
-                state: s.state,
-                retry_count: s.retry_count,
-                error_count: JSON.parse(s.error_history || '[]').length,
-                summary: s.summary,
-                updated_at: s.updated_at
-            }))
-        });
+        res.json({ active: false, pipeline: null, states: [] });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -1468,11 +1397,7 @@ async function gracefulShutdown(signal) {
             }
         }
 
-        // 4. Đóng database connection
-        if (db && db.open) {
-            db.close();
-            console.log(chalk.green('✓ Đã đóng database connection'));
-        }
+        // 4. Đóng database connection (đã loại bỏ SQLite)
 
         console.log(chalk.green('\n👋 Goodbye! Server đã shutdown an toàn.\n'));
         process.exit(0);
@@ -1533,14 +1458,11 @@ ${logSummary}
 
 Nhiệm vụ:
 1. Phân tích các lỗi (❌) đã xảy ra. Xác định NGUYÊN NHÂN GỐC RỄ.
-2. NẾU bạn rút ra được bài học mới (pattern lỗi chưa từng gặp, hoặc cách fix mới), HÃY GỌI memorize_lesson.
-3. NẾU không có gì đáng nhớ, KHÔNG gọi tool nào.
+2. Trả lời cực ngắn gọn (1-2 câu) về bài học rút ra.
 Chỉ trả lời cực ngắn gọn (1-2 câu).`;
 
     try {
         const skills = {};
-        if (SKILL_REGISTRY['memorize_lesson']) skills['memorize_lesson'] = SKILL_REGISTRY['memorize_lesson'];
-        if (SKILL_REGISTRY['rate_memory']) skills['rate_memory'] = SKILL_REGISTRY['rate_memory'];
 
         const response = await activeProvider.chat({
             messages: [{ role: 'user', content: criticPrompt }],
@@ -1671,7 +1593,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "", onLog) {
         return "";
     }
 
-    if (logger) logger(`🧠 [Memory Recall] Đang tiến hành truy xuất bối cảnh bộ nhớ (Semantic + Keyword + GraphRAG)...`);
+    if (logger) logger(`🧠 [Memory Recall] Đang tiến hành truy xuất bối cảnh bộ nhớ...`);
 
     let injectedContext = "\n\n[HỆ THỐNG TRÍ NHỚ (CONTEXTUAL MEMORY)]:\nLưu ý: Đây là những nguyên tắc bắt buộc từ người dùng. Hãy áp dụng ngay:\n";
     let hasMemory = false;
@@ -1696,150 +1618,6 @@ async function recallMemory(lastUserMessage, allMessagesContext = "", onLog) {
                 if (logger) logger(`📖 Đã tải bối cảnh quy định cho công nghệ: [${keyword.toUpperCase()}]`);
             }
         }
-    }
-
-    try {
-        let searchTerms = "";
-        try {
-            if (activeProvider && activeProvider.chat) {
-                if (logger) logger(`🕵️ [Memory Recall] Đang phân tích từ khóa kỹ thuật bằng AI...`);
-                const prompt = `Từ yêu cầu sau, hãy trích xuất 2-3 từ khóa kỹ thuật hoặc danh từ ĐẶC TRƯNG NHẤT dùng để tìm kiếm lỗi/giải pháp trong cơ sở dữ liệu. Chỉ trả về các từ khóa viết thường, cách nhau bởi khoảng trắng, không giải thích. Yêu cầu: "${lastUserMessage}"`;
-
-                let keywordResponse = await activeProvider.chat({
-                    messages: [{ role: 'user', content: prompt }],
-                    skillRegistry: {},
-                    executeSkill: async () => { },
-                    systemPrompt: "Bạn là hệ thống trích xuất từ khóa tìm kiếm nội bộ. Chỉ output từ khóa.",
-                    maxSteps: 1,
-                    isWorker: true,
-                    workerType: 'keyword'
-                });
-
-                keywordResponse = keywordResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-                let cleanKeywords = keywordResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-                const words = cleanKeywords.replace(/[^\p{L}\p{N}]/gu, ' ')
-                    .trim()
-                    .split(/\s+/)
-                    .filter(w => w.length > 1);
-
-                if (words.length > 0) {
-                    searchTerms = words.map(w => '"' + w + '"*').join(' OR ');
-                    console.log(chalk.gray(`\n[Memory] AI Keyword Extraction: "${searchTerms}"`));
-                    if (logger) logger(`🔑 [Memory Recall] Đã xác định từ khóa tìm kiếm: [${words.join(', ')}]`);
-                }
-            }
-        } catch (apiErr) {
-            console.warn("[Memory] Trích xuất từ khóa AI thất bại, dùng fallback.", apiErr.message);
-        }
-
-        if (!searchTerms) {
-            const words = (lastUserMessage + " " + allMessagesContext)
-                .replace(/[^\p{L}\p{N}]/gu, ' ')
-                .trim()
-                .split(/\s+/)
-                .filter(w => w.length > 1);
-
-            if (words.length > 0) {
-                searchTerms = words.map(w => '"' + w + '"*').join(' OR ');
-            }
-        }
-
-        let allResults = [];
-
-        // 1. Tìm kiếm bằng Neo4j GraphRAG
-        try {
-            if (logger) logger(`🕸️ [Memory Recall] Đang thực hiện tìm kiếm GraphRAG (Neo4j)...`);
-            const graphResults = await recallMemoryFromGraph(lastUserMessage, allMessagesContext);
-            if (graphResults && graphResults.length > 0) {
-                allResults.push(...graphResults);
-                if (logger) logger(`🕸️ GraphRAG: Đã tìm thấy ${graphResults.length} bối cảnh lỗi liên quan.`);
-            }
-        } catch (graphErr) {
-            console.warn("[Memory] Neo4j GraphRAG search failed:", graphErr.message);
-        }
-
-        // 2. Tìm kiếm bằng SQLite Semantic Search (Vector)
-        try {
-            if (logger) logger(`🧠 [Memory Recall] Đang tiến hành Semantic Vector Search (Gemini embeddings)...`);
-            const queryEmbedding = await embedText(lastUserMessage);
-            if (queryEmbedding) {
-                const allMemories = db.prepare(`
-                    SELECT id, situation, solution, trust_score, use_count, embedding
-                    FROM memories WHERE trust_score > 0.3
-                `).all();
-
-                const scored = allMemories
-                    .filter(m => m.embedding)
-                    .map(m => {
-                        try {
-                            const memEmbed = JSON.parse(m.embedding);
-                            const similarity = cosineSimilarity(queryEmbedding, memEmbed);
-                            return { ...m, similarity, source: 'semantic' };
-                        } catch { return null; }
-                    })
-                    .filter(m => m && m.similarity > 0.5)
-                    .sort((a, b) => b.similarity - a.similarity)
-                    .slice(0, 3);
-
-                allResults.push(...scored);
-                if (scored.length > 0) {
-                    console.log(chalk.gray(`[Memory] 🧠 Semantic Search: ${scored.length} kết quả (top similarity: ${scored[0].similarity.toFixed(3)})`));
-                    if (logger) logger(`🧠 Semantic Search: Phát hiện ${scored.length} bối cảnh tương quan nghĩa.`);
-                }
-            }
-        } catch (embedErr) { }
-
-        // 3. Tìm kiếm bằng SQLite FTS5 Keyword Search
-        if (searchTerms) {
-            try {
-                if (logger) logger(`🔍 [Memory Recall] Đang tiến hành Full-Text Keyword Search (SQLite FTS5)...`);
-                const stmt = db.prepare(`
-                    SELECT m.id, m.situation, m.solution, m.trust_score, m.use_count
-                    FROM memories_fts f
-                    JOIN memories m ON f.rowid = m.rowid
-                    WHERE memories_fts MATCH ?
-                    AND m.trust_score > 0.3
-                    ORDER BY m.trust_score DESC, rank
-                    LIMIT 3
-                `);
-                const ftsResults = stmt.all(searchTerms).map(r => ({ ...r, source: 'keyword' }));
-                allResults.push(...ftsResults);
-                if (ftsResults.length > 0 && logger) {
-                    logger(`🔍 Keyword Search: Phát hiện ${ftsResults.length} bối cảnh lỗi liên quan.`);
-                }
-            } catch (ftsErr) { }
-        }
-
-        const seenIds = new Set();
-        const uniqueResults = [];
-        for (const r of allResults) {
-            if (!seenIds.has(r.id)) {
-                seenIds.add(r.id);
-                uniqueResults.push(r);
-            }
-        }
-        const finalResults = uniqueResults.slice(0, 5);
-
-        if (finalResults.length > 0) {
-            injectedContext += "\n--- BÀI HỌC TỪ LỖI TRONG QUÁ KHỨ (Hybrid Search) ---\n";
-            injectedContext += finalResults.map(r => {
-                const trust = (r.trust_score ?? 0.7).toFixed(2);
-                let tag = `🔤 Keyword | Trust: ${trust}`;
-                if (r.source === 'graph') {
-                    tag = `🕸️ GraphRAG | Trust: ${trust}`;
-                } else if (r.source === 'semantic') {
-                    tag = `🧠 Semantic | Trust: ${trust}`;
-                }
-                return `- [${tag} | ID: ${r.id}] Vấn đề: "${r.situation}" -> Xử lý: "${r.solution}"`;
-            }).join('\n');
-            injectedContext += "\n(Lưu ý: Nếu bài học nào GIÚP ÍCH, hãy gọi rate_memory với outcome='success'. Nếu SAI, gọi với outcome='fail'.)";
-            hasMemory = true;
-            if (logger) logger(`💡 [Memory Recall] Đã khôi phục thành công ${finalResults.length} bài học kinh nghiệm trong quá khứ.`);
-        } else {
-            if (logger) logger(`💤 [Memory Recall] Chưa phát hiện bài học kinh nghiệm tương đồng trong quá khứ.`);
-        }
-    } catch (e) {
-        console.warn("[Node] Lỗi truy vấn bộ nhớ DB:", e.message);
     }
 
     return hasMemory ? injectedContext : "";
