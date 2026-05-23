@@ -1631,10 +1631,13 @@ async function reformulateQuery(userMessage, onLog, skipLog = false) {
 
     const msgLower = userMessage.toLowerCase().trim();
 
-    const isContinuationOrSimpleCmd = msgLower.length < 40 && (
+    // Mở rộng điều kiện bỏ qua reformulator cho các lệnh đơn giản
+    const isContinuationOrSimpleCmd = msgLower.length < 60 && (
         /^(tiếp tục|chạy tiếp|chạy nữa|tiếp|continue|go on|next|chạy đi)$/.test(msgLower) ||
         /^(ok|được|được rồi|yes|y|no|n|sure|đồng ý|hủy)$/.test(msgLower) ||
-        /^(hãy )?(fix lỗi|sửa lỗi|sửa lỗi này|fix lỗi này|fix bug|sửa bug|chạy lại)$/.test(msgLower)
+        /^(hãy )?(fix lỗi|sửa lỗi|sửa lỗi này|fix lỗi này|fix bug|sửa bug|chạy lại)$/.test(msgLower) ||
+        /^(tạo|viết|làm|generate|create|build).*\.(py|js|ts|html|css|json|md)$/i.test(msgLower) ||
+        /^(kiểm tra|check|test|xem|list|show|display)/.test(msgLower)
     );
 
     if (isContinuationOrSimpleCmd) {
