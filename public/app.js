@@ -640,6 +640,7 @@ window.selectSpan = function(spanId) {
 const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
 const chatLeftSidebar = document.getElementById('chat-left-sidebar');
+const chatMessages = document.getElementById('chat-left-sidebar');
 const logStream = document.getElementById('log-stream');
 const diffContainer = document.getElementById('diff-container');
 const tabDifference = document.getElementById('tab-difference');
@@ -647,6 +648,85 @@ const tabLog = document.getElementById('tab-log');
 
 // Store for file changes
 let currentFileChanges = [];
+
+// Helper to get current timestamp
+function getCurrentTimestamp() {
+    const now = new Date();
+    return now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+// Append user question to left sidebar
+function appendUserQuestion(msg) {
+    if (!chatMessages) return;
+    
+    const msgDiv = document.createElement('div');
+    msgDiv.className = 'chat-message user-message';
+    msgDiv.style.cssText = 'align-self: flex-end; background: var(--accent); color: white; padding: 10px 14px; border-radius: 12px 12px 0 12px; margin: 8px 0; max-width: 80%; word-wrap: break-word;';
+    msgDiv.textContent = msg;
+    chatMessages.appendChild(msgDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Append working status indicator
+function appendWorkingStatus() {
+    if (!chatMessages) return null;
+    
+    const statusDiv = document.createElement('div');
+    statusDiv.className = 'working-status';
+    statusDiv.id = 'working-status-' + Date.now();
+    statusDiv.style.cssText = 'display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: rgba(59,130,246,0.1); border-radius: 12px; margin: 8px 0; color: var(--accent); font-size: 13px;';
+    statusDiv.innerHTML = `
+        <div class="status-bubble">
+            <div class="status-header">
+                <span class="status-icon">⚡</span>
+                <span class="status-label">AI đang xử lý...</span>
+                <span class="status-time">${getCurrentTimestamp()}</span>
+            </div>
+        </div>
+    `;
+    chatMessages.appendChild(statusDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+    return statusDiv;
+}
+
+// Remove working status
+function removeWorkingStatus(el) {
+    if (el && el.parentNode) {
+        el.remove();
+    }
+}
+
+// Append completed card
+function appendCompletedCard(summary) {
+    if (!chatMessages) return;
+    
+    const cardDiv = document.createElement('div');
+    cardDiv.className = 'completed-card';
+    cardDiv.style.cssText = 'background: rgba(16,185,129,0.1); border: 1px solid rgba(16,185,129,0.3); border-radius: 12px; padding: 12px; margin: 8px 0; color: var(--success); font-size: 13px;';
+    cardDiv.innerHTML = `<span style="font-weight: 600;">✅ Hoàn thành:</span> ${summary}`;
+    chatMessages.appendChild(cardDiv);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+// Append code tool record for file changes
+function appendCodeToolRecord(fileChanges) {
+    if (!diffContainer || !fileChanges || fileChanges.length === 0) return;
+    
+    let html = '';
+    fileChanges.forEach(change => {
+        html += `
+            <div class="file-change-item" style="background: var(--surface); border-radius: 8px; padding: 12px; margin: 8px 0; border: 1px solid var(--border);">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+                    <span style="color: var(--accent); font-size: 16px;">📄</span>
+                    <span style="font-weight: 600; color: var(--text);">${change.file || 'Unknown file'}</span>
+                </div>
+                <div style="font-size: 12px; color: var(--muted); white-space: pre-wrap; font-family: monospace; background: var(--bg); padding: 8px; border-radius: 6px;">${change.diff || change.content || ''}</div>
+            </div>
+        `;
+    });
+    
+    diffContainer.innerHTML = html || diffContainer.innerHTML;
+}
 
 // Initialize send button state on page load
 if (chatSend) {
