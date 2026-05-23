@@ -1,0 +1,91 @@
+/**
+ * Constants and Configuration
+ * Centralized constants to avoid magic numbers and hardcoded values
+ */
+
+// Timeouts (milliseconds)
+export const HEARTBEAT_TIMEOUT_MS = 120000; // 2 minutes
+export const SESSION_TIMEOUT_MINUTES = 120;
+export const PERMISSION_TIMEOUT_MS = 300000; // 5 minutes
+export const PROVIDER_RETRY_DELAY_MS = 1000;
+export const SESSION_CLEANUP_INTERVAL_MS = 3600000; // 1 hour
+
+// Retry configuration
+export const MAX_PROVIDER_RETRIES = 5;
+
+// Memory limits
+export const MAX_LOG_BUFFER_SIZE = 1000; // Maximum log entries in buffer
+export const MAX_PENDING_PERMISSIONS = 100;
+
+// File system
+export const MAX_SESSION_AGE_DAYS = 30;
+export const MAX_REQUEST_SIZE = '10mb';
+
+// Server
+export const DEFAULT_PORT = 54321;
+
+// Skill categories
+export const SKILL_CATEGORIES = {
+    CHAT: 'chat',
+    CODE: 'code',
+    RESEARCH: 'research',
+    COMPLEX: 'complex'
+};
+
+// Skill groups mapping
+export const SKILL_GROUPS = {
+    [SKILL_CATEGORIES.CHAT]: [],
+    [SKILL_CATEGORIES.CODE]: [
+        'read_file',
+        'read_multiple_files',
+        'write_file',
+        'replace_by_lines',
+        'list_directory',
+        'execute_terminal_command',
+        'get_os_context',
+        'memorize_lesson',
+        'memorize_rule',
+        'rate_memory',
+        'create_pipeline_plan',
+        'load_harness_template',
+        'find_files'
+    ],
+    [SKILL_CATEGORIES.RESEARCH]: [
+        'web_markdown_reader',
+        'dynamic_browser_controller',
+        'graphify_query',
+        'graphify_ingest',
+        'memorize_lesson',
+        'create_pipeline_plan',
+        'load_harness_template',
+        'read_file',
+        'read_file_lines',
+        'find_files',
+        'list_directory'
+    ],
+    [SKILL_CATEGORIES.COMPLEX]: null
+};
+
+// Log levels
+export const LOG_LEVELS = {
+    ERROR: 0,
+    WARN: 1,
+    INFO: 2,
+    DEBUG: 3
+};
+
+// Session types
+export const SESSION_META_TYPE = '_type';
+export const SESSION_FILE_PATTERN = /^session_.*\.jsonl$/;
+
+// API routes
+export const API_ROUTES = {
+    HEALTH: '/health',
+    DASHBOARD: '/api/dashboard',
+    SESSIONS: '/api/dashboard/sessions',
+    GOAL: '/api/dashboard/goal',
+    PERMISSION: '/api/dashboard/permission',
+    PIPELINE: '/api/dashboard/pipeline-state',
+    PROVIDERS: '/api/providers',
+    CHAT: '/api/chat'
+};
