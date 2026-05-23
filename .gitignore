@@ -13,6 +13,12 @@
 .vscode/
 .idea/
 
+.agent_memory
+agent_skills
+profile
+.agents
+node_modules
+
 # Dependencies
 node_modules/
 ```
