@@ -339,6 +339,45 @@ marked.use(markedTerminal({
     }
 }));
 
+// Thêm hàm này vào phần helper của server.js (ví dụ: phía dưới định nghĩa các biến toàn cục)
+function getGitDiffStats() {
+    try {
+        const diffOutput = execSync('git diff HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        const fileDiffs = diffOutput.split(/^diff --git /m);
+        const files = [];
+
+        for (const fileDiff of fileDiffs) {
+            if (!fileDiff.trim()) continue;
+            const lines = fileDiff.split('\n');
+            const headerLine = lines[0];
+            const match = headerLine.match(/a\/(.+?)\s+b\/(.+)$/);
+            if (!match) continue;
+            const filename = match[1];
+
+            let additions = 0;
+            let deletions = 0;
+            for (const line of lines) {
+                if (line.startsWith('+') && !line.startsWith('+++')) additions++;
+                if (line.startsWith('-') && !line.startsWith('---')) deletions++;
+            }
+
+            let status = 'modified';
+            if (fileDiff.includes('new file mode')) status = 'added';
+            else if (fileDiff.includes('deleted file mode')) status = 'deleted';
+
+            files.push({
+                file: filename,
+                status: status,
+                additions: additions,
+                deletions: deletions,
+                diff: fileDiff
+            });
+        }
+        return files;
+    } catch (e) {
+        return [];
+    }
+}
 async function loadProviderConfig(showMenu = false) {
     const configPath = path.join(__dirname, 'config.json');
     try {
@@ -684,7 +723,14 @@ app.get('/api/dashboard/telemetry', (req, res) => {
     const report = telemetry.getToolReliabilityReport();
     res.json({ report, timeline: [] });
 });
-
+app.get('/api/dashboard/code-changes', (req, res) => {
+    try {
+        const changes = getGitDiffStats();
+        res.json({ success: true, changes });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 app.get('/api/dashboard/memories', (req, res) => {
     res.json({ memories: [], stats: { total: 0, avg_trust: 0, embedded_count: 0 } });
 });
@@ -712,25 +758,25 @@ app.get('/api/dashboard/sessions/active', (req, res) => {
 // 🛡️ PATH GUARD MANAGEMENT API
 // =================================================================
 app.get('/api/path-guard/roots', async (req, res) => {
-  const pathGuard = await import('./skills/path_guard.js');
-  res.json({
-    allowed_roots: pathGuard.getAllowedRoots(),
-    forbidden_paths: pathGuard.FORBIDDEN_PATHS,
-    forbidden_extensions: pathGuard.FORBIDDEN_EXTENSIONS
-  });
+    const pathGuard = await import('./skills/path_guard.js');
+    res.json({
+        allowed_roots: pathGuard.getAllowedRoots(),
+        forbidden_paths: pathGuard.FORBIDDEN_PATHS,
+        forbidden_extensions: pathGuard.FORBIDDEN_EXTENSIONS
+    });
 });
 
 app.post('/api/path-guard/add-root', async (req, res) => {
-  const { path: newRoot } = req.body;
-  if (!newRoot) return res.status(400).json({ error: 'Thiếu path' });
-  
-  try {
-    const pathGuard = await import('./skills/path_guard.js');
-    pathGuard.addAllowedRoot(newRoot);
-    res.json({ success: true, message: `Đã thêm: ${newRoot}` });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+    const { path: newRoot } = req.body;
+    if (!newRoot) return res.status(400).json({ error: 'Thiếu path' });
+
+    try {
+        const pathGuard = await import('./skills/path_guard.js');
+        pathGuard.addAllowedRoot(newRoot);
+        res.json({ success: true, message: `Đã thêm: ${newRoot}` });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // 💾 THIẾT LẬP SESSION HOẠT ĐỘNG: Kích hoạt một session theo filename, hoặc khởi tạo session mới (filename = null)
@@ -958,17 +1004,21 @@ app.post('/api/dashboard/chat', async (req, res) => {
         if (result.type === 'handover') {
             if (stream) {
                 res.write(`data: ${JSON.stringify({ type: 'system', content: "✅ Workflow Engine đã xử lý thành công toàn bộ Pipeline!" })}\n\n`);
-                res.write(`data: ${JSON.stringify({ type: 'done', response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: activeWebHistory })}\n\n`);
+                const fileChanges = getGitDiffStats();
+                res.write(`data: ${JSON.stringify({ type: 'done', response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: activeWebHistory, fileChanges })}\n\n`);
                 res.end();
             } else {
-                res.json({ success: true, response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: activeWebHistory });
+                const fileChanges = getGitDiffStats();
+                res.json({ success: true, response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: activeWebHistory, fileChanges });
             }
         } else {
             if (stream) {
-                res.write(`data: ${JSON.stringify({ type: 'done', response: result.response, history: activeWebHistory })}\n\n`);
+                const fileChanges = getGitDiffStats();
+                res.write(`data: ${JSON.stringify({ type: 'done', response: result.response, history: activeWebHistory, fileChanges })}\n\n`);
                 res.end();
             } else {
-                res.json({ success: true, response: result.response, history: activeWebHistory });
+                const fileChanges = getGitDiffStats();
+                res.json({ success: true, response: result.response, history: activeWebHistory, fileChanges });
             }
         }
 
@@ -1589,8 +1639,8 @@ async function recallMemory(lastUserMessage, allMessagesContext = "", onLog, ski
 
     if (isContinuationOrSimpleCmd) {
         if (!skipLog) {
-        console.log(chalk.gray(`\n[Memory] Nhận diện câu lệnh đơn giản/tiếp tục. Bỏ qua tìm kiếm và nạp bộ nhớ.`));
-                    }
+            console.log(chalk.gray(`\n[Memory] Nhận diện câu lệnh đơn giản/tiếp tục. Bỏ qua tìm kiếm và nạp bộ nhớ.`));
+        }
         return "";
     }
 
@@ -1639,8 +1689,8 @@ async function reformulateQuery(userMessage, onLog, skipLog = false) {
 
     if (isContinuationOrSimpleCmd) {
         if (!skipLog) {
-        console.log(chalk.gray(`\n[Reformulator] Nhận diện câu lệnh tiếp tục hoặc phản hồi ngắn. Bỏ qua biên tập.`));
-        if (logger) logger(`🔍 [Reformulator] Phát hiện câu lệnh ngắn hoặc điều hướng đơn giản. Giữ nguyên bối cảnh.`);
+            console.log(chalk.gray(`\n[Reformulator] Nhận diện câu lệnh tiếp tục hoặc phản hồi ngắn. Bỏ qua biên tập.`));
+            if (logger) logger(`🔍 [Reformulator] Phát hiện câu lệnh ngắn hoặc điều hướng đơn giản. Giữ nguyên bối cảnh.`);
         }
         return userMessage;
     }

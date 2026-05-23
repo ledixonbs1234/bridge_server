@@ -4,7 +4,38 @@ let webChatHistory = [];
 let isFirstLoad = true;
 let isGenerating = false;
 let abortController = null;
+// Vùng tham chiếu đến các phần tử giao diện mới
+const chatLeftSidebar = document.getElementById('chat-left-sidebar');
+// Hàm xóa lịch sử tin nhắn cũ nhưng giữ lại khung nhập liệu (prompt-input-area) ở dưới cùng
+function clearChatHistory() {
+    if (!chatLeftSidebar) return;
+    const items = chatLeftSidebar.querySelectorAll('.user-question-item, .working-status-item, .ai-response-item, .code-tool-record, .chat-history-item');
+    items.forEach(item => item.remove());
+}
 
+// Đối tượng ảo chatMessages để duy trì khả năng tương thích ngược và tránh lỗi ReferenceError
+const chatMessages = {
+    get style() {
+        return chatLeftSidebar ? chatLeftSidebar.style : {};
+    },
+    set innerHTML(val) {
+        if (val === '') {
+            clearChatHistory();
+        }
+    }
+};
+
+// Helper hỗ trợ chèn tin nhắn mới vào trước khung nhập liệu để hộp chat không bị đẩy xuống dưới
+function insertMessageItem(item) {
+    if (!chatLeftSidebar) return;
+    const promptArea = chatLeftSidebar.querySelector('.prompt-input-area');
+    if (promptArea) {
+        chatLeftSidebar.insertBefore(item, promptArea);
+    } else {
+        chatLeftSidebar.appendChild(item);
+    }
+    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+}
 // Cấu hình Markdown và Highlight.js nếu có sẵn
 if (window.marked && window.hljs) {
     const renderer = new marked.Renderer();
@@ -883,6 +914,246 @@ async function loadAll() {
 
 loadAll();
 setInterval(loadAll, 15000);
+
+// =================================================================
+// 🎨 WEB TERMINAL INTERFACE UPGRADE HELPERS
+// =================================================================
+
+// Trả về chuỗi thời gian hiện hành định dạng HH:MM:SS
+function getCurrentTimestamp() {
+    const now = new Date();
+    return now.toTimeString().split(' ')[0];
+}
+
+// Render câu hỏi của người dùng ở cột bên trái
+function appendUserQuestion(msg) {
+    const item = document.createElement('div');
+    item.className = 'user-question-item';
+    item.innerHTML = `
+        <div class="question-bubble">
+            <div class="question-header">
+                <span class="question-label">Yêu cầu của bạn</span>
+                <span class="question-time">${getCurrentTimestamp()}</span>
+            </div>
+            <div class="question-content">${escHtml(msg)}</div>
+        </div>
+    `;
+    chatLeftSidebar.appendChild(item);
+    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+}
+
+// Render trạng thái loading/working
+function appendWorkingStatus() {
+    const item = document.createElement('div');
+    item.className = 'working-status-item';
+    item.innerHTML = `
+        <div class="status-bubble">
+            <div class="status-header">
+                <div class="status-spinner"></div>
+                <span class="status-label" style="color: var(--accent);">Agent đang xử lý...</span>
+                <span class="status-time">${getCurrentTimestamp()}</span>
+            </div>
+        </div>
+    `;
+    chatLeftSidebar.appendChild(item);
+    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+    return item;
+}
+
+// Xóa trạng thái loading
+function removeWorkingStatus(el) {
+    if (el && el.parentNode) {
+        el.parentNode.removeChild(el);
+    }
+}
+
+// Render thẻ hoàn thành tác vụ
+function appendCompletedCard(summary) {
+    const item = document.createElement('div');
+    item.className = 'chat-history-item completed-card';
+    item.innerHTML = `
+        <div class="chat-history-title" style="color: var(--success); font-weight: 600;">
+            <span>✅ Work completed</span>
+            <span class="chat-history-time">${getCurrentTimestamp()}</span>
+        </div>
+        <div class="chat-history-content" style="color: var(--muted); font-size: 12px; margin-top: 4px;">
+            ${escHtml(summary)}
+        </div>
+    `;
+    chatLeftSidebar.appendChild(item);
+    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+}
+
+// Render phản hồi bằng văn bản của AI hỗ trợ Markdown
+function appendAIResponse(markdown) {
+    const item = document.createElement('div');
+    item.className = 'ai-response-item';
+    
+    const cleanMarkdown = markdown.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    const parsedHtml = window.marked ? marked.parse(cleanMarkdown) : escHtml(cleanMarkdown);
+    
+    item.innerHTML = `
+        <div class="response-bubble" style="margin-top: 8px;">
+            <div class="response-header">
+                <span class="response-label">Trực quan hóa Phản hồi</span>
+                <span class="response-time">${getCurrentTimestamp()}</span>
+            </div>
+            <div class="response-content markdown-body" style="margin-top: 6px;">${parsedHtml}</div>
+        </div>
+    `;
+    chatLeftSidebar.appendChild(item);
+    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+}
+
+// Render "Code Tool Record" hiển thị số lượng thay đổi tệp tin
+function appendCodeToolRecord(fileChanges) {
+    currentFileChanges = fileChanges; // Lưu trữ vào biến cục bộ để sử dụng cho so sánh Diff
+    const item = document.createElement('div');
+    item.className = 'code-tool-record';
+    
+    let listHtml = '<div class="file-changes-list">';
+    fileChanges.forEach((fc, index) => {
+        const addBadge = fc.additions > 0 ? `<span class="badge-add">+${fc.additions}</span>` : '';
+        const removeBadge = fc.deletions > 0 ? `<span class="badge-remove">-${fc.deletions}</span>` : '';
+        listHtml += `
+            <div class="file-change-item" onclick="showFileDiff(${index})">
+                <span class="file-name">📄 ${fc.file}</span>
+                <div class="change-badges">
+                    ${addBadge}
+                    ${removeBadge}
+                </div>
+            </div>
+        `;
+    });
+    listHtml += '</div>';
+
+    item.innerHTML = `
+        <div class="accordion-header">
+            <span class="record-title">🛠️ Code Tool Record</span>
+            <span class="accordion-icon">▼</span>
+        </div>
+        <div class="accordion-content">
+            ${listHtml}
+        </div>
+    `;
+    chatLeftSidebar.appendChild(item);
+    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+}
+
+// Render diff visual line-by-line khi click vào một tệp tin trong Code Tool Record
+window.showFileDiff = function(index) {
+    const fc = currentFileChanges[index];
+    if (!fc) return;
+
+    // Chuyển sang tab Difference
+    const diffTabBtn = document.querySelector('.tab-btn[data-tab="difference"]');
+    if (diffTabBtn) diffTabBtn.click();
+
+    const diffContainer = document.getElementById('diff-container');
+    if (!diffContainer) return;
+
+    diffContainer.innerHTML = `
+        <div class="diff-header">
+            <h4 style="font-family: monospace;">📂 Difference for: ${fc.file}</h4>
+            <button class="btn-close-diff" onclick="clearDiffView()">✕ Close</button>
+        </div>
+        <div class="diff-content" style="padding: 12px; background: #0d1117; border-radius: 8px;">
+            <pre class="diff-pre" style="margin: 0; line-height: 1.6; font-family: monospace;">${formatDiffLines(fc.diff || '')}</pre>
+        </div>
+    `;
+};
+
+window.clearDiffView = function() {
+    const diffContainer = document.getElementById('diff-container');
+    if (diffContainer) {
+        diffContainer.innerHTML = `
+            <div class="empty-state">
+                <div class="icon">📝</div>
+                <p>Chưa có thay đổi nào. Các file được chỉnh sửa sẽ hiển thị ở đây.</p>
+            </div>
+        `;
+    }
+};
+
+// Định dạng tô màu cho các dòng thay đổi (+ xanh, - đỏ)
+function formatDiffLines(diffText) {
+    return diffText.split('\n').map(line => {
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+            return `<span style="color: #34d399; background: rgba(52, 211, 153, 0.1); display: block; padding: 0 4px;">${escHtml(line)}</span>`;
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+            return `<span style="color: #f87171; background: rgba(248, 113, 113, 0.1); display: block; padding: 0 4px;">${escHtml(line)}</span>`;
+        } else if (line.startsWith('@@')) {
+            return `<span style="color: #38bdf8; display: block; padding: 0 4px;">${escHtml(line)}</span>`;
+        }
+        return `<span>${escHtml(line)}</span>`;
+    }).join('\n');
+}
+
+// Kết xuất Logs ở cột bên phải
+function appendLogEntry(text, type = 'default') {
+    const logStream = document.getElementById('log-stream');
+    if (!logStream) return;
+
+    const entry = document.createElement('div');
+    entry.className = `log-entry ${type}`;
+    entry.innerHTML = `
+        <div class="log-timestamp">[${getCurrentTimestamp()}]</div>
+        <div class="log-content">${escHtml(text)}</div>
+    `;
+    logStream.appendChild(entry);
+    logStream.scrollTop = logStream.scrollHeight;
+}
+
+// Kết xuất chi tiết logs trả về từ Tools
+function appendToolOutputLog(toolName, output) {
+    let outputText = output;
+    if (typeof output === 'object') {
+        outputText = JSON.stringify(output, null, 2);
+    }
+    appendLogEntry(`[${toolName} OUTPUT]:\n${outputText}`, 'tool-output');
+}
+
+// Ánh xạ lại các hàm nạp session cũ tương thích với cấu trúc UI mới
+function appendMsg(role, content) {
+    if (role === 'user') {
+        appendUserQuestion(content);
+    } else {
+        appendAIResponse(content);
+    }
+}
+
+function appendSystemMessage(content) {
+    appendLogEntry(content, 'thinking');
+}
+
+// =================================================================
+// 🖥️ EXPAND & COLLAPSE PANEL CONTROLLER
+// =================================================================
+const expandBtn = document.querySelector('.expand-btn');
+const chatLayoutContainer = document.querySelector('.chat-layout-container');
+
+if (expandBtn && chatLayoutContainer && chatLeftSidebar) {
+    expandBtn.addEventListener('click', () => {
+        chatLayoutContainer.classList.toggle('expanded');
+        if (chatLayoutContainer.classList.contains('expanded')) {
+            chatLayoutContainer.style.gridTemplateColumns = '0px 1fr';
+            chatLeftSidebar.style.display = 'none';
+            expandBtn.innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M10 14l-7 7"/>
+                </svg>
+            `; // Biểu tượng thu nhỏ
+        } else {
+            chatLayoutContainer.style.gridTemplateColumns = '380px 1fr';
+            chatLeftSidebar.style.display = 'flex';
+            expandBtn.innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                </svg>
+            `; // Biểu tượng phóng to
+        }
+    });
+}
 // // Health Check Monitor
 // async function checkHealth() {
 //   try {
