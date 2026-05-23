@@ -164,7 +164,7 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
 
             // XỬ LÝ CHẠY NGẦM VÀ AUTO-PING (Đã nâng cấp)
             if (isBackground) {
-                return new Promise((resolve) => {
+                return new Promise((resolve, reject) => {
                     const child = spawn(command, {
                         cwd,
                         shell: true,
@@ -176,42 +176,81 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
                     activeProcesses.set(procId, { child, command });
 
                     let outputLog = "";
+                    let hasError = false;
+                    let processExited = false;
 
                     child.stdout.on('data', (data) => { outputLog += data.toString(); process.stdout.write(data); });
-                    child.stderr.on('data', (data) => { outputLog += data.toString(); process.stderr.write(data); });
+                    child.stderr.on('data', (data) => { 
+                        outputLog += data.toString(); 
+                        process.stderr.write(data);
+                        // Đánh dấu nếu có lỗi trong stderr
+                        if (data.toString().toLowerCase().includes('error') || 
+                            data.toString().toLowerCase().includes('failed')) {
+                            hasError = true;
+                        }
+                    });
 
                     child.on('error', (err) => {
+                        console.error(chalk.red(`[Terminal] Spawn error: ${err.message}`));
+                        processExited = true;
                         resolve({ status: "error", error_message: `Lỗi khi khởi chạy: ${err.message}` });
                     });
 
-                    setTimeout(async () => {
-                        const urlMatch = outputLog.match(/http:\/\/(localhost|127\.0\.0\.1):\d+/);
+                    child.on('close', (code) => {
+                        console.log(chalk.yellow(`[Terminal] Process exited with code ${code}`));
+                        processExited = true;
+                        // Nếu process đóng quá sớm với mã lỗi, báo ngay
+                        if (code !== 0 && code !== null) {
+                            resolve({ 
+                                status: "error", 
+                                error_message: `Tiến trình thoát với mã lỗi: ${code}`, 
+                                startup_logs: outputLog.substring(0, 3000) 
+                            });
+                        }
+                    });
 
-                        if (urlMatch) {
-                            const localUrl = urlMatch[0];
-                            console.log(`\n[Node] 🕵️ Tự động Ping tới ${localUrl} để kích hoạt Lazy-Compilation...`);
-                            try { await fetch(localUrl); } catch (e) { }
+                    // Timeout an toàn: Luôn resolve sau 5 giây dù có chuyện gì xảy ra
+                    const backgroundTimeout = setTimeout(() => {
+                        if (processExited) return; // Đã được xử lý bởi close/error event
+                        
+                        try {
+                            const urlMatch = outputLog.match(/http:\/\/(localhost|127\.0\.0\.1):\d+/);
 
-                            setTimeout(() => {
+                            if (urlMatch) {
+                                const localUrl = urlMatch[0];
+                                console.log(`\n[Node] 🕵️ Tự động Ping tới ${localUrl} để kích hoạt Lazy-Compilation...`);
+                                fetch(localUrl).catch(e => { /* Ignore ping errors */ });
+
+                                setTimeout(() => {
+                                    resolve({
+                                        command,
+                                        process_id: procId, // Báo ID cho AI
+                                        status: hasError ? "warning" : "running_in_background",
+                                        message: `Tiến trình chạy ngầm đã khởi động (ID: ${procId}). ${hasError ? 'CÓ LỖI TRONG LOG - KIỂM TRA KỸ!' : 'Đã tự động test ping tới ' + localUrl + '.'} KIỂM TRA LỖI BIÊN DỊCH TRONG LOG. NẾU KHÔNG LỖI, BẠN HOÀN TOÀN CÓ QUYỀN GỌI LỆNH 'stop_terminal_process' ĐỂ TẮT NÓ NẾU MUỐN HOÀN THÀNH NHIỆM VỤ!`,
+                                        startup_logs: outputLog.substring(0, 3000)
+                                    });
+                                }, 1000);
+
+                            } else {
                                 resolve({
                                     command,
                                     process_id: procId, // Báo ID cho AI
-                                    status: "running_in_background",
-                                    message: `Tiến trình chạy ngầm đã khởi động (ID: ${procId}). Đã tự động test ping tới ${localUrl}. KIỂM TRA LỖI BIÊN DỊCH TRONG LOG. NẾU KHÔNG LỖI, BẠN HOÀN TOÀN CÓ QUYỀN GỌI LỆNH 'stop_terminal_process' ĐỂ TẮT NÓ NẾU MUỐN HOÀN THÀNH NHIỆM VỤ!`,
-                                    startup_logs: outputLog.substring(0, 3000)
+                                    status: hasError ? "warning" : "running_in_background",
+                                    message: `Tiến trình đã được khởi chạy ngầm với ID: ${procId}. ${hasError ? 'CÓ LỖI TRONG LOG - KIỂM TRA KỸ!' : ''} Nếu bạn đã thực hiện xong mục đích của mình, bạn CÓ THỂ gọi lệnh 'stop_terminal_process' truyền ID '${procId}' để tắt tiến trình này đi nhằm giải phóng tài nguyên.`,
+                                    startup_logs: outputLog.substring(0, 1500)
                                 });
-                            }, 2500);
-
-                        } else {
+                            }
+                        } catch (e) {
+                            console.error(chalk.red(`[Terminal] Background timeout error: ${e.message}`));
                             resolve({
                                 command,
-                                process_id: procId, // Báo ID cho AI
+                                process_id: procId,
                                 status: "running_in_background",
-                                message: `Tiến trình đã được khởi chạy ngầm với ID: ${procId}. Nếu bạn đã thực hiện xong mục đích của mình, bạn CÓ THỂ gọi lệnh 'stop_terminal_process' truyền ID '${procId}' để tắt tiến trình này đi nhằm giải phóng tài nguyên.`,
+                                message: `Tiến trình đã được khởi chạy ngầm với ID: ${procId} (có thể có lỗi nhỏ).`,
                                 startup_logs: outputLog.substring(0, 1500)
                             });
                         }
-                    }, 3000);
+                    }, 5000);
                 });
             }
 

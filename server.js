@@ -1590,12 +1590,9 @@ async function recallMemory(lastUserMessage, allMessagesContext = "", onLog, ski
     if (isContinuationOrSimpleCmd) {
         if (!skipLog) {
         console.log(chalk.gray(`\n[Memory] Nhận diện câu lệnh đơn giản/tiếp tục. Bỏ qua tìm kiếm và nạp bộ nhớ.`));
-                    if (logger) logger(`🔍 [Memory Recall] Bỏ qua truy cập bộ nhớ đối với câu lệnh tiếp tục.`);
                     }
         return "";
     }
-
-    if (logger) logger(`🧠 [Memory Recall] Đang tiến hành truy xuất bối cảnh bộ nhớ...`);
 
     let injectedContext = "\n\n[HỆ THỐNG TRÍ NHỚ (CONTEXTUAL MEMORY)]:\nLưu ý: Đây là những nguyên tắc bắt buộc từ người dùng. Hãy áp dụng ngay:\n";
     let hasMemory = false;
