@@ -670,8 +670,6 @@ window.selectSpan = function(spanId) {
 // ===== WEB TERMINAL CHAT SYSTEM =====
 const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
-const chatLeftSidebar = document.getElementById('chat-left-sidebar');
-const chatMessages = document.getElementById('chat-left-sidebar');
 const logStream = document.getElementById('log-stream');
 const diffContainer = document.getElementById('diff-container');
 const tabDifference = document.getElementById('tab-difference');
