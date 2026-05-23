@@ -17,7 +17,10 @@
 node_modules/
 .jest/
 .nyc_output/
-
+profile*
+.agent_memory/
+.agents/
+agent_skills/*
 # Build artifacts
 dist/
 build/
