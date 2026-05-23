@@ -1,5 +1,1 @@
-.agent_memory
-agent_skills
-profile
-.agents
-node_modules
+Nothing needs to be added to .gitignore since only a source file (server.js) was modified and there are no build artifacts, dependencies, or temporary files in the changes.
