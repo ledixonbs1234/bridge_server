@@ -762,6 +762,30 @@ app.get('/api/dashboard/sessions/active', (req, res) => {
     }
     res.json({ success: true, active: true, filename: activeWebSessionFile, messages: activeWebHistory, goal: persistentGoal });
 });
+// =================================================================
+// 🛡️ PATH GUARD MANAGEMENT API
+// =================================================================
+app.get('/api/path-guard/roots', async (req, res) => {
+  const pathGuard = await import('./skills/path_guard.js');
+  res.json({
+    allowed_roots: pathGuard.getAllowedRoots(),
+    forbidden_paths: pathGuard.FORBIDDEN_PATHS,
+    forbidden_extensions: pathGuard.FORBIDDEN_EXTENSIONS
+  });
+});
+
+app.post('/api/path-guard/add-root', async (req, res) => {
+  const { path: newRoot } = req.body;
+  if (!newRoot) return res.status(400).json({ error: 'Thiếu path' });
+  
+  try {
+    const pathGuard = await import('./skills/path_guard.js');
+    pathGuard.addAllowedRoot(newRoot);
+    res.json({ success: true, message: `Đã thêm: ${newRoot}` });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // 💾 THIẾT LẬP SESSION HOẠT ĐỘNG: Kích hoạt một session theo filename, hoặc khởi tạo session mới (filename = null)
 app.post('/api/dashboard/sessions/active', (req, res) => {

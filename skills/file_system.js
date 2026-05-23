@@ -4,7 +4,7 @@ import os from 'os';
 import boxen from 'boxen';
 import chalk from 'chalk';
 import { highlight } from 'cli-highlight';
-
+import { validatePath, printPathWarning } from './path_guard.js';
 /**
  * Chuẩn hóa path để AI luôn an toàn với JSON:
  * - normalize path
@@ -20,52 +20,68 @@ function aiSafePath(inputPath) {
     return normalized.replace(/\\/g, '/');
 }
 
-/**
- * Hàm tìm kiếm file đệ quy có giới hạn độ sâu và tự động bỏ qua các thư mục rác lớn
- */
 function searchFilesRecursive(dir, query, maxResults = 40, currentDepth = 0, maxDepth = 4) {
-    let results = [];
-    if (currentDepth > maxDepth) return results;
-    
-    try {
-        const list = fs.readdirSync(dir, { withFileTypes: true });
-        for (const file of list) {
-            const fullPath = path.join(dir, file.name);
-            if (file.isDirectory()) {
-                // Tự động bỏ qua các thư mục chứa cực nhiều file không liên quan để tiết kiệm tài nguyên
-                if (['node_modules', '.git', 'profile', 'dist', 'build', 'out'].includes(file.name)) continue;
-                results = results.concat(searchFilesRecursive(fullPath, query, maxResults, currentDepth + 1, maxDepth));
-            } else if (file.isFile()) {
-                if (file.name.toLowerCase().includes(query.toLowerCase())) {
-                    results.push(aiSafePath(fullPath));
-                }
-            }
-            if (results.length >= maxResults) break;
+  let results = [];
+  if (currentDepth > maxDepth) return results;
+  
+  // Validate thư mục trước khi quét
+  const validation = validatePath(dir);
+  if (!validation.allowed) {
+    return results; // Silent skip forbidden directories
+  }
+  
+  try {
+    const list = fs.readdirSync(dir, { withFileTypes: true });
+    for (const file of list) {
+      const fullPath = path.join(dir, file.name);
+      
+      if (file.isDirectory()) {
+        if (['node_modules', '.git', 'profile', 'dist', 'build', 'out'].includes(file.name)) continue;
+        
+        // Validate thư mục con trước khi đệ quy
+        const subValidation = validatePath(fullPath);
+        if (!subValidation.allowed) continue;
+        
+        results = results.concat(searchFilesRecursive(fullPath, query, maxResults, currentDepth + 1, maxDepth));
+      } else if (file.isFile()) {
+        if (file.name.toLowerCase().includes(query.toLowerCase())) {
+          // Validate file trước khi thêm vào kết quả
+          const fileValidation = validatePath(fullPath);
+          if (fileValidation.allowed) {
+            results.push(aiSafePath(fullPath));
+          }
         }
-    } catch (e) {
-        // Bỏ qua lỗi truy cập thư mục không có quyền đọc
+      }
+      if (results.length >= maxResults) break;
     }
-    return results.slice(0, maxResults);
+  } catch (e) {
+    // Bỏ qua lỗi truy cập
+  }
+  return results.slice(0, maxResults);
 }
 
 /**
  * Convert input path từ AI thành path hợp lệ cho OS
+ * TÍCH HỢP PATH GUARD - Validate bảo mật trước khi trả về
  */
 function resolveUserPath(inputPath) {
-
-    if (!inputPath || typeof inputPath !== 'string') {
-        throw new Error('Path không hợp lệ');
-    }
-
-    // Shortcut desktop
-    if (inputPath.toLowerCase() === 'desktop') {
-        return path.join(os.homedir(), 'Desktop');
-    }
-
-    // AI luôn dùng slash "/"
-    const cleaned = inputPath.replace(/\\/g, '/');
-
-    return path.normalize(cleaned);
+  if (!inputPath || typeof inputPath !== 'string') {
+    throw new Error('Path không hợp lệ');
+  }
+  
+  // Validate path với Path Guard
+  const validation = validatePath(inputPath);
+  
+  if (!validation.allowed) {
+    printPathWarning(validation, inputPath);
+    throw new Error(
+      `PATH_BLOCKED: Path "${inputPath}" bị chặn vì lý do bảo mật. ` +
+      `Lý do: ${validation.reason}. ` +
+      `Vui lòng sử dụng đường dẫn trong các thư mục được phép.`
+    );
+  }
+  
+  return validation.resolved;
 }
 export default {
     "list_directory": {
