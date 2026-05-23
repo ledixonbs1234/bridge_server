@@ -639,188 +639,44 @@ window.selectSpan = function(spanId) {
 // ===== WEB TERMINAL CHAT SYSTEM =====
 const chatInput = document.getElementById('chat-input');
 const chatSend = document.getElementById('chat-send');
-const chatMessages = document.getElementById('chat-messages');
+const chatLeftSidebar = document.getElementById('chat-left-sidebar');
+const logStream = document.getElementById('log-stream');
+const diffContainer = document.getElementById('diff-container');
+const tabDifference = document.getElementById('tab-difference');
+const tabLog = document.getElementById('tab-log');
+
+// Store for file changes
+let currentFileChanges = [];
 
 // Initialize send button state on page load
 if (chatSend) {
     updateSendButton();
 }
 
-function scrollToBottom(force = false) {
-    if (!chatMessages) return;
-    const isAtBottom = chatMessages.scrollHeight - chatMessages.clientHeight - chatMessages.scrollTop < 100;
-    if (force || isAtBottom) {
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
-}
-
-function appendMsg(role, content, isRawHTML = false) {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = `chat-msg-row ${role}`;
-
-    const avatar = role === 'user'
-        ? `<div class="chat-avatar user"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg></div>`
-        : `<div class="chat-avatar bot"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><circle cx="12" cy="5" r="2"></circle><path d="M12 7v4"></path><line x1="8" y1="16" x2="8" y2="16"></line><line x1="16" y1="16" x2="16" y2="16"></line></svg></div>`;
-
-    const senderName = role === 'user' ? 'Bạn' : 'Bridge Agent';
-    const bubbleContent = isRawHTML ? content : (role === 'user' ? content : (window.marked ? marked.parse(content) : content));
-
-    msgDiv.innerHTML = `
-        ${avatar}
-        <div class="chat-msg-content">
-            <span class="chat-msg-sender">${senderName}</span>
-            <div class="chat-bubble ${role === 'bot' ? 'markdown-body ai-response' : ''}">${bubbleContent}</div>
-        </div>
-    `;
-    chatMessages.appendChild(msgDiv);
-    scrollToBottom(true);
-
-    return role === 'bot' ? msgDiv.querySelector('.ai-response') : msgDiv.querySelector('.chat-bubble');
-}
-
-function appendSystemMessage(content) {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'chat-msg-row system';
-    msgDiv.innerHTML = `<div class="chat-bubble">${content}</div>`;
-    chatMessages.appendChild(msgDiv);
-    scrollToBottom(true);
-}
-
-function appendLogMessage(content) {
-    let lastRow = chatMessages.lastElementChild;
-    let logConsole = null;
-    
-    // Nếu dòng tin nhắn cuối cùng trên màn hình đã là console log, chúng ta sẽ ghi tiếp vào đó
-    if (lastRow && lastRow.classList.contains('log-group-row')) {
-        logConsole = lastRow.querySelector('.log-console-content');
-    } else {
-        // Nếu chưa có, tiến hành khởi tạo một khung Live Console mới
-        const rowDiv = document.createElement('div');
-        rowDiv.className = 'chat-msg-row system log-group-row';
-        rowDiv.innerHTML = `
-            <div class="log-group-container">
-                <div class="log-group-header" onclick="toggleLogGroup(this)">
-                    <span class="log-group-icon">💻</span>
-                    <span class="log-group-title">Live Execution Logs (Nhấp để ẩn/hiện)</span>
-                    <span class="log-group-status-dot"></span>
-                </div>
-                <div class="log-console-content"></div>
-            </div>
-        `;
-        chatMessages.appendChild(rowDiv);
-        logConsole = rowDiv.querySelector('.log-console-content');
-    }
-    
-    if (logConsole) {
-        const lineDiv = document.createElement('div');
-        lineDiv.className = 'log-line';
+// Tab switching functionality
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
         
-        let text = content;
-        // Tự động gán màu sắc trực quan theo tính chất của từng dòng log
-        if (text.includes('[Sub-Agent') || text.includes('[Critic') || text.includes('[Reformulator')) {
-            lineDiv.style.color = 'var(--warn)'; // Màu vàng cho các Sub-Agent hoạt động
-        } else if (text.includes('[Tool Call]') || text.includes('⚙️')) {
-            lineDiv.style.color = '#38bdf8'; // Màu xanh dương sáng khi gọi tool
-        } else if (text.includes('[Tool Output]') || text.includes('📝')) {
-            lineDiv.style.color = '#94a3b8'; // Màu xám nhạt cho kết quả thô của tool
-            lineDiv.style.fontSize = '11px';
-        } else if (text.includes('✅') || text.includes('thành công') || text.includes('DONE')) {
-            lineDiv.style.color = 'var(--success)'; // Màu xanh lá khi tác vụ hoàn thành
-        } else if (text.includes('❌') || text.includes('lỗi') || text.includes('FAILED') || text.includes('Error')) {
-            lineDiv.style.color = 'var(--danger)'; // Màu đỏ khi gặp lỗi
+        const tabName = btn.dataset.tab;
+        if (tabName === 'difference') {
+            tabDifference.style.display = 'block';
+            tabLog.style.display = 'none';
+        } else {
+            tabDifference.style.display = 'none';
+            tabLog.style.display = 'block';
         }
-        
-        lineDiv.textContent = text;
-        logConsole.appendChild(lineDiv);
-        logConsole.scrollTop = logConsole.scrollHeight;
-        scrollToBottom();
-    }
+    });
+});
+
+// Helper to get current timestamp
+function getCurrentTime() {
+    const now = new Date();
+    return now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-// Hàm hỗ trợ nhấp chuột để thu gọn hoặc mở rộng Live Console
-window.toggleLogGroup = function(header) {
-    const consoleContent = header.nextElementSibling;
-    if (consoleContent.style.display === 'none') {
-        consoleContent.style.display = 'flex';
-    } else {
-        consoleContent.style.display = 'none';
-    }
-};
-
-// HÀM NÂNG CẤP: Hiển thị giao diện chi tiết mã nguồn / công cụ thay vì chỉ có nút bấm xác nhận đơn điệu
-function appendPermissionCard(permId, query, details) {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'chat-msg-row system';
-    
-    let buttonsHtml = '';
-    const qLower = query.toLowerCase();
-    
-    if (qLower.includes('[r') || qLower.includes('retry') || qLower.includes('skip')) {
-        // Workflow Engine Circuit Breaker HITL
-        buttonsHtml = `
-            <button class="btn-perm btn-perm-yes" onclick="respondPermission('${permId}', 'r', this)">🔄 Thử lại (Retry)</button>
-            <button class="btn-perm btn-perm-all" onclick="respondPermission('${permId}', 's', this)">⏭️ Bỏ qua (Skip)</button>
-            <button class="btn-perm btn-perm-no" onclick="respondPermission('${permId}', 'c', this)">❌ Hủy bỏ (Cancel)</button>
-        `;
-    } else {
-        // Cấp quyền File/Tool chuẩn
-        buttonsHtml = `
-            <button class="btn-perm btn-perm-yes" onclick="respondPermission('${permId}', 'y', this)">✅ Đồng ý (Yes)</button>
-            <button class="btn-perm btn-perm-all" onclick="respondPermission('${permId}', 'a', this)">🚀 Đồng ý tất cả (Yes to All)</button>
-            <button class="btn-perm btn-perm-no" onclick="respondPermission('${permId}', 'n', this)">❌ Từ chối (No)</button>
-        `;
-    }
-
-    // Nếu có log chi tiết (mã nguồn chèn, đường dẫn, v.v.), dựng thẻ hiển thị pre-code
-    let detailsHtml = '';
-    if (details && details.trim()) {
-        detailsHtml = `<pre class="permission-details">${escHtml(details)}</pre>`;
-    }
-
-    msgDiv.innerHTML = `
-        <div class="permission-card" id="perm-card-${permId}">
-            <div class="permission-title">⚠️ YÊU CẦU CẤP QUYỀN HOẠT ĐỘNG</div>
-            ${detailsHtml}
-            <div class="permission-query">${escHtml(query)}</div>
-            <div class="permission-actions">
-                ${buttonsHtml}
-            </div>
-        </div>
-    `;
-    chatMessages.appendChild(msgDiv);
-    scrollToBottom(true);
-}
-
-window.respondPermission = async function(permId, value, buttonEl) {
-    const card = document.getElementById(`perm-card-${permId}`);
-    if (card) {
-        const buttons = card.querySelectorAll('button');
-        buttons.forEach(btn => btn.disabled = true);
-        
-        const responseTextMap = {
-            'y': 'Đồng ý (Yes)',
-            'a': 'Đồng ý tất cả (Yes to All)',
-            'n': 'Từ chối (No)',
-            'r': 'Thử lại (Retry)',
-            's': 'Bỏ qua (Skip)',
-            'c': 'Hủy bỏ (Cancel)'
-        };
-        
-        const actionsDiv = card.querySelector('.permission-actions');
-        actionsDiv.innerHTML = `<span style="font-size: 13px; color: var(--muted); font-weight: 500;">Bạn chọn: <b style="color:var(--accent)">${responseTextMap[value] || value}</b></span>`;
-    }
-    
-    try {
-        await fetch(API + '/api/dashboard/permission/respond', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: permId, response: value })
-        });
-    } catch(e) {
-        console.error('Lỗi khi gửi phản hồi cấp quyền:', e);
-        appendSystemMessage('❌ Thất bại khi gửi câu trả lời cấp quyền lên server.');
-    }
-};
+// Append user question to left sidebar
 
 // Initialize chat with welcome message (only show when terminal tab is active)
 function initChat() {
@@ -869,19 +725,23 @@ async function sendChat() {
     const msg = chatInput.value.trim();
     if (!msg) return;
     
-    // Show chat messages container when user sends first message
-    if (chatMessages.style.display === 'none') {
-        chatMessages.style.display = 'flex';
-    }
+    // Append user question to left sidebar (new UI)
+    appendUserQuestion(msg);
     
-    appendMsg('user', msg);
+    // Clear input
     chatInput.value = '';
     chatInput.style.height = 'auto';
     isGenerating = true;
     updateSendButton();
 
-    const botBubble = appendMsg('bot', '<span class="cursor-blink" style="display:inline-block;width:8px;height:16px;background:var(--accent);vertical-align:middle;margin-left:4px;"></span>', true);
+    // Show working status
+    const workingStatusElement = appendWorkingStatus();
+    
+    // Log to right panel
+    appendLogEntry(`📥 Received user request: ${msg}`, 'default');
+    
     let accumulatedText = "";
+    let currentToolName = null;
     abortController = new AbortController();
 
     try {
@@ -895,11 +755,17 @@ async function sendChat() {
         if (!response.body) {
             const r = await response.json();
             if (r.success) {
-                botBubble.innerHTML = window.marked ? marked.parse(r.response) : r.response;
+                // Remove working status and show completed
+                removeWorkingStatus(workingStatusElement);
+                appendCompletedCard(r.response.substring(0, 100) + '...');
+                appendAIResponse(r.response);
                 webChatHistory = r.history || [];
+                
+                // Log completion
+                appendLogEntry('✅ Request completed successfully', 'tool-output');
             } else {
-                botBubble.parentElement.parentElement.classList.replace('bot', 'err');
-                botBubble.textContent = '❌ Lỗi: ' + (r.error || 'Unknown error');
+                removeWorkingStatus(workingStatusElement);
+                appendLogEntry('❌ Error: ' + (r.error || 'Unknown error'), 'error');
             }
             return;
         }
@@ -923,79 +789,63 @@ async function sendChat() {
                     const parsed = JSON.parse(cleanLine.substring(6));
                     
                     if (parsed.type === 'action') {
-                        botBubble.parentElement.parentElement.classList.add('thinking-tool');
-                        botBubble.innerHTML = `⚡ AI đang kích hoạt Skill: <span style="font-family:'JetBrains Mono',monospace;font-weight:600">${parsed.tool}</span>...`;
-                        scrollToBottom();
+                        // Log tool call to right panel
+                        currentToolName = parsed.tool;
+                        appendLogEntry(`⚙️ Activating Skill: ${parsed.tool}`, 'tool-call');
+                        
+                        // Update working status
+                        if (workingStatusElement) {
+                            workingStatusElement.innerHTML = `
+                                <div class="status-bubble">
+                                    <div class="status-header">
+                                        <span class="status-icon">⚡</span>
+                                        <span class="status-label">AI đang kích hoạt Skill: ${parsed.tool}</span>
+                                        <span class="status-time">${getCurrentTimestamp()}</span>
+                                    </div>
+                                </div>
+                            `;
+                        }
                     } 
                     else if (parsed.type === 'chunk') {
-                        if (botBubble.parentElement.parentElement.classList.contains('thinking-tool')) {
-                            botBubble.parentElement.parentElement.classList.remove('thinking-tool');
-                            botBubble.innerHTML = '';
-                        }
-
                         const chunk = parsed.content;
                         accumulatedText += chunk;
-
-                        let displayHtml = "";
-                        let remainingText = accumulatedText;
-
-                        if (remainingText.includes('<think>')) {
-                            const parts = remainingText.split('<think>');
-                            const beforeThink = parts[0];
-                            const rest = parts[1];
-
-                            if (rest.includes('</think>')) {
-                                const subParts = rest.split('</think>');
-                                const thinkingContent = subParts[0];
-                                const afterThink = subParts[1];
-                                
-                                displayHtml = `<div style="opacity:0.7;font-style:italic;font-size:13px;border-left:2px solid var(--accent);padding-left:12px;margin-bottom:12px;background:rgba(59,130,246,0.05);padding:10px 14px;border-radius:6px;line-height:1.5;">💭 <b>Suy nghĩ:</b><br/>${thinkingContent.replace(/\n/g, '<br/>')}</div>` + (window.marked ? marked.parse(afterThink) : afterThink);
-                            } else {
-                                displayHtml = `<div style="opacity:0.7;font-style:italic;font-size:13px;border-left:2px solid var(--accent);padding-left:12px;background:rgba(59,130,246,0.05);padding:10px 14px;border-radius:6px;line-height:1.5;">💭 <b>Suy nghĩ:</b><br/>${rest.replace(/\n/g, '<br/>')}...</div>`;
-                            }
-                        } else {
-                            displayHtml = window.marked ? marked.parse(remainingText) : remainingText;
-                        }
-
-                        botBubble.innerHTML = displayHtml + '<span class="cursor-blink" style="display:inline-block;width:8px;height:16px;background:var(--accent);vertical-align:middle;margin-left:4px;"></span>';
-                        scrollToBottom();
                     } 
                     else if (parsed.type === 'system') {
-                        appendSystemMessage(parsed.content);
+                        appendLogEntry(parsed.content, 'thinking');
                     }
-                    else if (parsed.type === 'system') {
-                        appendSystemMessage(parsed.content);
-                    }
-                    // THÊM ĐOẠN NÀY VÀO DƯỚI:
                     else if (parsed.type === 'log') {
-                        appendLogMessage(parsed.content);
+                        appendLogEntry(parsed.content, 'default');
                     }
                     else if (parsed.type === 'ask_permission') {
-                        // Gọi hàm nâng cấp truyền đầy đủ chi tiết 'parsed.details'
-                        appendPermissionCard(parsed.id, parsed.query, parsed.details);
+                        appendLogEntry(`⚠️ Permission requested: ${parsed.query}`, 'thinking');
                     }
-                    else if (parsed.type === 'ask_permission') {
-                        // Gọi hàm nâng cấp truyền đầy đủ chi tiết 'parsed.details'
-                        appendPermissionCard(parsed.id, parsed.query, parsed.details);
+                    else if (parsed.type === 'tool_output') {
+                        appendToolOutputLog(currentToolName || 'Unknown', parsed.output || parsed.content);
                     }
                     else if (parsed.type === 'done') {
-                        let displayHtml = "";
-                        if (accumulatedText.includes('<think>') && accumulatedText.includes('</think>')) {
-                            const parts = accumulatedText.split('<think>');
-                            const rest = parts[1].split('</think>');
-                            const thinkingContent = rest[0];
-                            displayHtml = `<div style="opacity:0.7;font-style:italic;font-size:13px;border-left:2px solid var(--accent);padding-left:12px;margin-bottom:12px;background:rgba(59,130,246,0.05);padding:10px 14px;border-radius:6px;line-height:1.5;">💭 <b>Suy nghĩ:</b><br/>${thinkingContent.replace(/\n/g, '<br/>')}</div>` + (window.marked ? marked.parse(parsed.response) : parsed.response);
-                        } else {
-                            displayHtml = window.marked ? marked.parse(parsed.response) : parsed.response;
-                        }
-                        botBubble.innerHTML = displayHtml;
+                        // Remove working status
+                        removeWorkingStatus(workingStatusElement);
+                        
+                        // Show completed card
+                        appendCompletedCard('Task finished successfully');
+                        
+                        // Show AI response
+                        appendAIResponse(parsed.response);
+                        
+                        // Store history
                         webChatHistory = parsed.history || [];
-                        scrollToBottom();
+                        
+                        // Log completion
+                        appendLogEntry('✅ Work completed - All tasks finished', 'tool-output');
+                        
+                        // If there are file changes in the response, show Code Tool Record
+                        if (parsed.fileChanges && parsed.fileChanges.length > 0) {
+                            appendCodeToolRecord(parsed.fileChanges);
+                        }
                     } 
                     else if (parsed.type === 'error') {
-                        botBubble.parentElement.parentElement.classList.replace('bot', 'err');
-                        botBubble.textContent = '❌ Lỗi: ' + parsed.error;
-                        scrollToBottom();
+                        removeWorkingStatus(workingStatusElement);
+                        appendLogEntry('❌ Error: ' + parsed.error, 'error');
                     }
                 } catch (errParse) {
                     console.warn("Lỗi parse dòng SSE:", errParse, cleanLine);
@@ -1003,13 +853,12 @@ async function sendChat() {
             }
         }
     } catch(e) { 
+        removeWorkingStatus(workingStatusElement);
         if (e.name === 'AbortError') {
-            botBubble.innerHTML += "<br/><br/><i>[Đã dừng]</i>";
+            appendLogEntry('[Request stopped by user]', 'thinking');
         } else {
-            botBubble.parentElement.parentElement.classList.replace('bot', 'err');
-            botBubble.textContent = '❌ Lỗi kết nối: ' + e.message; 
+            appendLogEntry('❌ Connection error: ' + e.message, 'error');
         }
-        scrollToBottom();
     } finally {
         isGenerating = false;
         updateSendButton();
