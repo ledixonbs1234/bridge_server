@@ -1,3 +1,5 @@
-```
-.agent_memory/
-```
+.agent_memory
+agent_skills
+profile
+.agents
+node_modules
