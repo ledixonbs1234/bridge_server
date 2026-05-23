@@ -362,8 +362,6 @@ async function loadCommands() {
         
         if (r.provider) document.getElementById('chat-provider').textContent = r.provider.name || r.provider.active;
         
-        document.getElementById('quick-tests').innerHTML = (r.api||[]).filter(a=>a.method==='GET').map(a=>`<button class="badge blue" style="cursor:pointer;padding:6px 12px;font-size:12px" onclick="quickTest('${a.path}')">${a.method} ${a.path}</button>`).join('');
-        
         // Load code changes and execution logs for terminal panel
         loadCodeChanges();
         loadExecutionLogs();
@@ -495,16 +493,6 @@ function escapeHtml(text) {
     div.textContent = text;
     return div.innerHTML;
 }
-
-window.quickTest = async function(path) {
-    const el = document.getElementById('api-result');
-    el.style.display = 'block';
-    el.textContent = 'Loading...';
-    try {
-        const r = await fetch(API + path).then(r=>r.json());
-        el.textContent = JSON.stringify(r, null, 2);
-    } catch(e) { el.textContent = 'Error: ' + e.message; }
-};
 
 // Traces Loader
 let tracesData = [];
