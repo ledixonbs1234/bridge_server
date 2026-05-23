@@ -1261,8 +1261,8 @@ async function startTerminalChatLoop() {
         resetSessionLog();
 
         const [reformulatedText, injectedMemory] = await Promise.all([
-            reformulateQuery(text),
-            recallMemory(text)
+            reformulateQuery(text, undefined, true),
+            recallMemory(text, undefined, undefined, true)
         ]);
 
         // BÀN GIAO CHO ENGINE TRUNG TÂM ĐỂ XỬ LÝ LƯỢT CHAT
@@ -1574,7 +1574,7 @@ async function executeSkillForProvider(functionName, funcArgs, onLog) {
     }
 }
 
-async function recallMemory(lastUserMessage, allMessagesContext = "", onLog) {
+async function recallMemory(lastUserMessage, allMessagesContext = "", onLog, skipLog = false) {
     const logger = onLog || global.logToWebChat;
     const memoryDir = path.join(__dirname, '.agent_memory');
     if (!fs.existsSync(memoryDir)) return "";
@@ -1588,8 +1588,10 @@ async function recallMemory(lastUserMessage, allMessagesContext = "", onLog) {
     );
 
     if (isContinuationOrSimpleCmd) {
+        if (!skipLog) {
         console.log(chalk.gray(`\n[Memory] Nhận diện câu lệnh đơn giản/tiếp tục. Bỏ qua tìm kiếm và nạp bộ nhớ.`));
-        if (logger) logger(`🔍 [Memory Recall] Bỏ qua truy cập bộ nhớ đối với câu lệnh tiếp tục.`);
+                    if (logger) logger(`🔍 [Memory Recall] Bỏ qua truy cập bộ nhớ đối với câu lệnh tiếp tục.`);
+                    }
         return "";
     }
 
@@ -1623,7 +1625,7 @@ async function recallMemory(lastUserMessage, allMessagesContext = "", onLog) {
     return hasMemory ? injectedContext : "";
 }
 // 1. Thay thế hàm reformulateQuery cũ:
-async function reformulateQuery(userMessage, onLog) {
+async function reformulateQuery(userMessage, onLog, skipLog = false) {
     const logger = onLog || global.logToWebChat;
     if (!activeProvider || !activeProvider.chat) return userMessage;
 
@@ -1636,8 +1638,10 @@ async function reformulateQuery(userMessage, onLog) {
     );
 
     if (isContinuationOrSimpleCmd) {
+        if (!skipLog) {
         console.log(chalk.gray(`\n[Reformulator] Nhận diện câu lệnh tiếp tục hoặc phản hồi ngắn. Bỏ qua biên tập.`));
         if (logger) logger(`🔍 [Reformulator] Phát hiện câu lệnh ngắn hoặc điều hướng đơn giản. Giữ nguyên bối cảnh.`);
+        }
         return userMessage;
     }
 
@@ -1725,8 +1729,8 @@ async function executeAgentTurn({
 
         // Chuyển tiếp onLog vào hai tác vụ tiền xử lý
         const [reformulatedText, injectedMemory] = await Promise.all([
-            reformulateQuery(message, onLog),
-            recallMemory(message, history.map(m => m.content).join(' '), onLog)
+            reformulateQuery(message, onLog, false),
+            recallMemory(message, history.map(m => m.content).join(' '), onLog, false)
         ]);
 
         const currentHistory = [...history];
