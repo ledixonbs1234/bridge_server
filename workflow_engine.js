@@ -342,10 +342,9 @@ ${errorCtx}
         logMessage(chalk.magenta(`\n🧠 Auto-Reflection...`));
         const prompt = `Bạn là AI Critic. Pipeline "${this.globalContext}" ${outcome === 'SUCCESS' ? 'hoàn thành' : 'thất bại'}.
 ${error ? `Lỗi: ${error.message}` : ''}
-1. Đánh giá ngắn gọn. 2. Nếu có bài học → gọi memorize_lesson. 3. Nếu có quy trình mới → gọi synthesize_skill.`;
+1. Đánh giá ngắn gọn. 2. Nếu có quy trình mới → gọi synthesize_skill.`;
         try {
             const skills = {};
-            if (this.skillRegistry['memorize_lesson']) skills['memorize_lesson'] = this.skillRegistry['memorize_lesson'];
             if (this.skillRegistry['synthesize_skill']) skills['synthesize_skill'] = this.skillRegistry['synthesize_skill'];
             const resp = await this.provider.chat({
                 messages: [{ role: 'user', content: prompt }], skillRegistry: skills,
