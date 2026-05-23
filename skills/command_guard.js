@@ -49,6 +49,19 @@ const ASK_CONFIRMATION_PATTERNS = [
   /\bdocker\s+(rm|rmi)\b/i,                                        // docker rm
 ];
 
+// Commands an toàn - tự động approve (không cần hỏi user)
+const SAFE_COMMANDS = [
+  /^dir\s+/i,                                                       // Windows list dir
+  /^ls\s*/i,                                                        // Unix list dir
+  /^echo\s+/i,                                                      // echo text
+  /^pwd$/i,                                                         // print working directory
+  /^cd\s+/i,                                                        // change directory
+  /^cat\s+/i,                                                       // view file content
+  /^type\s+/i,                                                      // Windows view file
+  /^test\s+/i,                                                      // test command
+  /^\[.*\]$/i,                                                      // bash test
+];
+
 // Timeout mặc định cho các command (ms)
 const DEFAULT_TIMEOUT = 60000;       // 60 giây
 const BACKGROUND_TIMEOUT = 300000;   // 5 phút cho background process
@@ -64,6 +77,13 @@ export function analyzeCommand(command) {
   }
   
   const normalizedCmd = command.trim();
+  
+  // Check safe commands (AUTO-APPROVE)
+  for (const pattern of SAFE_COMMANDS) {
+    if (pattern.test(normalizedCmd)) {
+      return { level: 'safe' };
+    }
+  }
   
   // Check dangerous patterns (BLOCK)
   for (const pattern of DANGEROUS_PATTERNS) {
@@ -134,5 +154,6 @@ export default {
   printCommandWarning,
   getCommandTimeout,
   DANGEROUS_PATTERNS,
-  ASK_CONFIRMATION_PATTERNS
+  ASK_CONFIRMATION_PATTERNS,
+  SAFE_COMMANDS
 };

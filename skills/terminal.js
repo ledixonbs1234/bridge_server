@@ -133,7 +133,11 @@ export default {
 
             const functionality = args.functionality;
             const purpose = args.purpose;
-            if (!global.isAutoApproveAll) {
+            
+            // AUTO-APPROVE cho commands an toàn (không cần hỏi user)
+            const isSafeCommand = analysis.level === 'safe';
+            
+            if (!global.isAutoApproveAll && !isSafeCommand) {
                 const cmdText = isBackground
                     ? chalk.magenta(command) + chalk.bgMagenta.white(' BACKGROUND PROCESS ')
                     : chalk.yellow(command);
