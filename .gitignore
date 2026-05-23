@@ -1,7 +1,10 @@
 ```
 # Agent memory
 .agent_memory/
-
+.agent_memory
+agent_skills
+profile
+.agents
 # Environment
 .env
 .env.local
