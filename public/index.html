@@ -218,65 +218,53 @@
                     <!-- Top Bar with Tabs -->
                     <div class="content-top-bar">
                         <div class="tab-switcher">
-                            <button class="tab-btn">Difference</button>
-                            <button class="tab-btn active">Log</button>
+                            <button class="tab-btn active" onclick="switchContentTab('difference')">Difference</button>
+                            <button class="tab-btn" onclick="switchContentTab('log')">Log</button>
                         </div>
-                        <button class="expand-btn" title="Expand">
+                        <button class="expand-btn" title="Expand" onclick="toggleContentExpand()">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
                             </svg>
                         </button>
                     </div>
 
-                    <!-- Main Explanation Text -->
-                    <div class="explanation-content">
-                        <h4 class="explanation-title">Phân tích lỗi</h4>
-                        <div class="explanation-body">
-                            <p>Đã phát hiện các vấn đề sau trong code của bạn:</p>
-                            <ol class="numbered-list">
-                                <li>
-                                    Hàm <code class="inline-code">execute_terminal_command</code> 
-                                    không xử lý đúng trường hợp lỗi khi gọi lệnh 
-                                    <code class="inline-code">exit</code>.
-                                </li>
-                                <li>
-                                    File <code class="inline-code">server.js</code> có đoạn code 
-                                    thừa cần được xóa để tối ưu hiệu suất.
-                                </li>
-                            </ol>
-                        </div>
-                    </div>
-
-                    <!-- Shell Terminal Component -->
-                    <div class="shell-terminal">
-                        <div class="terminal-header">
-                            <span class="terminal-label-text">Shell</span>
-                        </div>
-                        <div class="terminal-body mono">
-                            <div class="terminal-command">
-                                <span class="command-prompt">$</span>
-                                <span class="command-text">grep -n "execute_terminal_command" server.js</span>
+                    <!-- Difference Content Panel -->
+                    <div id="content-difference" class="content-panel active">
+                        <!-- Code Tool Record (File Changes) -->
+                        <div class="code-tool-record accordion accordion-open">
+                            <div class="accordion-header">
+                                <span class="record-title">📁 File Changes</span>
+                                <span class="accordion-icon">▲</span>
                             </div>
-                            <div class="terminal-output">
-                                <div class="output-line">
-                                    <span class="line-number">91:</span>
-                                    <span class="code-line">function execute_terminal_command(cmd) {</span>
+                            <div class="accordion-content">
+                                <div class="file-changes-list">
+                                    <!-- Dynamic content will be loaded here -->
+                                    <div style="padding:12px;color:var(--muted);font-size:13px;">Đang tải thay đổi...</div>
                                 </div>
-                                <div class="output-line">
-                                    <span class="line-number">599:</span>
-                                    <span class="code-line">    const result = await execute_terminal_command(command);</span>
-                                </div>
-                                <div class="output-line">
-                                    <span class="line-number">926:</span>
-                                    <span class="code-line">export { execute_terminal_command };</span>
+                                <div class="interaction-actions">
+                                    <button class="action-btn" title="Like" onclick="refreshCodeChanges()">↻ Refresh</button>
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Chat Messages (hidden by default, shown when chatting) -->
-                    <div class="chat-messages" id="chat-messages" style="display: none;">
-                        <!-- Messages will be added dynamically -->
+                    <!-- Log Content Panel -->
+                    <div id="content-log" class="content-panel" style="display:none">
+                        <!-- Execution Logs Panel -->
+                        <div class="shell-terminal" style="background:#fff;border:1px solid #E5E5E7">
+                            <div class="terminal-header">
+                                <span class="terminal-label-text">📝 Execution Logs</span>
+                            </div>
+                            <div class="terminal-body" id="execution-logs-container" style="max-height:500px;overflow-y:auto">
+                                <!-- Dynamic logs will be loaded here -->
+                                <div style="padding:16px;color:var(--muted);font-size:13px">Đang tải logs...</div>
+                            </div>
+                        </div>
+                        
+                        <!-- Chat Messages (hidden by default, shown when chatting) -->
+                        <div class="chat-messages" id="chat-messages" style="display: none;">
+                            <!-- Messages will be added dynamically -->
+                        </div>
                     </div>
                 </div>
             </div>

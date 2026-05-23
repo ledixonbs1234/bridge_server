@@ -856,6 +856,7 @@ app.get('/api/dashboard/commands', (req, res) => {
     ];
     const apiEndpoints = [
         { method: 'GET', path: '/api/skills', desc: 'Danh sách tất cả Skills (Function Calling)' },
+        { method: 'GET', path: '/api/system-prompt', desc: 'Đọc system prompt hiện tại' },
         { method: 'GET', path: '/api/provider', desc: 'Thông tin Provider đang hoạt động' },
         { method: 'GET', path: '/api/config', desc: 'Đọc cấu hình config.json' },
         { method: 'POST', path: '/api/provider/switch', desc: 'Chuyển đổi AI Provider' },
@@ -866,7 +867,10 @@ app.get('/api/dashboard/commands', (req, res) => {
         { method: 'GET', path: '/api/dashboard/sessions', desc: 'Danh sách phiên chat' },
         { method: 'GET', path: '/api/dashboard/sessions/:filename', desc: 'Tải nội dung chi tiết của tệp session' },
         { method: 'POST', path: '/api/dashboard/goal', desc: 'Đặt mục tiêu khóa cứng thông qua Web UI' },
-        { method: 'POST', path: '/api/dashboard/permission/respond', desc: 'Gửi phản hồi cấp quyền từ Web Chat' }
+        { method: 'POST', path: '/api/dashboard/permission/respond', desc: 'Gửi phản hồi cấp quyền từ Web Chat' },
+        { method: 'GET', path: '/api/dashboard/code-changes', desc: 'Lấy danh sách file changes với git diff stats' },
+        { method: 'GET', path: '/api/dashboard/execution-logs', desc: 'Lấy execution logs của session hiện tại' },
+        { method: 'GET', path: '/api/dashboard/execution-logs/stream', desc: 'Stream real-time execution logs (SSE)' }
     ];
     const skills = Object.keys(SKILL_REGISTRY).map(k => ({
         name: k,
@@ -1115,6 +1119,73 @@ app.post('/api/dashboard/optimize', async (req, res) => {
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
+});
+
+// =================================================================
+// 📊 CODE CHANGES & EXECUTION LOGS API
+// =================================================================
+
+// API: Lấy danh sách file changes với git diff stats
+app.get('/api/dashboard/code-changes', (req, res) => {
+    try {
+        const fileChanges = getGitDiffStats();
+        res.json({
+            success: true,
+            changes: fileChanges.map(fc => ({
+                file: fc.file,
+                status: fc.status,
+                additions: fc.additions,
+                deletions: fc.deletions,
+                diff: fc.diff
+            }))
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// API: Lấy execution logs stream
+app.get('/api/dashboard/execution-logs', (req, res) => {
+    try {
+        // Trả về logs đã tích lũy trong session hiện tại
+        const logs = executionLogStream.map(log => ({
+            timestamp: log.timestamp,
+            content: log.content,
+            type: log.type || 'system'
+        }));
+        
+        res.json({
+            success: true,
+            logs: logs,
+            sessionId: activeWebSessionFile || null
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// API: Stream execution logs (Server-Sent Events)
+app.get('/api/dashboard/execution-logs/stream', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    
+    let lastLogIndex = 0;
+    
+    const sendInterval = setInterval(() => {
+        if (executionLogStream.length > lastLogIndex) {
+            const newLogs = executionLogStream.slice(lastLogIndex);
+            lastLogIndex = executionLogStream.length;
+            
+            newLogs.forEach(log => {
+                res.write(`data: ${JSON.stringify(log)}\n\n`);
+            });
+        }
+    }, 500);
+    
+    req.on('close', () => {
+        clearInterval(sendInterval);
+    });
 });
 
 app.listen(EXTENSION_PORT, () => {
@@ -1427,9 +1498,74 @@ if (isCliMode) {
 // 📊 SESSION LOG (Cho Critic Agent đọc sau mỗi phiên chat)
 // =================================================================
 let currentSessionLog = [];
+let executionLogStream = []; // Stream log cho dashboard
 
 function resetSessionLog() {
     currentSessionLog = [];
+    executionLogStream = [];
+}
+
+// =================================================================
+// 🔀 GIT DIFF UTILS
+// =================================================================
+import { execSync } from 'child_process';
+
+function getGitDiffStats() {
+    try {
+        // Get list of changed files
+        const statusOutput = execSync('git status --porcelain', { encoding: 'utf8' });
+        const changedFiles = statusOutput.split('\n').filter(line => line.trim()).map(line => {
+            const parts = line.trim().split(/\s+/);
+            return { path: parts.slice(1).join(' '), status: parts[0] };
+        });
+
+        const fileChanges = [];
+        for (const file of changedFiles) {
+            try {
+                const diffOutput = execSync(`git diff HEAD -- "${file.path}"`, { encoding: 'utf8' });
+                let additions = 0;
+                let deletions = 0;
+                
+                diffOutput.split('\n').forEach(line => {
+                    if (line.startsWith('+') && !line.startsWith('+++')) additions++;
+                    if (line.startsWith('-') && !line.startsWith('---')) deletions++;
+                });
+
+                fileChanges.push({
+                    file: file.path,
+                    status: file.status,
+                    additions,
+                    deletions,
+                    diff: diffOutput
+                });
+            } catch (e) {
+                // File might be new or deleted
+                fileChanges.push({
+                    file: file.path,
+                    status: file.status,
+                    additions: file.status.includes('A') ? 1 : 0,
+                    deletions: file.status.includes('D') ? 1 : 0,
+                    diff: ''
+                });
+            }
+        }
+        return fileChanges;
+    } catch (e) {
+        console.log('Git diff error:', e.message);
+        return [];
+    }
+}
+
+function getRecentCommits(limit = 10) {
+    try {
+        const logOutput = execSync(`git log --oneline -${limit}`, { encoding: 'utf8' });
+        return logOutput.split('\n').filter(line => line.trim()).map(line => {
+            const [hash, ...messageParts] = line.split(' ');
+            return { hash: hash.substring(0, 7), message: messageParts.join(' ') };
+        });
+    } catch (e) {
+        return [];
+    }
 }
 
 // =================================================================
@@ -1507,7 +1643,15 @@ async function executeSkillForProvider(functionName, funcArgs, onLog) {
         }
     }
 
-    if (logger) logger(`⚙️ [Tool Call] Kích hoạt: ${functionName}${targetDetail}`);
+    if (logger) {
+        logger(`⚙️ [Tool Call] Kích hoạt: ${functionName}${targetDetail}`);
+        // Thêm log vào execution stream cho dashboard
+        executionLogStream.push({
+            timestamp: new Date().toISOString(),
+            content: `⚙️ [Tool Call] Kích hoạt: ${functionName}${targetDetail}`,
+            type: 'tool_call'
+        });
+    }
 
     const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines', 'get_os_context'];
     if (!silentFunctions.includes(functionName) && !functionName.startsWith('workflow_')) {
@@ -1721,6 +1865,12 @@ async function executeAgentTurn({
     // Đăng ký bộ phát log toàn cục để WorkflowEngine tự động phát hiện và gửi dữ liệu FSM
     if (onLog) {
         global.logToWebChat = onLog;
+        // Thêm log vào execution stream cho dashboard
+        executionLogStream.push({
+            timestamp: new Date().toISOString(),
+            content: "🔍 Đang chuẩn bị bối cảnh và trích xuất bộ nhớ...",
+            type: 'system'
+        });
     }
 
     try {

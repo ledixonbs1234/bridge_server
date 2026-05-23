@@ -363,7 +363,137 @@ async function loadCommands() {
         if (r.provider) document.getElementById('chat-provider').textContent = r.provider.name || r.provider.active;
         
         document.getElementById('quick-tests').innerHTML = (r.api||[]).filter(a=>a.method==='GET').map(a=>`<button class="badge blue" style="cursor:pointer;padding:6px 12px;font-size:12px" onclick="quickTest('${a.path}')">${a.method} ${a.path}</button>`).join('');
+        
+        // Load code changes and execution logs for terminal panel
+        loadCodeChanges();
+        loadExecutionLogs();
     } catch(e) { console.error('Load commands error:', e); }
+}
+
+// Code Changes Loader - Load git diff data
+async function loadCodeChanges() {
+    try {
+        const r = await fetch(API + '/api/dashboard/code-changes').then(res => res.json());
+        if (!r.success || !r.changes || r.changes.length === 0) {
+            renderCodeToolRecord([]);
+            return;
+        }
+        
+        renderCodeToolRecord(r.changes);
+    } catch(e) { 
+        console.error('Load code changes error:', e); 
+        renderCodeToolRecord([]);
+    }
+}
+
+// Render Code Tool Record with file changes
+function renderCodeToolRecord(changes) {
+    const container = document.querySelector('.code-tool-record .accordion-content .file-changes-list');
+    if (!container) return;
+    
+    if (changes.length === 0) {
+        container.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px;">Không có thay đổi file nào</div>';
+        return;
+    }
+    
+    container.innerHTML = changes.map(fc => `
+        <div class="file-change-item" onclick="showDiffDetail('${encodeURIComponent(JSON.stringify(fc))}')" style="cursor:pointer">
+            <span class="file-name mono">${fc.file}</span>
+            <div class="change-badges">
+                <span class="badge-add">+${fc.additions}</span>
+                <span class="badge-remove">-${fc.deletions}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+// Show diff detail in a modal or panel
+window.showDiffDetail = function(encodedFc) {
+    const fc = JSON.parse(decodeURIComponent(encodedFc));
+    const detailPanel = document.getElementById('trace-detail');
+    if (!detailPanel) return;
+    
+    detailPanel.innerHTML = `
+        <div style="padding:20px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+                <h3 style="font-size:14px;font-weight:600">📄 ${fc.file}</h3>
+                <button onclick="loadExecutionLogs()" style="background:none;border:1px solid var(--border);color:var(--accent);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:11px">← Quay lại Logs</button>
+            </div>
+            <div style="background:#0d1117;border-radius:8px;padding:16px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6">
+                <pre style="margin:0;color:#e6edf3">${escapeHtml(fc.diff || 'Không có diff data')}</pre>
+            </div>
+        </div>
+    `;
+};
+
+// Execution Logs Loader
+async function loadExecutionLogs() {
+    try {
+        const r = await fetch(API + '/api/dashboard/execution-logs').then(res => res.json());
+        if (!r.success || !r.logs || r.logs.length === 0) {
+            renderExecutionLogs([]);
+            return;
+        }
+        
+        renderExecutionLogs(r.logs);
+    } catch(e) { 
+        console.error('Load execution logs error:', e); 
+        renderExecutionLogs([]);
+    }
+}
+
+// Render execution logs in the right panel
+function renderExecutionLogs(logs) {
+    const detailPanel = document.getElementById('trace-detail');
+    if (!detailPanel) return;
+    
+    if (logs.length === 0) {
+        detailPanel.innerHTML = '<div class="empty" style="padding:80px 20px"><div class="icon">📝</div>Chưa có execution logs</div>';
+        return;
+    }
+    
+    // Group logs by type
+    const groupedLogs = {};
+    logs.forEach(log => {
+        const type = log.type || 'system';
+        if (!groupedLogs[type]) groupedLogs[type] = [];
+        groupedLogs[type].push(log);
+    });
+    
+    let html = '<div style="padding:20px">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+    html += '<h3 style="font-size:14px;font-weight:600">📝 Execution Logs</h3>';
+    html += `<span class="badge blue">${logs.length} logs</span>`;
+    html += '</div>';
+    
+    // Render logs grouped by type
+    for (const [type, typeLogs] of Object.entries(groupedLogs)) {
+        html += `<div style="margin-bottom:20px">`;
+        html += `<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;text-transform:uppercase">${type}</div>`;
+        html += `<div style="background:#0d1117;border-radius:8px;padding:12px;overflow-y:auto;max-height:400px;font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1.6">`;
+        
+        typeLogs.forEach(log => {
+            const time = new Date(log.timestamp).toLocaleTimeString('vi-VN');
+            let color = '#94a3b8';
+            if (log.type === 'tool_call') color = '#38bdf8';
+            if (log.type === 'system') color = '#94a3b8';
+            
+            html += `<div style="color:${color};margin-bottom:4px">`;
+            html += `<span style="opacity:0.5">[${time}]</span> ${escapeHtml(log.content)}`;
+            html += `</div>`;
+        });
+        
+        html += `</div></div>`;
+    }
+    
+    html += '</div>';
+    detailPanel.innerHTML = html;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 window.quickTest = async function(path) {
@@ -1058,5 +1188,207 @@ setInterval(loadAll, 15000);
 //   }
 // }
 
-// // Start health monitoring
+// Start health monitoring
 // checkHealth();
+
+// ============================================
+// CHAT CONTENT TAB FUNCTIONS
+// ============================================
+
+let currentContentTab = 'difference';
+let isContentExpanded = false;
+
+function switchContentTab(tabName) {
+    currentContentTab = tabName;
+    
+    // Update tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+    
+    // Show/hide panels
+    const diffPanel = document.getElementById('content-difference');
+    const logPanel = document.getElementById('content-log');
+    
+    if (tabName === 'difference') {
+        diffPanel.style.display = 'block';
+        logPanel.style.display = 'none';
+        refreshCodeChanges();
+    } else if (tabName === 'log') {
+        diffPanel.style.display = 'none';
+        logPanel.style.display = 'block';
+        loadExecutionLogs();
+    }
+}
+
+function toggleContentExpand() {
+    isContentExpanded = !isContentExpanded;
+    const rightContent = document.querySelector('.chat-right-content');
+    const expandBtn = document.querySelector('.expand-btn');
+    
+    if (isContentExpanded) {
+        rightContent.style.flex = '2';
+        expandBtn.innerHTML = `
+            <svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\">
+                <path d=\"M9 3H3v6M15 21h6v-6M21 3l-7 7M3 21l7-7\"/>
+            </svg>
+        `;
+    } else {
+        rightContent.style.flex = '1';
+        expandBtn.innerHTML = `
+            <svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\">
+                <path d=\"M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7\"/>
+            </svg>
+        `;
+    }
+}
+
+async function refreshCodeChanges() {
+    const container = document.querySelector('.file-changes-list');
+    if (!container) return;
+    
+    container.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px;">Đang tải thay đổi...</div>';
+    
+    try {
+        const response = await fetch(`${API}/api/dashboard/code-changes`);
+        const data = await response.json();
+        
+        if (data.success && data.changes && data.changes.length > 0) {
+            renderFileChanges(container, data.changes);
+        } else {
+            container.innerHTML = '<div style="padding:12px;color:var(--muted);font-size:13px;">Không có thay đổi nào</div>';
+        }
+    } catch (error) {
+        console.error('Error loading code changes:', error);
+        container.innerHTML = '<div style="padding:12px;color:var(--danger);font-size:13px;">Lỗi khi tải thay đổi</div>';
+    }
+}
+
+function renderFileChanges(container, changes) {
+    container.innerHTML = '';
+    
+    changes.forEach(change => {
+        const fileItem = document.createElement('div');
+        fileItem.className = 'file-change-item';
+        fileItem.style.cssText = 'display:flex;align-items:center;justify-content:between;padding:8px 12px;border-radius:6px;margin-bottom:4px;background:#f9f9f9;cursor:pointer;transition:background 0.2s;';
+        fileItem.onmouseover = () => fileItem.style.background = '#f0f0f0';
+        fileItem.onmouseout = () => fileItem.style.background = '#f9f9f9';
+        
+        const additions = change.additions || 0;
+        const deletions = change.deletions || 0;
+        
+        fileItem.innerHTML = `
+            <div style="display:flex;align-items:center;gap:8px;flex:1;">
+                <span style="font-size:16px;">📄</span>
+                <span style="font-size:13px;font-weight:500;color:#333;">${change.file}</span>
+            </div>
+            <div style="display:flex;gap:8px;">
+                ${additions > 0 ? `<span style="font-size:12px;color:#22c55e;background:#dcfce7;padding:2px 8px;border-radius:4px;">+${additions}</span>` : ''}
+                ${deletions > 0 ? `<span style="font-size:12px;color:#ef4444;background:#fee2e2;padding:2px 8px;border-radius:4px;">-${deletions}</span>` : ''}
+            </div>
+        `;
+        
+        fileItem.onclick = () => showFileDiff(change.file);
+        container.appendChild(fileItem);
+    });
+}
+
+async function showFileDiff(filename) {
+    try {
+        const response = await fetch(`${API}/api/dashboard/code-changes?file=${encodeURIComponent(filename)}`);
+        const data = await response.json();
+        
+        if (data.success && data.diff) {
+            const modal = document.createElement('div');
+            modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:10000;';
+            modal.innerHTML = `
+                <div style="background:white;border-radius:8px;width:80%;max-width:900px;max-height:80vh;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,0.3);">
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #e5e5e7;">
+                        <h3 style="margin:0;font-size:16px;font-weight:600;">📄 ${filename}</h3>
+                        <button onclick="this.closest('div[style*=\'position:fixed\']').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#666;">✕</button>
+                    </div>
+                    <pre style="margin:0;padding:16px;overflow:auto;max-height:60vh;font-size:12px;line-height:1.5;font-family:'JetBrains Mono',monospace;background:#f9f9f9;">${escapeHtml(data.diff)}</pre>
+                </div>
+            `;
+            document.body.appendChild(modal);
+        }
+    } catch (error) {
+        console.error('Error loading file diff:', error);
+        alert('Không thể tải diff cho file này');
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+async function loadExecutionLogs() {
+    const container = document.getElementById('execution-logs-container');
+    if (!container) return;
+    
+    container.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">Đang tải logs...</div>';
+    
+    try {
+        const response = await fetch(`${API}/api/dashboard/execution-logs`);
+        const data = await response.json();
+        
+        if (data.success && data.logs && data.logs.length > 0) {
+            renderExecutionLogs(container, data.logs);
+        } else {
+            container.innerHTML = '<div style="padding:16px;color:var(--muted);font-size:13px">Không có logs nào</div>';
+        }
+    } catch (error) {
+        console.error('Error loading execution logs:', error);
+        container.innerHTML = '<div style="padding:16px;color:var(--danger);font-size:13px">Lỗi khi tải logs</div>';
+    }
+}
+
+function renderExecutionLogs(container, logs) {
+    container.innerHTML = '';
+    
+    logs.forEach((log, index) => {
+        const logEntry = document.createElement('div');
+        logEntry.className = 'log-entry';
+        logEntry.style.cssText = 'padding:8px 12px;border-bottom:1px solid #f0f0f0;font-family:\'JetBrains Mono\',monospace;font-size:12px;line-height:1.6;';
+        
+        let logClass = '';
+        let icon = 'ℹ️';
+        
+        if (log.type === 'ai_request' || log.message.includes('AI')) {
+            logClass = 'log-ai';
+            icon = '🤖';
+        } else if (log.type === 'tool_execution' || log.message.includes('Tool')) {
+            logClass = 'log-tool';
+            icon = '🔧';
+        } else if (log.type === 'error' || log.message.includes('Error')) {
+            logClass = 'log-error';
+            icon = '❌';
+        } else if (log.type === 'success' || log.message.includes('Success')) {
+            logClass = 'log-success';
+            icon = '✅';
+        }
+        
+        const timestamp = log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+        
+        logEntry.innerHTML = `
+            <div style="display:flex;gap:8px;align-items:flex-start;">
+                <span style="min-width:60px;color:#999;font-size:11px;">${timestamp}</span>
+                <span style="flex:1;">${icon} ${escapeHtml(log.message)}</span>
+            </div>
+        `;
+        
+        container.appendChild(logEntry);
+    });
+    
+    // Auto scroll to bottom
+    container.scrollTop = container.scrollHeight;
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+    // Load initial code changes
+    refreshCodeChanges();
+});
