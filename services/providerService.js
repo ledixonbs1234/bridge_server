@@ -3,6 +3,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 
+// Import helper functions từ agentService để quản lý global state
+import { setGlobalState, getGlobalStateValue } from './agentService.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
@@ -44,12 +47,14 @@ export async function loadProviderConfig(showMenu = false) {
         activeProvider = await getProviderInstance('gemini-studio');
     }
     
-    // Store in global
-    const globalThis = await import('');
-    globalThis.default.activeProvider = activeProvider;
-    globalThis.default.providerConfig = providerConfig;
+    // Lưu vào global state an toàn
+    setGlobalState('activeProvider', activeProvider);
+    setGlobalState('providerConfig', providerConfig);
     
     return { activeProvider, providerConfig };
+} catch (err) {
+    console.error(chalk.red('[Provider] Lỗi nạp provider:'), err);
+    throw err;
 }
 
 async function getProviderInstance(providerName) {
