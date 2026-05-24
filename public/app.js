@@ -925,8 +925,9 @@ async function sendChat() {
                     else if (parsed.type === 'log') {
                         appendLogEntry(parsed.content, 'default');
                     }
-                    else if (parsed.type === 'ask_permission') {
+                   else if (parsed.type === 'ask_permission') {
                         appendLogEntry(`⚠️ Permission requested: ${parsed.query}`, 'thinking');
+                        appendPermissionCard(parsed.query, parsed.id, parsed.details);
                     }
                     else if (parsed.type === 'tool_output') {
                         appendToolOutputLog(currentToolName || 'Unknown', parsed.output || parsed.content);
@@ -996,7 +997,83 @@ setInterval(loadAll, 15000);
 // =================================================================
 // 🎨 WEB TERMINAL INTERFACE UPGRADE HELPERS
 // =================================================================
+window.respondPermission = async function(permId, response) {
+    try {
+        const card = document.getElementById(`permission-card-${permId}`);
+        if (card) {
+            // Khóa các nút bấm để tránh người dùng click đúp
+            const buttons = card.querySelectorAll('.btn-perm');
+            buttons.forEach(btn => btn.disabled = true);
+        }
 
+        const r = await fetch(API + '/api/dashboard/permission/respond', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: permId, response })
+        }).then(res => res.json());
+
+        if (r.success) {
+            appendLogEntry(`✅ Đã gửi phản hồi phê duyệt: ${response.toUpperCase()}`, 'default');
+            if (card) {
+                card.innerHTML = `
+                    <div class="permission-title" style="color: var(--success); font-weight: 600;">
+                        <span>✓ Đã phản hồi: ${response.toUpperCase() === 'Y' ? 'ĐỒNG Ý (YES)' : response.toUpperCase() === 'A' ? 'ĐỒNG Ý TẤT CẢ (YES TO ALL)' : 'TỪ CHỐI (NO)'}</span>
+                    </div>
+                `;
+                // Tự động dọn dẹp thẻ sau khi phản hồi thành công
+                setTimeout(() => card.remove(), 2000);
+            }
+        } else {
+            alert('Lỗi khi gửi phản hồi: ' + r.error);
+            if (card) {
+                const buttons = card.querySelectorAll('.btn-perm');
+                buttons.forEach(btn => btn.disabled = false);
+            }
+        }
+    } catch (e) {
+        alert('Lỗi kết nối khi gửi phản hồi: ' + e.message);
+        const card = document.getElementById(`permission-card-${permId}`);
+        if (card) {
+            const buttons = card.querySelectorAll('.btn-perm');
+            buttons.forEach(btn => btn.disabled = false);
+        }
+    }
+};
+
+function appendPermissionCard(query, permId, details) {
+    if (!chatLeftSidebar) return;
+
+    const cardDiv = document.createElement('div');
+    cardDiv.className = 'permission-card';
+    cardDiv.id = `permission-card-${permId}`;
+
+    let detailsHtml = '';
+    if (details) {
+        detailsHtml = `<div class="permission-details">${escHtml(details)}</div>`;
+    }
+
+    cardDiv.innerHTML = `
+        <div class="permission-title">
+            <span>⚠️ Yêu cầu cấp quyền</span>
+        </div>
+        <div class="permission-query">${escHtml(query)}</div>
+        ${detailsHtml}
+        <div class="permission-actions">
+            <button class="btn-perm btn-perm-yes" onclick="respondPermission('${permId}', 'y')">✅ Yes</button>
+            <button class="btn-perm btn-perm-all" onclick="respondPermission('${permId}', 'a')">🚀 Yes to All</button>
+            <button class="btn-perm btn-perm-no" onclick="respondPermission('${permId}', 'n')">❌ No</button>
+        </div>
+    `;
+
+    // Chèn thẻ phê duyệt trước vùng nhập liệu để giữ ô chat ở dưới cùng
+    const promptArea = chatLeftSidebar.querySelector('.prompt-input-area');
+    if (promptArea) {
+        chatLeftSidebar.insertBefore(cardDiv, promptArea);
+    } else {
+        chatLeftSidebar.appendChild(cardDiv);
+    }
+    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+}
 // Trả về chuỗi thời gian hiện hành định dạng HH:MM:SS
 function getCurrentTimestamp() {
     const now = new Date();
