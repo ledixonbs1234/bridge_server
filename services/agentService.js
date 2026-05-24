@@ -7,6 +7,31 @@ import telemetry from '../telemetry.js';
 import { SKILL_REGISTRY } from './skillLoader.js';
 import WorkflowEngine from '../workflow_engine.js';
 
+// =================================================================
+// GLOBAL STATE MANAGEMENT - Centralized & Safe
+// =================================================================
+import 'globalthis';
+
+// Helper để truy cập global state an toàn, tránh race condition
+function getGlobalState() {
+    if (typeof global === 'undefined') {
+        return globalThis || {};
+    }
+    return global;
+}
+
+export function setGlobalState(key, value) {
+    const gs = getGlobalState();
+    if (!gs.default) gs.default = {};
+    gs.default[key] = value;
+}
+
+export function getGlobalStateValue(key, defaultValue = null) {
+    const gs = getGlobalState();
+    return gs.default?.[key] ?? defaultValue;
+}
+// =================================================================
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
@@ -291,9 +316,8 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
 export async function runCriticAgent(sessionLog, onLog) {
     const logger = onLog || global.logToWebChat;
     
-    // Import activeProvider từ global
-    const globalThis = await import('globalthis');
-    const activeProvider = globalThis.default?.activeProvider;
+    // Import activeProvider từ global state an toàn
+    const activeProvider = getGlobalStateValue('activeProvider');
     
     if (!activeProvider || !activeProvider.chat) return;
 
@@ -456,9 +480,9 @@ export function saveSession(chatHistory, goalText, customFileName = null) {
         filePath = path.join(SESSION_DIR, fileName);
     }
     
-    // Get provider info from global
-    const globalThis = import('globalthis').then(m => m.default);
-    const providerName = globalThis.activeProvider?.getDisplayName ? globalThis.activeProvider.getDisplayName() : 'unknown';
+    // Get provider info from global state an toàn
+    const activeProvider = getGlobalStateValue('activeProvider');
+    const providerName = activeProvider?.getDisplayName ? activeProvider.getDisplayName() : 'unknown';
     
     const meta = { _type: 'meta', goal: goalText, provider: providerName, savedAt: new Date().toISOString() };
     const lines = [JSON.stringify(meta), ...chatHistory.map(m => JSON.stringify(m))];
@@ -534,9 +558,12 @@ export async function chatWithFailover(options) {
     const MAX_RETRIES = 5;
 
     for (const providerName of chain) {
-        const globalThis = await import('globalthis');
-        const provider = (providerName === globalThis.default?.providerConfig?.activeProvider)
-            ? globalThis.default?.activeProvider
+        // Sử dụng global state an toàn thay vì import globalThis mỗi lần
+        const activeProvider = getGlobalStateValue('activeProvider');
+        const providerConfig = getGlobalStateValue('providerConfig');
+        
+        const provider = (providerName === providerConfig?.activeProvider)
+            ? activeProvider
             : await getProviderInstance(providerName);
 
         if (!provider || !provider.chat) continue;

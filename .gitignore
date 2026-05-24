@@ -1,9 +1,1 @@
-(public/app.js is a source file, and there are no build artifacts, dependencies, or temporary files in the changes```
-.agent_memory
-agent_skills
-profile/
-.agents/
-node_modules
-
-.agent_memory/
-```)
+Nothing needs to be added to .gitignore since only JavaScript source files were modified and no build artifacts, dependencies, or temporary files were detected in the changes.
