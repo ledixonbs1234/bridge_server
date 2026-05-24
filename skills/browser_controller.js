@@ -42,7 +42,7 @@ export default {
                 // 1. KHỞI TẠO NẾU CHƯA CÓ
                 if (!activeContext || !activePage || activePage.isClosed()) {
                     if (action !== "goto") throw new Error("Trình duyệt chưa mở. Bạn phải gọi action='goto' đầu tiên.");
-                    const profilePath = path.join(__dirname, '..', 'profile', 'Profile_Automator');
+                    const profilePath = path.join(__dirname, '..','..', 'profile', 'Profile_Automator');
                     if (!fs.existsSync(profilePath)) fs.mkdirSync(profilePath, { recursive: true });
 
                     console.log("[Browser] Đang khởi động trình duyệt ảo...");
