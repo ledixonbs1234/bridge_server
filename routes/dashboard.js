@@ -2,9 +2,9 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import telemetry from '../../telemetry.js';
-import tracer from '../../tracer.js';
-import { getGitDiffStats } from '../../utils/gitStats.js';
+import telemetry from '../telemetry.js';
+import tracer from '../tracer.js';
+import { getGitDiffStats } from '../utils/gitStats.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
