@@ -6,6 +6,7 @@ import tracer from '../tracer.js';
 import telemetry from '../telemetry.js';
 import { SKILL_REGISTRY } from './skillLoader.js';
 import WorkflowEngine from '../workflow_engine.js';
+import globalState from '../global.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -292,8 +293,7 @@ export async function runCriticAgent(sessionLog, onLog) {
     const logger = onLog || global.logToWebChat;
     
     // Import activeProvider từ global
-    const globalThis = await import('globalthis');
-    const activeProvider = globalThis.default?.activeProvider;
+    const activeProvider = globalState.activeProvider;
     
     if (!activeProvider || !activeProvider.chat) return;
 
@@ -457,8 +457,7 @@ export function saveSession(chatHistory, goalText, customFileName = null) {
     }
     
     // Get provider info from global
-    const globalThis = import('globalthis').then(m => m.default);
-    const providerName = globalThis.activeProvider?.getDisplayName ? globalThis.activeProvider.getDisplayName() : 'unknown';
+    const providerName = globalState.activeProvider?.getDisplayName ? globalState.activeProvider.getDisplayName() : 'unknown';
     
     const meta = { _type: 'meta', goal: goalText, provider: providerName, savedAt: new Date().toISOString() };
     const lines = [JSON.stringify(meta), ...chatHistory.map(m => JSON.stringify(m))];
@@ -534,9 +533,8 @@ export async function chatWithFailover(options) {
     const MAX_RETRIES = 5;
 
     for (const providerName of chain) {
-        const globalThis = await import('globalthis');
-        const provider = (providerName === globalThis.default?.providerConfig?.activeProvider)
-            ? globalThis.default?.activeProvider
+        const provider = (providerName === globalState.providerConfig?.activeProvider)
+            ? globalState.activeProvider
             : await getProviderInstance(providerName);
 
         if (!provider || !provider.chat) continue;

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
+import globalState from '../global.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,9 +46,8 @@ export async function loadProviderConfig(showMenu = false) {
     }
     
     // Store in global
-    const globalThis = await import('');
-    globalThis.default.activeProvider = activeProvider;
-    globalThis.default.providerConfig = providerConfig;
+    globalState.activeProvider = activeProvider;
+    globalState.providerConfig = providerConfig;
     
     return { activeProvider, providerConfig };
 }
@@ -97,8 +97,7 @@ export async function switchProvider(providerName) {
         activeProvider = newProvider;
         providerConfig.activeProvider = providerName;
         
-        const globalThis = await import('globalthis');
-        globalThis.default.activeProvider = activeProvider;
+        globalState.activeProvider = activeProvider;
         
         // Save config
         const configPath = path.join(projectRoot, 'config.json');
