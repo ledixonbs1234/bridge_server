@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import globalState from '../../global.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -11,7 +12,6 @@ const router = express.Router();
 
 // Get current provider info
 router.get('/', async (req, res) => {
-    const globalThis = await import('globalthis');
     const configPath = path.join(projectRoot, 'config.json');
     let providerConfig = {};
     try {
@@ -24,8 +24,8 @@ router.get('/', async (req, res) => {
     
     res.json({
         active: providerConfig.activeProvider,
-        name: globalThis.default?.activeProvider?.getDisplayName?.(),
-        isExtensionBased: globalThis.default?.activeProvider?.isExtensionBased || false,
+        name: globalState.activeProvider?.getDisplayName?.(),
+        isExtensionBased: globalState.activeProvider?.isExtensionBased || false,
         available: Object.keys(providerConfig.providers || {})
     });
 });
@@ -56,8 +56,7 @@ router.post('/switch', async (req, res) => {
     const { loadProviderConfig } = await import('../../services/providerService.js');
     await loadProviderConfig();
     
-    const globalThis = await import('globalthis');
-    res.json({ success: true, message: `Đã chuyển sang provider: ${globalThis.default?.activeProvider?.getDisplayName?.()}` });
+    res.json({ success: true, message: `Đã chuyển sang provider: ${globalState.activeProvider?.getDisplayName?.()}` });
 });
 
 // Get config

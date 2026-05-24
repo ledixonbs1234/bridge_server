@@ -1,12 +1,10 @@
 import { input } from '@inquirer/prompts';
 import chalk from 'chalk';
 import { executeAgentTurn } from '../services/agentService.js';
+import globalState from '../global.js';
 
 export async function startTerminalChatLoop() {
     console.log(chalk.bold.cyan('\n💬 CHẾ ĐỘ TERMINAL INTERACTIVE CHAT\n'));
-    
-    // Get activeProvider from global
-    const globalThis = await import('globalthis');
     
     while (true) {
         let userText;
@@ -22,7 +20,7 @@ export async function startTerminalChatLoop() {
         try {
             const result = await executeAgentTurn({
                 message: text,
-                activeProvider: globalThis.default?.activeProvider,
+                activeProvider: globalState.activeProvider,
                 onChunk: (chunk) => process.stdout.write(chunk),
                 onAction: (tool) => console.log(chalk.gray(`\n[Action] Đang kích hoạt: ${tool}`))
             });
