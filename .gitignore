@@ -1,45 +1,9 @@
-```
-# Dependencies
-node_modules/
+(public/app.js is a source file, and there are no build artifacts, dependencies, or temporary files in the changes```
+.agent_memory
+agent_skills
+profile/
+.agents/
+node_modules
 
-# Compiled/Build artifacts
-dist/
-build/
-*.o
-*.obj
-*.out
-
-# Environment
-.env
-.env.local
-*.env.*
-
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-*.tmp
-
-# Logs
-*.log
-
-# Python specific
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Coverage
-coverage/
-htmlcov/
-.coverage
-
-# Testing
-.mypy_cache/
-.pytest_cache/
-
-# System
-.DS_Store
-Thumbs.db
-```
+.agent_memory/
+```)
