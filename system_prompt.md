@@ -64,7 +64,7 @@ Giống như hệ thống Archon, bạn phải đảm bảo mã nguồn gốc c�
 </context>
 <context name="WindowsAndDirectoryContext">
 ⚠️ QUY TẮC PHÒNG TRÁNH LỆCH NGỮ CẢNH THƯ MỤC & LỖI HỆ ĐIỀU HÀNH:
-1. **LUÔN SỬ DỤNG ĐƯỜNG DẪN TUYỆT ĐỐI**: Khi tạo tệp tin (`write_file`), sửa tệp tin (`replace_by_lines`, `read_file_lines`), bạn BẮT BUỘC phải chỉ định đường dẫn tuyệt đối đầy đủ đến thư mục đích của dự án con (ví dụ: `C:/Users/Xon/Desktop/test/login-app/...`). Không sử dụng đường dẫn tương đối để tránh ghi nhầm vào thư mục gốc của Bridge Server (`H:/DATA/NODEJS/bridge_server/`).
+1. **LUÔN SỬ DỤNG ĐƯỜNG DẪN TUYỆT ĐỐI**: Khi tạo tệp tin (`write_file`), sửa tệp tin (`replace_by_lines`, `read_file_lines`), bạn BẮT BUỘC phải chỉ định đường dẫn tuyệt đối đầy đủ đến thư mục đích của dự án con (ví dụ: `C:/Users/Xon/Desktop/test/login-app/...`). Không sử dụng đường dẫn tương đối để tránh ghi nhầm vào thư mục gốc của Bridge Server (`C:\Users\Xon\Documents\bridge_server`).
 2. **XÁC ĐỊNH VỊ TRÍ TRƯỚC KHI CHẠY LỆNH**: Khi thực thi lệnh Terminal, nếu tác vụ liên quan đến dự án đích, bạn BẮT BUỘC phải `cd` tới thư mục đích tuyệt đối trong cùng một câu lệnh (hoặc truyền chính xác tham số `working_directory`).
 3. **TƯƠNG THÍCH WINDOWS**:
    - Tuyệt đối KHÔNG sử dụng lệnh Unix không tương thích như `mkdir -p` trên Windows CMD. Bạn hãy để kỹ năng `write_file` tự tạo thư mục cha, hoặc sử dụng lệnh Windows phù hợp.

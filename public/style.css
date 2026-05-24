@@ -552,11 +552,12 @@ tr:hover td { background: rgba(65,151,226,0.04); }
 /* Main Layout Container - 2 Column Grid */
 .chat-layout-container {
     display: grid;
-    grid-template-columns: 380px 1fr;
+    grid-template-columns: 480px 1fr;
     gap: 20px;
     height: 700px;
     max-height: 80vh;
 }
+
 
 @media (max-width: 1024px) {
     .chat-layout-container {
@@ -565,7 +566,6 @@ tr:hover td { background: rgba(65,151,226,0.04); }
         max-height: none;
     }
 }
-
 /* LEFT SIDEBAR PANEL */
 .chat-left-sidebar {
     display: flex;
@@ -575,7 +575,10 @@ tr:hover td { background: rgba(65,151,226,0.04); }
     border-radius: 16px;
     padding: 16px;
     overflow-y: auto;
+    min-height: 0; /* Allow flexbox to control height */
 }
+
+
 
 /* Terminal Status Box */
 .terminal-status-box {
@@ -734,74 +737,12 @@ tr:hover td { background: rgba(65,151,226,0.04); }
 
 .action-btn:hover {
     background: #F5F5F7;
-    border-color: #4197E2;
-}
-
 /* Prompt Input Area */
 .prompt-input-area {
     margin-top: auto;
+    flex-shrink: 0;
 }
 
-.input-wrapper {
-    display: flex;
-    align-items: flex-end;
-    gap: 8px;
-    background: #FFFFFF;
-    border: 1px solid #E5E5E7;
-    border-radius: 16px;
-    padding: 12px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-    transition: border-color 0.2s;
-}
-
-.input-wrapper:focus-within {
-    border-color: #4197E2;
-}
-
-.chat-textarea {
-    flex: 1;
-    border: none;
-    outline: none;
-    resize: none;
-    font-size: 14px;
-    font-family: 'Inter', sans-serif;
-    color: #333;
-    min-height: 40px;
-    max-height: 120px;
-    padding: 8px;
-}
-
-.chat-textarea::placeholder {
-    color: #999;
-}
-
-.send-button {
-    background: #F5F5F7;
-    border: 1px solid #E5E5E7;
-    color: #666;
-    padding: 10px 20px;
-    border-radius: 20px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-    white-space: nowrap;
-}
-
-.send-button:hover:not(:disabled) {
-    background: #4197E2;
-    border-color: #4197E2;
-    color: white;
-}
-
-.send-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-.input-disclaimer {
-    font-size: 11px;
-    color: #999;
     text-align: center;
     margin-top: 10px;
 }
