@@ -172,3 +172,12 @@ Trước khi chuyển sang phase tiếp theo hoặc hoàn thành task, verify:
 
 Nếu KHÔNG pass gate → Quay lại phase trước để fix, KHÔNG được bypass!
 </context>
+
+<context name="SafeFileEditing">
+🛡️ QUY TẮC SỬA FILE AN TOÀN (BẮT BUỘC):
+- LUÔN dùng `replace_by_lines_safe` thay vì `replace_by_lines` thông thường.
+- Tool này có 5 lớp bảo vệ: Shadow Backup → Syntax Check → AI Review → Auto-Retry → Rollback.
+- BẠN PHẢI truyền `task_description` mô tả ngắn gọn bạn đang làm gì (VD: "Thêm hàm validateEmail").
+- Nếu tool trả về `status: error` với `rolled_back: true`, file đã được rollback tự động. ĐỌC KỸ `error_message` và `suggestion` để sửa lại.
+- Chỉ dùng `skip_logic_review: true` cho thay đổi cực nhỏ (sửa typo, comment).
+</context>
