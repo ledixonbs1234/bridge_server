@@ -34,7 +34,10 @@ function insertMessageItem(item) {
     } else {
         chatLeftSidebar.appendChild(item);
     }
-    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+    // Scroll to bottom after inserting
+    setTimeout(() => {
+        chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+    }, 0);
 }
 // Cấu hình Markdown và Highlight.js nếu có sẵn
 if (window.marked && window.hljs) {
@@ -1066,13 +1069,7 @@ function appendPermissionCard(query, permId, details) {
     `;
 
     // Chèn thẻ phê duyệt trước vùng nhập liệu để giữ ô chat ở dưới cùng
-    const promptArea = chatLeftSidebar.querySelector('.prompt-input-area');
-    if (promptArea) {
-        chatLeftSidebar.insertBefore(cardDiv, promptArea);
-    } else {
-        chatLeftSidebar.appendChild(cardDiv);
-    }
-    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+    insertMessageItem(cardDiv);
 }
 // Trả về chuỗi thời gian hiện hành định dạng HH:MM:SS
 function getCurrentTimestamp() {
@@ -1093,8 +1090,7 @@ function appendUserQuestion(msg) {
             <div class="question-content">${escHtml(msg)}</div>
         </div>
     `;
-    chatLeftSidebar.appendChild(item);
-    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+    insertMessageItem(item);
 }
 
 // Render trạng thái loading/working
@@ -1110,8 +1106,7 @@ function appendWorkingStatus() {
             </div>
         </div>
     `;
-    chatLeftSidebar.appendChild(item);
-    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+    insertMessageItem(item);
     return item;
 }
 
@@ -1135,8 +1130,7 @@ function appendCompletedCard(summary) {
             ${escHtml(summary)}
         </div>
     `;
-    chatLeftSidebar.appendChild(item);
-    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+    insertMessageItem(item);
 }
 
 // Render phản hồi bằng văn bản của AI hỗ trợ Markdown
@@ -1156,8 +1150,7 @@ function appendAIResponse(markdown) {
             <div class="response-content markdown-body" style="margin-top: 6px;">${parsedHtml}</div>
         </div>
     `;
-    chatLeftSidebar.appendChild(item);
-    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+    insertMessageItem(item);
 }
 
 // Render "Code Tool Record" hiển thị số lượng thay đổi tệp tin
@@ -1191,8 +1184,7 @@ function appendCodeToolRecord(fileChanges) {
             ${listHtml}
         </div>
     `;
-    chatLeftSidebar.appendChild(item);
-    chatLeftSidebar.scrollTop = chatLeftSidebar.scrollHeight;
+    insertMessageItem(item);
 }
 
 // Render diff visual line-by-line khi click vào một tệp tin trong Code Tool Record
