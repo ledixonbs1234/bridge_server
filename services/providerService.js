@@ -45,9 +45,8 @@ export async function loadProviderConfig(showMenu = false) {
     }
     
     // Store in global
-    const globalThis = await import('');
-    globalThis.default.activeProvider = activeProvider;
-    globalThis.default.providerConfig = providerConfig;
+    globalThis.activeProvider = activeProvider;
+    globalThis.providerConfig = providerConfig;
     
     return { activeProvider, providerConfig };
 }
