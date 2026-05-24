@@ -112,12 +112,12 @@ export default {
             if (!fs.existsSync(artifactsDir)) fs.mkdirSync(artifactsDir, { recursive: true });
 
             // Khởi tạo agent_states cho mỗi step & Ghi File-Backed Contracts
-            const stateStmt = db.prepare(`INSERT OR REPLACE INTO agent_states (pipeline_id, step_key, state, retry_count, error_history, updated_at) VALUES (?, ?, 'PENDING', 0, '[]', ?)`);
+            const stateStmt = db.prepare(`INSERT OR REPLACE INTO agent_states (pipeline_id, step_key, state, retry_count, error_history, updated_at) VALUES (?, ?, ?, ?, ?, ?)`);
             const now = new Date().toISOString();
 
             for (const stage of args.stages) {
                 for (const step of stage.steps) {
-                    stateStmt.run('CURRENT', step.step_key, now);
+                    stateStmt.run('CURRENT', step.step_key, 'PENDING', 0, '[]', now); // Truyền đủ 6 tham số
 
                     // Thiết lập Hợp đồng thực thi (Execution Contract) tĩnh cho Step
                     const contract = {
@@ -239,12 +239,12 @@ export default {
             stmt.run('CURRENT', templateData.pipeline_name, 'IN_PROGRESS', JSON.stringify(templateData));
 
             // Đồng bộ trạng thái ban đầu ra SQLite và File-backed contracts
-            const stateStmt = db.prepare(`INSERT OR REPLACE INTO agent_states (pipeline_id, step_key, state, retry_count, error_history, updated_at) VALUES (?, ?, 'PENDING', 0, '[]', ?)`);
+            const stateStmt = db.prepare(`INSERT OR REPLACE INTO agent_states (pipeline_id, step_key, state, retry_count, error_history, updated_at) VALUES (?, ?, ?, ?, ?, ?)`);
             const now = new Date().toISOString();
 
-            for (const stage of templateData.stages) {
-                for (const step of stage.steps) {
-                    stateStmt.run('CURRENT', step.step_key, now);
+                for (const stage of templateData.stages) {
+                    for (const step of stage.steps) {
+                        stateStmt.run('CURRENT', step.step_key, 'PENDING', 0, '[]', now); // Truyền đủ 6 tham số
 
                     // Thiết lập Hợp đồng thực thi (Execution Contract) tĩnh
                     const contract = {
