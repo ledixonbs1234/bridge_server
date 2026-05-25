@@ -400,7 +400,6 @@ class AIStudioBot {
                 if (!inputField) return;
                 const container = inputField.closest('form, ms-function-call-chunk, ms-chat-turn');
                 if (!container) return;
-                2290
                 const buttons = container.querySelectorAll('button');
                 for (const btn of buttons) {
                     const isSendBtn = btn.textContent.toLowerCase().includes('send') ||

@@ -143,7 +143,7 @@ router.post('/permission/respond', async (req, res) => {
         return res.status(400).json({ error: 'Thiếu tham số id hoặc response' });
     }
     
-    const agentService = await import('../../services/agentService.js');
+    const agentService = await import('../services/agentService.js');
     if (agentService.pendingPermissions.has(id)) {
         const resolve = agentService.pendingPermissions.get(id);
         agentService.pendingPermissions.delete(id);
