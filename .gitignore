@@ -1,0 +1,9 @@
+(public/app.js is a source file, and there are no build artifacts, dependencies, or temporary files in the changes```
+.agent_memory
+agent_skills
+profile/
+.agents/
+node_modules
+
+.agent_memory/
+```)
