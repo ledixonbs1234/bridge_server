@@ -1,1 +1,3 @@
-Nothing needs to be added to .gitignore since the changes only include source files (.js files) and no build artifacts, dependencies, or temporary files.
+```javascript
+
+```

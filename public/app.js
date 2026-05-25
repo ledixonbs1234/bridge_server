@@ -681,6 +681,9 @@ const tabLog = document.getElementById('tab-log');
 // Store for file changes
 let currentFileChanges = [];
 
+// Toggle state for reformulateQuery feature
+let isReformulateEnabled = true; // Default: enabled
+
 // Helper to get current timestamp
 function getCurrentTimestamp() {
     const now = new Date();
@@ -797,6 +800,11 @@ function initChat() {
         chatMessages.style.display = 'flex';
     }
     appendMsg('bot', 'Xin chào! Hãy trò chuyện trực tiếp tại đây. Tất cả các yêu cầu cấp quyền chạy tool của Agent sẽ được tương tác trực tiếp trong khung chat này.');
+    
+    // Set initial placeholder with reformulate status
+    if (chatInput) {
+        chatInput.placeholder = "Code your creativity here. (Tab: Reformulate ON)";
+    }
 }
 
 // Initialize chat on page load
@@ -819,6 +827,19 @@ chatInput.addEventListener('input', function () {
 });
 
 chatInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Tab') {
+        e.preventDefault();
+        isReformulateEnabled = !isReformulateEnabled;
+        
+        // Visual feedback in placeholder or status
+        const placeholderText = isReformulateEnabled 
+            ? "Code your creativity here. (Tab: Reformulate ON)" 
+            : "Code your creativity here. (Tab: Reformulate OFF)";
+        chatInput.placeholder = placeholderText;
+        
+        // Optional: Show a brief toast/indicator
+        console.log(`[Chat] ReformulateQuery: ${isReformulateEnabled ? 'ON' : 'OFF'}`);
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         if (this.value.trim() !== '' && !isGenerating) sendChat();
@@ -860,7 +881,7 @@ async function sendChat() {
         const response = await fetch(API + '/api/dashboard/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: msg, stream: true }),
+            body: JSON.stringify({ message: msg, stream: true, useReformulate: isReformulateEnabled }),
             signal: abortController.signal
         });
 

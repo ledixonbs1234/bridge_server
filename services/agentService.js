@@ -33,6 +33,7 @@ export async function executeAgentTurn({
     message,
     history = [],
     sessionFile = null,
+    useReformulate = true, // Default to true for backward compatibility
     onChunk = null,
     onAction = null,
     onSystem = null,
@@ -49,7 +50,7 @@ export async function executeAgentTurn({
         if (onLog) onLog("🔍 Đang chuẩn bị bối cảnh và trích xuất bộ nhớ...");
 
         const [reformulatedText, injectedMemory] = await Promise.all([
-            reformulateQuery(message, activeProvider, onLog),
+            useReformulate ? reformulateQuery(message, activeProvider, onLog) : Promise.resolve(message),
             recallMemory(message, history.map(m => m.content).join(' '), onLog)
         ]);
 

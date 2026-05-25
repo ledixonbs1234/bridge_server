@@ -6,7 +6,7 @@ import { getGitDiffStats } from '../utils/gitStats.js';
 const router = express.Router();
 
 router.post('/chat', async (req, res) => {
-    const { message, stream } = req.body;
+    const { message, stream, useReformulate } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
 
     console.log(chalk.magenta(`\n[Web Terminal] 📥 "${message.substring(0, 80)}"${stream ? ' (Stream)' : ''}`));
@@ -54,6 +54,7 @@ router.post('/chat', async (req, res) => {
             message,
             history: globalThis.default.activeWebHistory || [],
             sessionFile: globalThis.default.activeWebSessionFile,
+            useReformulate: useReformulate !== false, // Default to true if not specified
             onChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
             } : null,
@@ -156,6 +157,7 @@ router.post('/v1/chat/completions', async (req, res) => {
         const result = await executeAgentTurn({
             message: lastUserMessage,
             history: messages.slice(0, -1),
+            useReformulate: true, // Always use reformulate for v1 API
             onChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({
                     id: "chatcmpl-" + taskId,
