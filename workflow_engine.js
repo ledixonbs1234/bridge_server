@@ -458,7 +458,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
             try {
                 const workerSkills = {};
-                const vitalSkills = ['read_file', 'read_file_lines', 'replace_by_lines', 'write_file', 'find_files', 'get_os_context', 'execute_terminal_command']; 
+               const vitalSkills = ['read_file', 'read_file_lines', 'replace_by_lines_safe', 'write_file', 'find_files', 'get_os_context', 'execute_terminal_command'];
                 if (step.tool && this.skillRegistry[step.tool]) {
                     workerSkills[step.tool] = this.skillRegistry[step.tool];
                 }

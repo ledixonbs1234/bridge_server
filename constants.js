@@ -39,14 +39,17 @@ export const SKILL_GROUPS = {
         'read_file',
         'read_multiple_files',
         'write_file',
-        'replace_by_lines',
+        'replace_by_lines_safe',
+        'read_file_lines',
         'list_directory',
         'execute_terminal_command',
         'get_os_context',
+        'stop_terminal_process',
         'memorize_rule',
         'create_pipeline_plan',
         'load_harness_template',
-        'find_files'
+        'find_files',
+        'synthesize_skill'
     ],
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
@@ -56,7 +59,10 @@ export const SKILL_GROUPS = {
         'read_file',
         'read_file_lines',
         'find_files',
-        'list_directory'
+        'list_directory',
+        'execute_terminal_command',
+        'get_os_context',
+        'stop_terminal_process'
     ],
     [SKILL_CATEGORIES.COMPLEX]: null
 };

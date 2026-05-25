@@ -195,8 +195,35 @@ export function classifyIntent(userMessage) {
 export function filterSkillsByIntent(intent, fullRegistry) {
     const SKILL_GROUPS = {
         chat: [],
-        code: ['read_file', 'read_multiple_files', 'write_file', 'replace_by_lines', 'list_directory', 'execute_terminal_command', 'get_os_context'],
-        research: ['web_markdown_reader', 'dynamic_browser_controller', 'create_pipeline_plan', 'load_harness_template', 'read_file', 'read_file_lines', 'find_files', 'list_directory']
+        code: [
+            'read_file',
+            'read_multiple_files',
+            'write_file',
+            'replace_by_lines_safe',
+            'read_file_lines',
+            'list_directory',
+            'execute_terminal_command',
+            'get_os_context',
+            'stop_terminal_process',
+            'find_files',
+            'create_pipeline_plan',
+            'load_harness_template',
+            'memorize_rule',
+            'synthesize_skill'
+        ],
+        research: [
+            'web_markdown_reader',
+            'dynamic_browser_controller',
+            'create_pipeline_plan',
+            'load_harness_template',
+            'read_file',
+            'read_file_lines',
+            'find_files',
+            'list_directory',
+            'execute_terminal_command',
+            'get_os_context',
+            'stop_terminal_process'
+        ]
     };
     if (intent === 'complex' || !SKILL_GROUPS[intent]) return fullRegistry;
     if (intent === 'chat') return {};

@@ -60,13 +60,15 @@ router.post('/chat', async (req, res) => {
             onSystem: stream ? (content) => {
                 res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
             } : null,
-            onAskPermission: async (query) => {
+          onAskPermission: async (query) => {
                 const { randomUUID } = await import('crypto');
                 const permId = 'perm_' + randomUUID();
                 // Import logBuffer từ service
                 const agentService = await import('../services/agentService.js');
                 const cleanDetails = agentService.logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
-                agentService.logBuffer = [];
+                
+                // SỬA LỖI: Gọi hàm clearLogBuffer() thay vì gán trực tiếp vào thuộc tính chỉ đọc
+                agentService.clearLogBuffer();
 
                 res.write(`data: ${JSON.stringify({ type: 'ask_permission', id: permId, query: query.replace(/\x1b\[[0-9;]*m/g, ''), details: cleanDetails })}\n\n`);
                 

@@ -30,7 +30,7 @@ Bạn CẦN THIẾT LẬP hành động gọi tool này thành PHẢN XẠ VÔ �
 SỬA CODE:
 - TUYỆT ĐỐI KHÔNG ghi đè toàn bộ file nếu chỉ cần sửa 1 phần nhỏ.
 - Bạn phải dùng `read_file_lines` để đọc file trước. Harness sẽ trả về kết quả kèm SỐ DÒNG (VD: `15 | code`).
-- Căn cứ vào số dòng đó, hãy gọi `replace_by_lines` truyền vào `start_line` và `end_line` để thay thế. Không cần dùng lệnh find/replace text để tránh lỗi sai lệch khoảng trắng.
+- Căn cứ vào số dòng đó, hãy gọi `replace_by_lines_safe` truyền vào `start_line` và `end_line` để thay thế. Không cần dùng lệnh find/replace text để tránh lỗi sai lệch khoảng trắng.
 - LƯU Ý: Nội dung `replace_string` của bạn phải là MÃ NGUỒN THUẦN TÚY (Không được tự ý viết thêm số dòng vào nội dung chèn).
 </context>
 
