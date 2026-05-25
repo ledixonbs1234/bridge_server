@@ -30,9 +30,15 @@ export async function loadSkills() {
                 const pluginModule = await import(fileUrl);
                 const plugin = pluginModule.default;
 
+                if (!plugin) continue;
+
                 for (const [skillName, skillDef] of Object.entries(plugin)) {
-                    SKILL_REGISTRY[skillName] = skillDef;
-                    totalHardSkills++;
+                    if (skillDef && typeof skillDef === 'object' && typeof skillDef.description === 'string') {
+                        SKILL_REGISTRY[skillName] = skillDef;
+                        totalHardSkills++;
+                    } else {
+                        continue;
+                    }
                 }
             } catch (err) {
                 console.error(`[Plugin] ❌ Lỗi nạp JS ${file}:`, err.message);

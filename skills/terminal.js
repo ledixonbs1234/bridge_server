@@ -2,7 +2,7 @@ import { exec, spawn } from 'child_process';
 import os from 'os';
 import boxen from 'boxen';
 import chalk from 'chalk';
-import { analyzeCommand, printCommandWarning, getCommandTimeout } from './command_guard.js';
+import { analyzeCommand, printCommandWarning, getCommandTimeout } from './validators/command_guard.js';
 // 1. Quản lý các tiến trình đang chạy ngầm
 const activeProcesses = new Map();
 let processCounter = 1;

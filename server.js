@@ -27,7 +27,6 @@ app.use('/dashboard', express.static(path.join(__dirname, 'public')));
 
 // Health check endpoint
 app.get('/health', async (req, res) => {
-    const globalThis = await import('globalthis');
     const health = {
         status: 'ok',
         timestamp: new Date().toISOString(),
@@ -37,8 +36,8 @@ app.get('/health', async (req, res) => {
             heapUsed: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`,
             heapTotal: `${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)}MB`
         },
-        provider: globalThis.default?.activeProvider?.getDisplayName() || 'unknown',
-        model: globalThis.default?.activeProvider?.model || 'unknown',
+        provider: globalThis.activeProvider?.getDisplayName() || 'unknown',
+        model: globalThis.activeProvider?.model || 'unknown',
         skills: {
             total: Object.keys(SKILL_REGISTRY).length,
             hardSkills: Object.keys(SKILL_REGISTRY).filter(k => !k.startsWith('workflow_')).length,

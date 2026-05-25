@@ -4,7 +4,7 @@ import os from 'os';
 import boxen from 'boxen';
 import chalk from 'chalk';
 import { highlight } from 'cli-highlight';
-import { validatePath, printPathWarning } from './path_guard.js';
+import { validatePath, printPathWarning } from './validators/path_guard.js';
 import { validateSyntax } from './validators/syntax_validator.js';
 import { createShadow, cleanupOldShadows } from './validators/shadow_file.js';
 import { reviewLogicChange } from './validators/logic_reviewer.js';

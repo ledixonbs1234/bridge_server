@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 
 const EXT_MAP = {
   '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',

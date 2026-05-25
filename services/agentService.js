@@ -292,9 +292,7 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
 export async function runCriticAgent(sessionLog, onLog) {
     const logger = onLog || global.logToWebChat;
     
-    // Import activeProvider từ global
-    const globalThis = await import('globalthis');
-    const activeProvider = globalThis.default?.activeProvider;
+    const activeProvider = globalThis.activeProvider;
     
     if (!activeProvider || !activeProvider.chat) return;
 
@@ -457,8 +455,6 @@ export function saveSession(chatHistory, goalText, customFileName = null) {
         filePath = path.join(SESSION_DIR, fileName);
     }
     
-    // Get provider info from global
-    const globalThis = import('globalthis').then(m => m.default);
     const providerName = globalThis.activeProvider?.getDisplayName ? globalThis.activeProvider.getDisplayName() : 'unknown';
     
     const meta = { _type: 'meta', goal: goalText, provider: providerName, savedAt: new Date().toISOString() };
@@ -535,9 +531,8 @@ export async function chatWithFailover(options) {
     const MAX_RETRIES = 5;
 
     for (const providerName of chain) {
-        const globalThis = await import('globalthis');
-        const provider = (providerName === globalThis.default?.providerConfig?.activeProvider)
-            ? globalThis.default?.activeProvider
+        const provider = (providerName === globalThis.providerConfig?.activeProvider)
+            ? globalThis.activeProvider
             : await getProviderInstance(providerName);
 
         if (!provider || !provider.chat) continue;

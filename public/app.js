@@ -878,7 +878,7 @@ async function sendChat() {
     abortController = new AbortController();
 
     try {
-        const response = await fetch(API + '/api/dashboard/chat', {
+        const response = await fetch(API + '/api/agent/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: msg, stream: true, useReformulate: isReformulateEnabled }),

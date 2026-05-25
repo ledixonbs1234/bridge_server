@@ -38,41 +38,34 @@ router.get('/sessions', (req, res) => {
     const SESSION_DIR = path.join(projectRoot, '.agent_memory', 'sessions');
     const sessions = listSessions(SESSION_DIR);
     
-    // Get persistentGoal from global
-    import('globalthis').then(globalThis => {
-        res.json({ sessions, currentGoal: globalThis.default?.persistentGoal || null });
-    }).catch(() => {
-        res.json({ sessions, currentGoal: null });
-    });
+    res.json({ sessions, currentGoal: globalThis.persistentGoal || null });
 });
 
 // Active session endpoint
 router.get('/sessions/active', async (req, res) => {
     const SESSION_DIR = path.join(projectRoot, '.agent_memory', 'sessions');
-    const globalThis = await import('globalthis');
     
-    if (!globalThis.default.activeWebSessionFile) {
+    if (!globalThis.activeWebSessionFile) {
         const latest = getLatestSession(SESSION_DIR);
         if (latest) {
-            globalThis.default.activeWebSessionFile = latest.file;
-            globalThis.default.activeWebHistory = latest.messages;
-            if (latest.meta?.goal) globalThis.default.persistentGoal = latest.meta.goal;
-            return res.json({ success: true, active: true, filename: globalThis.default.activeWebSessionFile, messages: globalThis.default.activeWebHistory, goal: globalThis.default.persistentGoal });
+            globalThis.activeWebSessionFile = latest.file;
+            globalThis.activeWebHistory = latest.messages;
+            if (latest.meta?.goal) globalThis.persistentGoal = latest.meta.goal;
+            return res.json({ success: true, active: true, filename: globalThis.activeWebSessionFile, messages: globalThis.activeWebHistory, goal: globalThis.persistentGoal });
         }
-        return res.json({ success: true, active: false, filename: null, messages: [], goal: globalThis.default?.persistentGoal || null });
+        return res.json({ success: true, active: false, filename: null, messages: [], goal: globalThis.persistentGoal || null });
     }
-    res.json({ success: true, active: true, filename: globalThis.default.activeWebSessionFile, messages: globalThis.default.activeWebHistory, goal: globalThis.default.persistentGoal });
+    res.json({ success: true, active: true, filename: globalThis.activeWebSessionFile, messages: globalThis.activeWebHistory, goal: globalThis.persistentGoal });
 });
 
 // Set active session
 router.post('/sessions/active', async (req, res) => {
     const { filename } = req.body;
     const SESSION_DIR = path.join(projectRoot, '.agent_memory', 'sessions');
-    const globalThis = await import('globalthis');
     
     if (!filename) {
-        globalThis.default.activeWebSessionFile = null;
-        globalThis.default.activeWebHistory = [];
+        globalThis.activeWebSessionFile = null;
+        globalThis.activeWebHistory = [];
         return res.json({ success: true, filename: null, messages: [] });
     }
     
@@ -92,9 +85,9 @@ router.post('/sessions/active', async (req, res) => {
                 messages.push(obj);
             } catch { /* skip */ }
         }
-        globalThis.default.activeWebSessionFile = filename;
-        globalThis.default.activeWebHistory = messages;
-        if (meta?.goal) globalThis.default.persistentGoal = meta.goal;
+        globalThis.activeWebSessionFile = filename;
+        globalThis.activeWebHistory = messages;
+        if (meta?.goal) globalThis.persistentGoal = meta.goal;
         res.json({ success: true, filename, messages, meta });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -131,8 +124,7 @@ router.get('/sessions/:filename', (req, res) => {
 // Goal endpoint
 router.post('/goal', async (req, res) => {
     const { goal } = req.body;
-    const globalThis = await import('globalthis');
-    globalThis.default.persistentGoal = goal;
+    globalThis.persistentGoal = goal;
     res.json({ success: true, goal });
 });
 

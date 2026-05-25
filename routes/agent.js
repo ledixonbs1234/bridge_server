@@ -23,14 +23,12 @@ router.post('/chat', async (req, res) => {
     try {
         // Xử lý lệnh đặc biệt /clear và /new
         if (message.trim() === '/clear' || message.trim() === '/new') {
-            // Import từ global
-            const globalThis = await import('globalthis');
-            globalThis.default.activeWebSessionFile = null;
-            globalThis.default.activeWebHistory = [];
-            if (typeof globalThis.default.activeProvider?.resetSession === 'function') {
-                globalThis.default.activeProvider.resetSession();
+            globalThis.activeWebSessionFile = null;
+            globalThis.activeWebHistory = [];
+            if (typeof globalThis.activeProvider?.resetSession === 'function') {
+                globalThis.activeProvider.resetSession();
             }
-            globalThis.default.persistentGoal = null;
+            globalThis.persistentGoal = null;
             
             const respMsg = "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";
             if (stream) {
@@ -42,18 +40,16 @@ router.post('/chat', async (req, res) => {
             return;
         }
 
-        // Tạo hoặc khôi phục session hoạt động
-        const globalThis = await import('globalthis');
-        if (!globalThis.default.activeWebSessionFile) {
+        if (!globalThis.activeWebSessionFile) {
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-            globalThis.default.activeWebSessionFile = `session_${timestamp}.jsonl`;
-            globalThis.default.activeWebHistory = [];
+            globalThis.activeWebSessionFile = `session_${timestamp}.jsonl`;
+            globalThis.activeWebHistory = [];
         }
 
         const result = await executeAgentTurn({
             message,
-            history: globalThis.default.activeWebHistory || [],
-            sessionFile: globalThis.default.activeWebSessionFile,
+            history: globalThis.activeWebHistory || [],
+            sessionFile: globalThis.activeWebSessionFile,
             useReformulate: useReformulate !== false, // Default to true if not specified
             onChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
@@ -82,29 +78,28 @@ router.post('/chat', async (req, res) => {
             } : null
         });
 
-        // Đồng bộ lại dữ liệu sau khi Orchestrator xử lý xong
-        globalThis.default.activeWebHistory = result.history;
-        globalThis.default.activeWebSessionFile = result.sessionFile;
+        globalThis.activeWebHistory = result.history;
+        globalThis.activeWebSessionFile = result.sessionFile;
 
         // Phản hồi kết quả cuối cùng
         if (result.type === 'handover') {
             if (stream) {
                 res.write(`data: ${JSON.stringify({ type: 'system', content: "✅ Workflow Engine đã xử lý thành công toàn bộ Pipeline!" })}\n\n`);
                 const fileChanges = getGitDiffStats();
-                res.write(`data: ${JSON.stringify({ type: 'done', response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: globalThis.default.activeWebHistory, fileChanges })}\n\n`);
+                res.write(`data: ${JSON.stringify({ type: 'done', response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: globalThis.activeWebHistory, fileChanges })}\n\n`);
                 res.end();
             } else {
                 const fileChanges = getGitDiffStats();
-                res.json({ success: true, response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: globalThis.default.activeWebHistory, fileChanges });
+                res.json({ success: true, response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: globalThis.activeWebHistory, fileChanges });
             }
         } else {
             if (stream) {
                 const fileChanges = getGitDiffStats();
-                res.write(`data: ${JSON.stringify({ type: 'done', response: result.response, history: globalThis.default.activeWebHistory, fileChanges })}\n\n`);
+                res.write(`data: ${JSON.stringify({ type: 'done', response: result.response, history: globalThis.activeWebHistory, fileChanges })}\n\n`);
                 res.end();
             } else {
                 const fileChanges = getGitDiffStats();
-                res.json({ success: true, response: result.response, history: globalThis.default.activeWebHistory, fileChanges });
+                res.json({ success: true, response: result.response, history: globalThis.activeWebHistory, fileChanges });
             }
         }
 
@@ -129,9 +124,8 @@ router.post('/v1/chat/completions', async (req, res) => {
 
     // Xử lý phím tắt /clear hoặc /new
     if (lastUserMessage.trim() === '/clear' || lastUserMessage.trim() === '/new') {
-        const globalThis = await import('globalthis');
-        if (typeof globalThis.default.activeProvider?.resetSession === 'function') {
-            globalThis.default.activeProvider.resetSession();
+        if (typeof globalThis.activeProvider?.resetSession === 'function') {
+            globalThis.activeProvider.resetSession();
         }
         const clearMsg = "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";
         if (stream) {
