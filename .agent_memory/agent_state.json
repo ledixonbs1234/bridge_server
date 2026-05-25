@@ -1,0 +1,80 @@
+{
+  "memories": [],
+  "pipelines": [],
+  "agent_states": [],
+  "traces": [
+    {
+      "id": "trace_738c00ca264c460c",
+      "name": "test",
+      "pipeline_id": null,
+      "status": "2026-05-25T15:52:30.191Z"
+    },
+    {
+      "id": "trace_576f1c773f484e25",
+      "name": "Test Trace",
+      "pipeline_id": "test-pipeline",
+      "status": "completed",
+      "completed_at": "2026-05-25T15:54:41.430Z",
+      "total_duration_ms": null
+    },
+    {
+      "id": "trace_567c3e97f9554f80",
+      "name": "Test Trace 3",
+      "pipeline_id": "test-pipeline-3",
+      "status": "completed",
+      "completed_at": "2026-05-25T15:56:53.650Z",
+      "total_duration_ms": null
+    },
+    {
+      "id": "trace_808037f8e46b4ca3",
+      "name": "Test Trace 3",
+      "pipeline_id": "test-pipeline-3",
+      "status": "completed",
+      "completed_at": "2026-05-25T15:57:13.827Z",
+      "total_duration_ms": null
+    }
+  ],
+  "trace_spans": [
+    {
+      "id": "span_912d3a6eb72a4bdc",
+      "trace_id": "trace_576f1c773f484e25",
+      "parent_span_id": null,
+      "name": "Test Span",
+      "type": "tool",
+      "status": "completed",
+      "started_at": "{\"input\":\"test\"}",
+      "completed_at": "2026-05-25T15:54:41.429Z",
+      "duration_ms": null,
+      "output": "{\"output\":\"result\"}",
+      "error": null
+    },
+    {
+      "id": "span_ed1d914f0d16480d",
+      "trace_id": "trace_567c3e97f9554f80",
+      "parent_span_id": null,
+      "name": "Test Span",
+      "type": "tool",
+      "status": "completed",
+      "started_at": "{\"input\":\"test\"}",
+      "completed_at": "2026-05-25T15:56:53.649Z",
+      "duration_ms": null,
+      "output": "{\"output\":\"result\"}",
+      "error": null
+    },
+    {
+      "id": "span_fe703a5ccae24881",
+      "trace_id": "trace_808037f8e46b4ca3",
+      "parent_span_id": null,
+      "name": "Test Span",
+      "type": "tool",
+      "status": "completed",
+      "started_at": "2026-05-25T15:57:13.825Z",
+      "input": "{\"input\":\"test\"}",
+      "completed_at": "2026-05-25T15:57:13.826Z",
+      "duration_ms": 1,
+      "output": "{\"output\":\"result\"}",
+      "error": null
+    }
+  ],
+  "tool_telemetry": []
+}
