@@ -1,8 +1,9 @@
-// skills/validators/syntax_validator.js
 import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
+import os from 'os';
+import crypto from 'crypto';
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 
@@ -14,10 +15,6 @@ const EXT_MAP = {
   '.sh': 'shell', '.bash': 'shell'
 };
 
-/**
- * Validate cú pháp của nội dung file theo ngôn ngữ
- * @returns {{ valid: boolean, error?: string, language: string }}
- */
 export function validateSyntax(filePath, content) {
   const ext = path.extname(filePath).toLowerCase();
   const language = EXT_MAP[ext] || 'unknown';
@@ -37,7 +34,6 @@ export function validateSyntax(filePath, content) {
       case 'yaml':
         return validateYAML(content);
       default:
-        // Không có validator → skip (vẫn coi là pass)
         return { valid: true, language, skipped: true };
     }
   } catch (err) {
@@ -47,7 +43,6 @@ export function validateSyntax(filePath, content) {
 
 function validateJavaScript(code, jsx = false) {
   try {
-    // Dùng acorn nếu có, fallback sang Function constructor
     const acorn = tryRequire('acorn');
     const acornJsx = tryRequire('acorn-jsx');
     
@@ -64,7 +59,6 @@ function validateJavaScript(code, jsx = false) {
       return { valid: true, language: jsx ? 'jsx' : 'javascript' };
     }
     
-    // Fallback: thử parse bằng Node
     new Function(code);
     return { valid: true, language: 'javascript', fallback: true };
   } catch (err) {
@@ -115,12 +109,17 @@ function validateJSON(code) {
 }
 
 function validatePython(filePath, content) {
-  // Ghi tạm và dùng python -m py_compile
-  const tmpFile = filePath + '.syntax_check.py';
+  // SỬA LỖI: Ghi tệp tạm vào thư mục tạm của hệ điều hành để tránh kích hoạt file watcher của dự án
+  const tempDir = os.tmpdir();
+  const randName = crypto.randomBytes(8).toString('hex');
+  const tmpFile = path.join(tempDir, `syntax_check_${randName}.py`);
+  
   try {
     fs.writeFileSync(tmpFile, content, 'utf8');
     const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-    execSync(`${pythonCmd} -m py_compile "${tmpFile}"`, { 
+    
+    // SỬA LỖI: Dùng ast.parse để kiểm tra cú pháp trong bộ nhớ, hoàn toàn không sinh tệp compiled (.pyc) gây ô nhiễm
+    execSync(`${pythonCmd} -c "import ast; ast.parse(open(r'${tmpFile}', encoding='utf-8').read())"`, { 
       stdio: 'pipe',
       timeout: 10000 
     });
@@ -148,14 +147,12 @@ function tryRequire(pkg) {
 }
 
 function extractSyntaxError(msg) {
-  // Rút gọn message lỗi cho dễ đọc
   const match = msg.match(/Unexpected token.*?(\(\d+:\d+\))/);
   return match ? match[0] : msg.split('\n')[0];
 }
 
 function extractPythonError(stderr) {
   const lines = stderr.split('\n').filter(l => l.trim());
-  // Lấy dòng SyntaxError cuối
   const syntaxLine = lines.reverse().find(l => l.includes('SyntaxError') || l.includes('Error'));
   return syntaxLine || lines[0] || stderr;
 }

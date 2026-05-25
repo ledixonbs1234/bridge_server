@@ -29,11 +29,12 @@ export function appendToLogBuffer(str) { logBuffer.push(str); }
 /**
  * Hàm điều phối trung tâm thực hiện một lượt xử lý (turn) của Agent.
  */
+// Thay đổi duy nhất tại điểm đầu hàm executeAgentTurn:
 export async function executeAgentTurn({
     message,
     history = [],
     sessionFile = null,
-    useReformulate = true, // Default to true for backward compatibility
+    useReformulate = true,
     onChunk = null,
     onAction = null,
     onSystem = null,
@@ -44,6 +45,12 @@ export async function executeAgentTurn({
     const traceId = tracer.createTrace(message.substring(0, 80));
     
     if (onLog) global.logToWebChat = onLog;
+
+    // KHẮC PHỤC LỖI: Liên kết chặt chẽ askPermission lên phạm vi toàn cục ngay khi nhận lượt chat
+    const originalAskPermission = global.askPermission;
+    if (onAskPermission) {
+        global.askPermission = onAskPermission;
+    }
 
     try {
         if (onSystem) onSystem("🔍 Đang chuẩn bị bối cảnh và trích xuất bộ nhớ...");
@@ -57,7 +64,7 @@ export async function executeAgentTurn({
         const currentHistory = [...history];
         currentHistory.push({ role: 'user', content: reformulatedText });
 
-        // Nén ngữ cảnh nếu chat history quá dài (>15 tin nhắn)
+        // Nén ngữ cảnh nếu chat history quá dài
         if (currentHistory.length > 15 && activeProvider?.chat) {
             if (onSystem) onSystem("⚙️ Lịch sử hội thoại quá dài, đang nén ngữ cảnh...");
             if (onLog) onLog("⚙️ Lịch sử hội thoại quá dài, đang nén ngữ cảnh...");
@@ -103,13 +110,7 @@ export async function executeAgentTurn({
             onStreamChunk: onChunk,
             executeSkill: async (funcName, args) => {
                 if (onAction) onAction(funcName);
-
                 const toolSpanId = traceId ? tracer.startSpan(traceId, funcName, 'tool', llmSpanId, args) : null;
-
-                const originalAskPermission = global.askPermission;
-                if (onAskPermission) {
-                    global.askPermission = onAskPermission;
-                }
 
                 try {
                     const toolResult = await executeSkillForProvider(funcName, args, activeProvider, onLog);
@@ -125,8 +126,6 @@ export async function executeAgentTurn({
                 } catch (toolErr) {
                     if (toolSpanId) tracer.endSpan(toolSpanId, 'failed', null, toolErr.message);
                     throw toolErr;
-                } finally {
-                    global.askPermission = originalAskPermission;
                 }
             }
         });
@@ -139,6 +138,7 @@ export async function executeAgentTurn({
         if (result === "__HANDOVER_TO_ENGINE__" || (typeof result === 'string' && result.includes("__HANDOVER_TO_ENGINE__"))) {
             if (onSystem) onSystem("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
             if (onLog) onLog("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
+            
             const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, (fn, args) => executeSkillForProvider(fn, args, activeProvider, onLog), message);
             await engine.run();
 
@@ -151,7 +151,6 @@ export async function executeAgentTurn({
 
         const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
 
-        // Chạy Critic Agent nếu có lỗi trong phiên
         if (currentSessionLog.some(entry => !entry.success)) {
             runCriticAgent([...currentSessionLog], onLog).catch(() => { });
         }
@@ -161,6 +160,8 @@ export async function executeAgentTurn({
         if (traceId) tracer.completeTrace(traceId, 'failed');
         throw err;
     } finally {
+        // KHẮC PHỤC LỖI: Chỉ hoàn trả trạng thái askPermission nguyên bản khi toàn bộ turn kết thúc (bao gồm cả engine)
+        global.askPermission = originalAskPermission;
         global.logToWebChat = null;
     }
 }

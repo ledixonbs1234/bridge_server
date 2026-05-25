@@ -8,30 +8,85 @@ import { validatePath, printPathWarning } from './validators/path_guard.js';
 import { validateSyntax } from './validators/syntax_validator.js';
 import { createShadow, cleanupOldShadows } from './validators/shadow_file.js';
 import { reviewLogicChange } from './validators/logic_reviewer.js';
+
 /**
- * Chuẩn hóa path để AI luôn an toàn với JSON:
- * - normalize path
- * - chuyển toàn bộ "\" -> "/"
+ * Chuẩn hóa path để tránh lỗi ký tự phân tách trên các OS khác nhau
  */
 function aiSafePath(inputPath) {
     if (!inputPath || typeof inputPath !== 'string') {
         throw new Error('Path không hợp lệ');
     }
-
     const normalized = path.normalize(inputPath);
-
     return normalized.replace(/\\/g, '/');
+}
+
+/**
+ * Convert input path từ AI và kiểm duyệt bảo mật bằng Path Guard
+ */
+function resolveUserPath(inputPath) {
+    if (!inputPath || typeof inputPath !== 'string') {
+        throw new Error('Path không hợp lệ');
+    }
+
+    const validation = validatePath(inputPath);
+    if (!validation.allowed) {
+        printPathWarning(validation, inputPath);
+        throw new Error(
+            `PATH_BLOCKED: Path "${inputPath}" bị chặn vì lý do bảo mật. ` +
+            `Lý do: ${validation.reason}. ` +
+            `Vui lòng sử dụng đường dẫn trong các thư mục được phép.`
+        );
+    }
+    return validation.resolved;
+}
+
+/**
+ * Helper dùng chung để thực hiện thay thế dòng an toàn (hỗ trợ cả Append)
+ */
+function performLineReplacement(content, replaceString, startLine, endLine) {
+    const isCRLF = content.includes('\r\n');
+    const lineEnding = isCRLF ? '\r\n' : '\n';
+    const lines = content.split(/\r?\n/);
+    const totalLines = lines.length;
+
+    const start = Math.max(1, startLine) - 1;
+    const isAppend = (start === totalLines);
+    const end = isAppend ? start : Math.min(totalLines - 1, endLine - 1);
+
+    if (start > end || start > totalLines) {
+        throw new Error(`Khoảng dòng không hợp lệ! File hiện tại có ${totalLines} dòng.`);
+    }
+
+    let newLines = replaceString ? replaceString.split(/\r?\n/) : [];
+
+    // Smart Line Anchor Stripper: Tránh việc xóa nhầm toán tử logic dạng '1 | 2'
+    newLines = newLines.map((line, idx) => {
+        const match = line.match(/^(\d+)\s*\|\s(.*)$/);
+        if (match) {
+            const lineNum = parseInt(match[1], 10);
+            // Chỉ loại bỏ tiền tố số dòng nếu giá trị số khớp hoặc gần khớp với dòng đang biên tập
+            if (Math.abs(lineNum - (startLine + idx)) <= 2) {
+                return match[2];
+            }
+        }
+        return line;
+    });
+
+    if (isAppend) {
+        lines.splice(start, 0, ...newLines);
+    } else {
+        lines.splice(start, end - start + 1, ...newLines);
+    }
+
+    return lines.join(lineEnding);
 }
 
 function searchFilesRecursive(dir, query, maxResults = 40, currentDepth = 0, maxDepth = 4) {
     let results = [];
     if (currentDepth > maxDepth) return results;
 
-    // Validate thư mục trước khi quét
     const validation = validatePath(dir);
-    if (!validation.allowed) {
-        return results; // Silent skip forbidden directories
-    }
+    if (!validation.allowed) return results;
 
     try {
         const list = fs.readdirSync(dir, { withFileTypes: true });
@@ -41,14 +96,12 @@ function searchFilesRecursive(dir, query, maxResults = 40, currentDepth = 0, max
             if (file.isDirectory()) {
                 if (['node_modules', '.git', 'profile', 'dist', 'build', 'out'].includes(file.name)) continue;
 
-                // Validate thư mục con trước khi đệ quy
                 const subValidation = validatePath(fullPath);
                 if (!subValidation.allowed) continue;
 
                 results = results.concat(searchFilesRecursive(fullPath, query, maxResults, currentDepth + 1, maxDepth));
             } else if (file.isFile()) {
                 if (file.name.toLowerCase().includes(query.toLowerCase())) {
-                    // Validate file trước khi thêm vào kết quả
                     const fileValidation = validatePath(fullPath);
                     if (fileValidation.allowed) {
                         results.push(aiSafePath(fullPath));
@@ -58,100 +111,51 @@ function searchFilesRecursive(dir, query, maxResults = 40, currentDepth = 0, max
             if (results.length >= maxResults) break;
         }
     } catch (e) {
-        // Bỏ qua lỗi truy cập
+        // Bỏ qua lỗi truy cập cục bộ
     }
     return results.slice(0, maxResults);
 }
 
 async function autoFixSyntaxError({ originalCode, syntaxError, language, filePath }) {
-  if (!globalThis.activeProvider) return originalCode;
-  
-  const prompt = `Sửa LỖI CÚ PHÁP trong đoạn code ${language} sau:
-
-CODE:
-\`\`\`
-${originalCode}
-\`\`\`
-
-LỖI: ${syntaxError}
-
-Chỉ trả về CODE ĐÃ SỬA, không giải thích, không markdown.`;
-
-  try {
-    const resp = await globalThis.activeProvider.chat({
-      messages: [{ role: 'user', content: prompt }],
-      skillRegistry: {},
-      executeSkill: async () => {},
-      systemPrompt: "Chỉ trả về code, không giải thích.",
-      maxSteps: 1, isWorker: true, workerType: 'syntax_fixer'
-    });
-    return resp.replace(/```[a-z]*\n?/g, '').replace(/```/g, '').trim();
-  } catch {
-    return originalCode;
-  }
+    if (!globalThis.activeProvider) return originalCode;
+    const prompt = `Sửa LỖI CÚ PHÁP trong đoạn code ${language} sau:\n\nCODE:\n\`\`\`\n${originalCode}\n\`\`\`\n\nLỖI: ${syntaxError}\n\nChỉ trả về CODE ĐÃ SỬA, không giải thích, không markdown.`;
+    try {
+        const resp = await globalThis.activeProvider.chat({
+            messages: [{ role: 'user', content: prompt }],
+            skillRegistry: {},
+            executeSkill: async () => {},
+            systemPrompt: "Chỉ trả về code, không giải thích.",
+            maxSteps: 1, isWorker: true, workerType: 'syntax_fixer'
+        });
+        return resp.replace(/```[a-z]*\n?/g, '').replace(/```/g, '').trim();
+    } catch {
+        return originalCode;
+    }
 }
 
-// === HELPER: Áp dụng gợi ý từ review ===
 async function applyReviewSuggestion({ originalCode, issues, suggestion, filePath }) {
-  if (!globalThis.activeProvider || !suggestion) return originalCode;
-  
-  const prompt = `Đoạn code sau có lỗi logic. Hãy sửa theo gợi ý.
-
-CODE:
-\`\`\`
-${originalCode}
-\`\`\`
-
-LỖI PHÁT HIỆN:
-${issues.map(i => `- ${i}`).join('\n')}
-
-GỢI Ý SỬA: ${suggestion}
-
-Chỉ trả về CODE ĐÃ SỬA.`;
-
-  try {
-    const resp = await globalThis.activeProvider.chat({
-      messages: [{ role: 'user', content: prompt }],
-      skillRegistry: {},
-      executeSkill: async () => {},
-      systemPrompt: "Chỉ trả về code.",
-      maxSteps: 1, isWorker: true, workerType: 'logic_fixer'
-    });
-    return resp.replace(/```[a-z]*\n?/g, '').replace(/```/g, '').trim();
-  } catch {
-    return originalCode;
-  }
+    if (!globalThis.activeProvider || !suggestion) return originalCode;
+    const prompt = `Đoạn code sau có lỗi logic. Hãy sửa theo gợi ý.\n\nCODE:\n\`\`\`\n${originalCode}\n\`\`\`\n\nLỖI PHÁT HIỆN:\n${issues.map(i => `- ${i}`).join('\n')}\n\nGỢI Ý SỬA: ${suggestion}\n\nChỉ trả về CODE ĐÃ SỬA.`;
+    try {
+        const resp = await globalThis.activeProvider.chat({
+            messages: [{ role: 'user', content: prompt }],
+            skillRegistry: {},
+            executeSkill: async () => {},
+            systemPrompt: "Chỉ trả về code.",
+            maxSteps: 1, isWorker: true, workerType: 'logic_fixer'
+        });
+        return resp.replace(/```[a-z]*\n?/g, '').replace(/```/g, '').trim();
+    } catch {
+        return originalCode;
+    }
 }
 
 function getLangFromExt(filePath) {
-  const ext = filePath.split('.').pop().toLowerCase();
-  const map = { js: 'javascript', ts: 'typescript', py: 'python', jsx: 'javascript', tsx: 'typescript' };
-  return map[ext] || 'javascript';
+    const ext = filePath.split('.').pop().toLowerCase();
+    const map = { js: 'javascript', ts: 'typescript', py: 'python', jsx: 'javascript', tsx: 'typescript' };
+    return map[ext] || 'javascript';
 }
 
-/**
- * Convert input path từ AI thành path hợp lệ cho OS
- * TÍCH HỢP PATH GUARD - Validate bảo mật trước khi trả về
- */
-function resolveUserPath(inputPath) {
-    if (!inputPath || typeof inputPath !== 'string') {
-        throw new Error('Path không hợp lệ');
-    }
-
-    // Validate path với Path Guard
-    const validation = validatePath(inputPath);
-
-    if (!validation.allowed) {
-        printPathWarning(validation, inputPath);
-        throw new Error(
-            `PATH_BLOCKED: Path "${inputPath}" bị chặn vì lý do bảo mật. ` +
-            `Lý do: ${validation.reason}. ` +
-            `Vui lòng sử dụng đường dẫn trong các thư mục được phép.`
-        );
-    }
-
-    return validation.resolved;
-}
 export default {
     "list_directory": {
         description: "Lấy danh sách các tệp và thư mục trong một đường dẫn cụ thể (hỗ trợ đệ quy tối đa 3 tầng). Dùng để xem máy tính đang có gì.",
@@ -182,7 +186,10 @@ export default {
                     };
 
                     if (entry.isDirectory() && currentDepth < maxDepth) {
-                        item.children = getFilesRecursive(fullPath, currentDepth + 1);
+                        const subValidation = validatePath(fullPath);
+                        if (subValidation.allowed) {
+                            item.children = getFilesRecursive(fullPath, currentDepth + 1);
+                        }
                     }
                     result.push(item);
                 }
@@ -192,14 +199,15 @@ export default {
             return { path: aiSafePath(targetPath), files: getFilesRecursive(targetPath, 1) };
         }
     },
+
     "replace_by_lines_safe": {
-        description: "[SAFE MODE] Thay thế code theo số dòng với 5 lớp bảo vệ: shadow backup → syntax check → AI subagent review → auto-retry → rollback. DÙNG THAY CHO replace_by_lines thông thường để đảm bảo không bao giờ làm hỏng file.",
+        description: "[SAFE MODE] Thay thế hoặc chèn code theo số dòng với các lớp bảo vệ và tự động sửa lỗi. Hỗ trợ append khi start_line bằng tổng số dòng + 1.",
         parameters: {
             type: "object",
             properties: {
                 file_path: { type: "string", description: "Đường dẫn tuyệt đối đến file." },
-                start_line: { type: "number", description: "Dòng bắt đầu cần xóa/thay thế (tính từ 1)." },
-                end_line: { type: "number", description: "Dòng kết thúc cần xóa/thay thế (tính từ 1)." },
+                start_line: { type: "number", description: "Dòng bắt đầu cần xóa/thay thế (hoặc chèn thêm)." },
+                end_line: { type: "number", description: "Dòng kết thúc cần xóa/thay thế." },
                 replace_string: { type: "string", description: "Mã nguồn MỚI thuần túy để chèn vào." },
                 task_description: { type: "string", description: "Mô tả ngắn gọn bạn đang cố làm gì (để subagent review hiểu context)." },
                 skip_logic_review: { type: "boolean", description: "Bỏ qua bước AI review nếu là thay đổi nhỏ (mặc định: false)." }
@@ -212,7 +220,6 @@ export default {
                 throw new Error(`File không tồn tại: ${aiSafePath(filePath)}`);
             }
 
-            // Dọn shadow cũ (định kỳ)
             cleanupOldShadows(24);
 
             const MAX_RETRIES = 2;
@@ -223,12 +230,10 @@ export default {
                 attempt++;
                 console.log(chalk.cyan(`\n[Safe-Replace] 🔄 Lần thử ${attempt}/${MAX_RETRIES + 1}`));
 
-                // === LAYER 1: SHADOW COPY ===
                 const shadow = createShadow(filePath);
                 const originalContent = fs.readFileSync(filePath, 'utf8');
                 const originalLines = originalContent.split(/\r?\n/);
 
-                // Lấy context ±20 dòng cho subagent
                 const contextStart = Math.max(0, args.start_line - 21);
                 const contextEnd = Math.min(originalLines.length, args.end_line + 20);
                 const originalContext = originalLines
@@ -236,24 +241,14 @@ export default {
                     .map((l, i) => `${contextStart + i + 1} | ${l}`)
                     .join('\n');
 
-                // === Thực hiện thay thế ===
-                const isCRLF = originalContent.includes('\r\n');
-                const lineEnding = isCRLF ? '\r\n' : '\n';
-                let lines = [...originalLines];
-                const start = Math.max(1, args.start_line) - 1;
-                const end = Math.min(lines.length, args.end_line) - 1;
-
-                if (start > end || start >= lines.length) {
+                let newContent;
+                try {
+                    newContent = performLineReplacement(originalContent, currentReplaceString, args.start_line, args.end_line);
+                } catch (err) {
                     shadow.cleanup();
-                    throw new Error(`Khoảng dòng không hợp lệ! File có ${lines.length} dòng.`);
+                    throw err;
                 }
 
-                let newLines = currentReplaceString ? currentReplaceString.split(/\r?\n/) : [];
-                newLines = newLines.map(line => line.replace(/^\d+\s*\|\s?/, ''));
-                lines.splice(start, end - start + 1, ...newLines);
-                const newContent = lines.join(lineEnding);
-
-                // === LAYER 3: SYNTAX VALIDATION ===
                 const syntaxResult = validateSyntax(filePath, newContent);
                 if (!syntaxResult.valid) {
                     console.log(chalk.red(`[Safe-Replace] ❌ Syntax Error (${syntaxResult.language}):`));
@@ -263,7 +258,6 @@ export default {
                     shadow.cleanup();
 
                     if (attempt <= MAX_RETRIES) {
-                        // Nhờ AI tự sửa syntax error
                         console.log(chalk.yellow(`[Safe-Replace] 🤖 Đang nhờ AI tự sửa lỗi cú pháp...`));
                         currentReplaceString = await autoFixSyntaxError({
                             originalCode: currentReplaceString,
@@ -283,7 +277,6 @@ export default {
                 }
                 console.log(chalk.green(`[Safe-Replace] ✅ Syntax OK (${syntaxResult.language})`));
 
-                // === LAYER 4: SUBAGENT LOGIC REVIEW ===
                 if (!args.skip_logic_review && globalThis.activeProvider) {
                     const review = await reviewLogicChange({
                         provider: globalThis.activeProvider,
@@ -329,7 +322,6 @@ export default {
                     }
                 }
 
-                // === APPLY THAY ĐỔI ===
                 if (!global.isAutoApproveAll) {
                     const highlightedCode = currentReplaceString
                         ? highlight(currentReplaceString, { language: getLangFromExt(filePath), ignoreIllegals: true })
@@ -378,32 +370,32 @@ ${chalk.gray('[Đã qua: Syntax Check ✓ | Logic Review ✓ | Shadow Backup ✓
         }
     },
 
-
     "read_file": {
         description: "Đọc toàn bộ file. Dữ liệu trả về sẽ ĐƯỢC ĐÁNH SỐ DÒNG làm 'Mỏ neo' (Anchor) để bạn sử dụng cho lệnh thay thế sau đó.",
         parameters: {
             type: "object",
-            properties: { file_path: { type: "string", description: "Đường dẫn tuyệt đối đến file." } },
+            properties: { file_path: { type: "string", description: "Đường dẫn tuyệt đối đến tệp tin cần đọc." } },
             required: ["file_path"]
         },
         handler: async (args) => {
             const filePath = resolveUserPath(args.file_path);
             if (!fs.existsSync(filePath)) throw new Error(`File không tồn tại: ${args.file_path}`);
-            const content = fs.readFileSync(args.file_path, 'utf8');
+            
+            // Sửa lỗi: Sử dụng biến filePath tuyệt đối đã xác thực để đọc
+            const content = fs.readFileSync(filePath, 'utf8');
             const lines = content.split(/\r?\n/);
-
-            // THUẬT TOÁN HARNESS: Đánh số dòng làm mỏ neo
             const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`);
 
             return {
                 file: aiSafePath(filePath),
                 total_lines: lines.length,
                 content: numberedLines.join('\n')
-            }
+            };
         }
     },
+
     "read_multiple_files": {
-        description: "[ĐỌC NHIỀU FILE] Đọc nội dung của nhiều file cùng một lúc. Dữ liệu trả về của mỗi file sẽ được tự động đánh số dòng làm mỏ neo (Line Anchors). Hãy ưu tiên dùng công cụ này thay vì gọi liên tiếp nhiều lệnh read_file độc lập để tối ưu hiệu suất và tiết kiệm tài nguyên hệ thống.",
+        description: "[ĐỌC NHIỀU FILE] Đọc nội dung của nhiều file cùng một lúc với tính năng đánh số dòng tự động.",
         parameters: {
             type: "object",
             properties: {
@@ -470,8 +462,6 @@ ${chalk.gray('[Đã qua: Syntax Check ✓ | Logic Review ✓ | Shadow Backup ✓
 
             const start = Math.max(0, args.start_line - 1);
             const end = Math.min(lines.length, args.end_line);
-
-            // THUẬT TOÁN HARNESS: Đánh số dòng làm mỏ neo cho đoạn cắt
             const numberedLines = lines.slice(start, end).map((line, idx) => `${start + idx + 1} | ${line}`);
 
             return {
@@ -484,90 +474,58 @@ ${chalk.gray('[Đã qua: Syntax Check ✓ | Logic Review ✓ | Shadow Backup ✓
     },
 
     "replace_by_lines": {
-        description: "[CÔNG NGHỆ HARNESS MỚI] Sửa code dựa trên TỌA ĐỘ DÒNG. Giải quyết triệt để lỗi sai khoảng trắng. Tuyệt đối ưu tiên dùng tool này để sửa file.",
+        description: "[CÔNG NGHỆ HARNESS] Sửa code dựa trên TỌA ĐỘ DÒNG. Cho phép ghi đè khoảng dòng hoặc ghi thêm vào cuối tệp tin.",
         parameters: {
             type: "object",
             properties: {
                 file_path: { type: "string", description: "Đường dẫn tuyệt đối đến file." },
                 start_line: { type: "number", description: "Dòng bắt đầu cần xóa/thay thế (tính từ 1)." },
                 end_line: { type: "number", description: "Dòng kết thúc cần xóa/thay thế (tính từ 1)." },
-                replace_string: { type: "string", description: "Mã nguồn MỚI thuần túy để chèn vào. Bỏ trống nếu muốn XÓA. (KHÔNG chèn thêm prefix '15 | ' vào đầu chuỗi này)." }
+                replace_string: { type: "string", description: "Mã nguồn MỚI thuần túy để chèn vào." }
             },
             required: ["file_path", "start_line", "end_line", "replace_string"]
         },
         handler: async (args) => {
             const filePath = resolveUserPath(args.file_path);
-
             if (!fs.existsSync(filePath)) {
                 throw new Error(`File không tồn tại: ${aiSafePath(filePath)}`);
             }
 
             if (!global.isAutoApproveAll) {
-                // 1. Tô màu Code
                 const highlightedCode = args.replace_string
                     ? highlight(args.replace_string, { language: 'javascript', ignoreIllegals: true })
                     : chalk.red.italic('// Xóa bỏ những dòng này');
 
-                // 2. Tạo nội dung Box
-                const promptContent = `
-${chalk.bold.yellow('📂 File :')} ${chalk.cyan(args.file_path)}
-${chalk.bold.yellow('📍 Dòng :')} ${chalk.bgGray.white(` ${args.start_line} đến ${args.end_line} `)}
-${chalk.bold.green('✨ Nội dung thay thế:')}
-${chalk.gray('----------------------------------------')}
-${highlightedCode}
-${chalk.gray('----------------------------------------')}
-`;
-                // 3. In ra Box
+                const promptContent = `\n${chalk.bold.yellow('📂 File :')} ${chalk.cyan(args.file_path)}\n${chalk.bold.yellow('📍 Dòng :')} ${chalk.bgGray.white(` ${args.start_line} đến ${args.end_line} `)}\n${chalk.bold.green('✨ Nội dung thay thế:')}\n${chalk.gray('----------------------------------------')}\n${highlightedCode}\n${chalk.gray('----------------------------------------')}\n`;
                 console.log(boxen(promptContent, {
                     title: chalk.bold.redBright(' ⚠️ YÊU CẦU SỬA CODE '),
                     titleAlignment: 'center',
-                    padding: 1,
-                    borderColor: 'yellow',
-                    borderStyle: 'round'
+                    padding: 1, borderColor: 'yellow', borderStyle: 'round'
                 }));
 
-                const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép thay thế vùng code này? [y: Yes / a: Yes to All / n: No] : `));
+                const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép thay thế vùng code này? [y/a/n] : `));
                 if (answer === 'a') global.isAutoApproveAll = true;
                 else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
             }
 
             const content = fs.readFileSync(filePath, 'utf8');
-
-            // Tự động nhận diện chuẩn ngắt dòng gốc của file (Windows CRLF hay Linux LF)
-            const isCRLF = content.includes('\r\n');
-            const lineEnding = isCRLF ? '\r\n' : '\n';
-
-            let lines = content.split(/\r?\n/);
-            const totalLines = lines.length;
-
-            const start = Math.max(1, args.start_line) - 1;
-            const end = Math.min(totalLines, args.end_line) - 1;
-
-            if (start > end || start >= totalLines) {
-                throw new Error(`Khoảng dòng không hợp lệ! File chỉ có ${totalLines} dòng.`);
+            let updatedContent;
+            try {
+                updatedContent = performLineReplacement(content, args.replace_string, args.start_line, args.end_line);
+            } catch (err) {
+                throw err;
             }
 
-            // Xử lý mã nguồn mới (AI thường sinh code chuẩn \n)
-            let newLines = args.replace_string ? args.replace_string.split(/\r?\n/) : [];
-
-            // Clean up: Phòng hờ AI "bắt chước" gắn cả prefix số dòng vào output
-            newLines = newLines.map(line => line.replace(/^\d+\s*\|\s?/, ''));
-
-            // Core Logic: Cắt bỏ dòng cũ, nối dòng mới vào vị trí đó
-            lines.splice(start, end - start + 1, ...newLines);
-
-            fs.writeFileSync(filePath, lines.join(lineEnding), 'utf8');
+            fs.writeFileSync(filePath, updatedContent, 'utf8');
             return {
-                message:
-                    `Đã thay thế thành công từ dòng ` +
-                    `${args.start_line} đến ${args.end_line}`,
+                message: `Đã thay thế thành công từ dòng ${args.start_line} đến ${args.end_line}`,
                 file: aiSafePath(filePath)
             };
         }
     },
 
     "write_file": {
-        description: "Tạo file mới hoàn toàn hoặc ghi đè TOÀN BỘ nội dung vào file đã có. Hạn chế dùng nếu chỉ muốn sửa 1 đoạn code nhỏ.",
+        description: "Tạo file mới hoàn toàn hoặc ghi đè TOÀN BỘ nội dung vào file đã có. Hỗ trợ tự động tạo thư mục cha.",
         parameters: {
             type: "object",
             properties: {
@@ -579,59 +537,44 @@ ${chalk.gray('----------------------------------------')}
         handler: async (args) => {
             const filePath = resolveUserPath(args.file_path);
             if (!global.isAutoApproveAll) {
-                // 1. Lấy đuôi mở rộng của file để highlight đúng ngôn ngữ (vd: .py, .js)
-                const ext =
-                    filePath.split('.').pop() || 'javascript';
-                // 2. Highlight code
+                const ext = filePath.split('.').pop() || 'javascript';
                 const highlightedCode = args.content
                     ? highlight(args.content, { language: ext, ignoreIllegals: true })
                     : chalk.gray.italic('// Bỏ trống (File rỗng)');
 
-                // 3. Xây dựng nội dung Box
-                const promptContent = `
-${chalk.bold.yellow('📂 File :')} ${chalk.cyan(args.file_path)}
-${chalk.bold.green('✨ Nội dung sẽ GHI ĐÈ / TẠO MỚI:')}
-${chalk.gray('----------------------------------------')}
-${highlightedCode}
-${chalk.gray('----------------------------------------')}
-`;
-                // 4. In ra Boxen
+                const promptContent = `\n${chalk.bold.yellow('📂 File :')} ${chalk.cyan(args.file_path)}\n${chalk.bold.green('✨ Nội dung sẽ GHI ĐÈ / TẠO MỚI:')}\n${chalk.gray('----------------------------------------')}\n${highlightedCode}\n${chalk.gray('----------------------------------------')}\n`;
                 console.log(boxen(promptContent, {
                     title: chalk.bold.redBright(' ⚠️ YÊU CẦU TẠO / GHI ĐÈ TOÀN BỘ FILE '),
                     titleAlignment: 'center',
-                    padding: 1,
-                    borderColor: 'yellow',
-                    borderStyle: 'round'
+                    padding: 1, borderColor: 'yellow', borderStyle: 'round'
                 }));
 
-                const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép tạo/ghi đè file này? [y: Yes / a: Yes to All / n: No] : `));
+                const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép tạo/ghi đè file này? [y/a/n] : `));
                 if (answer === 'a') global.isAutoApproveAll = true;
                 else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
             }
-            fs.writeFileSync(
-                filePath,
-                args.content,
-                'utf8'
-            );
+
+            // Sửa lỗi: Tự động khởi tạo thư mục cha nếu chưa có trên ổ đĩa
+            const parentDir = path.dirname(filePath);
+            if (!fs.existsSync(parentDir)) {
+                fs.mkdirSync(parentDir, { recursive: true });
+            }
+
+            fs.writeFileSync(filePath, args.content, 'utf8');
             return {
                 message: `Đã ghi file thành công`,
                 file: aiSafePath(filePath)
             };
         }
     },
+
     "find_files": {
-        description: "[ƯU TIÊN DÙNG ĐỂ TÌM FILE] Tìm kiếm tệp tin theo từ khóa tên file (case-insensitive) một cách đệ quy trong thư mục được chỉ định. Hãy LUÔN ƯU TIÊN dùng công cụ này thay vì 'list_directory' khi bạn cần tìm kiếm một tệp tin cụ thể để tránh làm tràn ngữ cảnh (context window).",
+        description: "[ƯU TIÊN DÙNG ĐỂ TÌM FILE] Tìm kiếm tệp tin theo từ khóa tên file (case-insensitive) một cách đệ quy.",
         parameters: {
             type: "object",
             properties: {
-                base_path: {
-                    type: "string",
-                    description: "Đường dẫn thư mục bắt đầu tìm kiếm. LUÔN dùng slash '/' thay vì '\\'. Ví dụ: C:/Users/Xon/Desktop. Mặc định là thư mục dự án hiện hành."
-                },
-                query: {
-                    type: "string",
-                    description: "Từ khóa hoặc một phần tên của file cần tìm (Ví dụ: 'config', 'test_workflow', 'app')."
-                }
+                base_path: { type: "string", description: "Đường dẫn thư mục bắt đầu tìm kiếm. LUÔN dùng slash '/'." },
+                query: { type: "string", description: "Từ khóa hoặc một phần tên của file cần tìm." }
             },
             required: ["query"]
         },
@@ -651,5 +594,5 @@ ${chalk.gray('----------------------------------------')}
                 files: matchedFiles
             };
         }
-    },
+    }
 };
