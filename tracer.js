@@ -15,8 +15,9 @@ import { randomUUID } from 'crypto';
  */
 function createTrace(name, pipelineId = null) {
     const id = 'trace_' + randomUUID().replace(/-/g, '').substring(0, 16);
-    db.prepare(`INSERT INTO traces (id, name, pipeline_id, status, created_at) VALUES (?, ?, ?, 'running', ?)`)
-        .run(id, name, pipelineId, new Date().toISOString());
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO traces (id, name, pipeline_id, status, created_at) VALUES (?, ?, ?, ?, ?)`)
+        .run(id, name, pipelineId || null, 'running', now);
     return id;
 }
 
@@ -45,8 +46,9 @@ function completeTrace(traceId, status = 'completed') {
  */
 function startSpan(traceId, name, type = 'tool', parentSpanId = null, input = null) {
     const id = 'span_' + randomUUID().replace(/-/g, '').substring(0, 16);
-    db.prepare(`INSERT INTO trace_spans (id, trace_id, parent_span_id, name, type, status, started_at, input) VALUES (?, ?, ?, ?, ?, 'running', ?, ?)`)
-        .run(id, traceId, parentSpanId, name, type, new Date().toISOString(), input ? JSON.stringify(input).substring(0, 5000) : null);
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO trace_spans (id, trace_id, parent_span_id, name, type, status, started_at, input) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, traceId, parentSpanId, name, type, 'running', now, input ? JSON.stringify(input).substring(0, 5000) : null);
     return id;
 }
 
