@@ -16,7 +16,7 @@
       "name": "OpenAI",
       "enabled": true,
       "apiKey": "",
-      "model": "gemini",
+      "model": "learn",
       "baseUrl": "http://localhost:20128/v1",
       "maxTokens": 4096,
       "temperature": 0.7

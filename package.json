@@ -14,7 +14,6 @@
     "@inquirer/prompts": "^8.4.3",
     "acorn": "^8.11.0",
     "acorn-jsx": "^5.3.2",
-    "typescript": "^5.3.0",
     "boxen": "^8.0.1",
     "chalk": "^5.6.2",
     "cli-highlight": "^2.1.11",
@@ -22,11 +21,13 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "globalthis": "^1.0.4",
     "js-yaml": "^4.1.1",
     "jsonrepair": "^3.14.0",
     "marked": "^18.0.3",
     "marked-terminal": "^7.3.0",
     "ora": "^9.4.0",
-    "playwright-core": "^1.60.0"
+    "playwright-core": "^1.60.0",
+    "typescript": "^5.3.0"
   }
 }

@@ -53,7 +53,7 @@ router.post('/switch', async (req, res) => {
     fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
     
     // Reload provider
-    const { loadProviderConfig } = await import('../../services/providerService.js');
+    const { loadProviderConfig } = await import('../services/providerService.js');
     await loadProviderConfig();
     
     const globalThis = await import('globalthis');
@@ -100,7 +100,7 @@ router.post('/config', async (req, res) => {
     fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
     
     // Reload provider
-    const { loadProviderConfig } = await import('../../services/providerService.js');
+    const { loadProviderConfig } = await import('../services/providerService.js');
     await loadProviderConfig();
     
     res.json({ success: true, message: 'Cấu hình đã được lưu thành công' });

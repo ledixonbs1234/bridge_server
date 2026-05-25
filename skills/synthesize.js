@@ -27,7 +27,7 @@ export default {
             required: ["skill_name", "description", "workflow_content"]
         },
         handler: async (args) => {
-            const agentSkillsDir = path.join(__dirname, '..', 'agent_skills');
+            const agentSkillsDir = path.join(__dirname, '..', '.agents', 'skills');
             
             if (!fs.existsSync(agentSkillsDir)) {
                 fs.mkdirSync(agentSkillsDir, { recursive: true });

@@ -7,6 +7,31 @@ import telemetry from '../telemetry.js';
 import { SKILL_REGISTRY } from './skillLoader.js';
 import WorkflowEngine from '../workflow_engine.js';
 
+// =================================================================
+// GLOBAL STATE MANAGEMENT - Centralized & Safe
+// =================================================================
+import 'globalthis';
+
+// Helper để truy cập global state an toàn, tránh race condition
+function getGlobalState() {
+    if (typeof global === 'undefined') {
+        return globalThis || {};
+    }
+    return global;
+}
+
+export function setGlobalState(key, value) {
+    const gs = getGlobalState();
+    if (!gs.default) gs.default = {};
+    gs.default[key] = value;
+}
+
+export function getGlobalStateValue(key, defaultValue = null) {
+    const gs = getGlobalState();
+    return gs.default?.[key] ?? defaultValue;
+}
+// =================================================================
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
@@ -44,12 +69,14 @@ export async function executeAgentTurn({
     
     if (onLog) global.logToWebChat = onLog;
 
+    const providerToUse = activeProvider || getGlobalStateValue('activeProvider');
+
     try {
         if (onSystem) onSystem("🔍 Đang chuẩn bị bối cảnh và trích xuất bộ nhớ...");
         if (onLog) onLog("🔍 Đang chuẩn bị bối cảnh và trích xuất bộ nhớ...");
 
         const [reformulatedText, injectedMemory] = await Promise.all([
-            reformulateQuery(message, activeProvider, onLog),
+            reformulateQuery(message, providerToUse, onLog),
             recallMemory(message, history.map(m => m.content).join(' '), onLog)
         ]);
 
@@ -57,14 +84,14 @@ export async function executeAgentTurn({
         currentHistory.push({ role: 'user', content: reformulatedText });
 
         // Nén ngữ cảnh nếu chat history quá dài (>15 tin nhắn)
-        if (currentHistory.length > 15 && activeProvider?.chat) {
+        if (currentHistory.length > 15 && providerToUse?.chat) {
             if (onSystem) onSystem("⚙️ Lịch sử hội thoại quá dài, đang nén ngữ cảnh...");
             if (onLog) onLog("⚙️ Lịch sử hội thoại quá dài, đang nén ngữ cảnh...");
             const messagesToCompress = currentHistory.slice(0, 10);
             const compPrompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` +
                 messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
             try {
-                let summary = await activeProvider.chat({
+                let summary = await providerToUse.chat({
                     messages: [{ role: 'user', content: compPrompt }],
                     skillRegistry: {},
                     executeSkill: async () => { },
@@ -111,7 +138,7 @@ export async function executeAgentTurn({
                 }
 
                 try {
-                    const toolResult = await executeSkillForProvider(funcName, args, activeProvider, onLog);
+                    const toolResult = await executeSkillForProvider(funcName, args, providerToUse, onLog);
                     if (toolSpanId) {
                         try {
                             const parsed = JSON.parse(toolResult);
@@ -138,7 +165,7 @@ export async function executeAgentTurn({
         if (result === "__HANDOVER_TO_ENGINE__" || (typeof result === 'string' && result.includes("__HANDOVER_TO_ENGINE__"))) {
             if (onSystem) onSystem("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
             if (onLog) onLog("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
-            const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, (fn, args) => executeSkillForProvider(fn, args, activeProvider, onLog), message);
+            const engine = new WorkflowEngine(providerToUse, SKILL_REGISTRY, (fn, args) => executeSkillForProvider(fn, args, providerToUse, onLog), message);
             await engine.run();
 
             const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
@@ -291,9 +318,8 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
 export async function runCriticAgent(sessionLog, onLog) {
     const logger = onLog || global.logToWebChat;
     
-    // Import activeProvider từ global
-    const globalThis = await import('globalthis');
-    const activeProvider = globalThis.default?.activeProvider;
+    // Import activeProvider từ global state an toàn
+    const activeProvider = getGlobalStateValue('activeProvider');
     
     if (!activeProvider || !activeProvider.chat) return;
 
@@ -456,9 +482,9 @@ export function saveSession(chatHistory, goalText, customFileName = null) {
         filePath = path.join(SESSION_DIR, fileName);
     }
     
-    // Get provider info from global
-    const globalThis = import('globalthis').then(m => m.default);
-    const providerName = globalThis.activeProvider?.getDisplayName ? globalThis.activeProvider.getDisplayName() : 'unknown';
+    // Get provider info from global state an toàn
+    const activeProvider = getGlobalStateValue('activeProvider');
+    const providerName = activeProvider?.getDisplayName ? activeProvider.getDisplayName() : 'unknown';
     
     const meta = { _type: 'meta', goal: goalText, provider: providerName, savedAt: new Date().toISOString() };
     const lines = [JSON.stringify(meta), ...chatHistory.map(m => JSON.stringify(m))];
@@ -534,9 +560,12 @@ export async function chatWithFailover(options) {
     const MAX_RETRIES = 5;
 
     for (const providerName of chain) {
-        const globalThis = await import('globalthis');
-        const provider = (providerName === globalThis.default?.providerConfig?.activeProvider)
-            ? globalThis.default?.activeProvider
+        // Sử dụng global state an toàn thay vì import globalThis mỗi lần
+        const activeProvider = getGlobalStateValue('activeProvider');
+        const providerConfig = getGlobalStateValue('providerConfig');
+        
+        const provider = (providerName === providerConfig?.activeProvider)
+            ? activeProvider
             : await getProviderInstance(providerName);
 
         if (!provider || !provider.chat) continue;

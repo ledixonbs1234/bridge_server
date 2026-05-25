@@ -857,12 +857,23 @@ async function sendChat() {
     abortController = new AbortController();
 
     try {
-        const response = await fetch(API + '/api/dashboard/chat', {
+        const response = await fetch(API + '/api/agent/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: msg, stream: true }),
             signal: abortController.signal
         });
+
+        if (!response.ok) {
+            let errText = "";
+            try {
+                const errJson = await response.json();
+                errText = errJson.error || errJson.message;
+            } catch {
+                errText = await response.text();
+            }
+            throw new Error(errText || `HTTP ${response.status}: ${response.statusText}`);
+        }
 
         if (!response.body) {
             const r = await response.json();

@@ -149,4 +149,4 @@ class GeminiAPIProvider extends BaseProvider {
     }
 }
 
-module.exports = GeminiAPIProvider;
+export default GeminiAPIProvider;

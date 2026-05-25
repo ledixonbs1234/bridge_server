@@ -3,6 +3,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 
+// Import helper functions từ agentService để quản lý global state
+import { setGlobalState, getGlobalStateValue } from './agentService.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
@@ -12,44 +15,48 @@ let activeProvider = null;
 const loadedProviders = {};
 
 export async function loadProviderConfig(showMenu = false) {
-    const configPath = path.join(projectRoot, 'config.json');
     try {
-        if (fs.existsSync(configPath)) {
-            providerConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        } else {
+        const configPath = path.join(projectRoot, 'config.json');
+        try {
+            if (fs.existsSync(configPath)) {
+                providerConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            } else {
+                providerConfig = { activeProvider: 'gemini-studio', providers: {} };
+            }
+        } catch (err) {
             providerConfig = { activeProvider: 'gemini-studio', providers: {} };
         }
-    } catch (err) {
-        providerConfig = { activeProvider: 'gemini-studio', providers: {} };
-    }
-    
-    // Load env vars
-    if (process.env.OPENAI_API_KEY && providerConfig.providers?.openai) {
-        providerConfig.providers.openai.apiKey = process.env.OPENAI_API_KEY;
-    }
-    if (process.env.ANTHROPIC_API_KEY && providerConfig.providers?.claude) {
-        providerConfig.providers.claude.apiKey = process.env.ANTHROPIC_API_KEY;
-    }
-    if (process.env.GEMINI_API_KEY && providerConfig.providers?.['gemini-api']) {
-        providerConfig.providers['gemini-api'].apiKey = process.env.GEMINI_API_KEY;
-    }
+        
+        // Load env vars
+        if (process.env.OPENAI_API_KEY && providerConfig.providers?.openai) {
+            providerConfig.providers.openai.apiKey = process.env.OPENAI_API_KEY;
+        }
+        if (process.env.ANTHROPIC_API_KEY && providerConfig.providers?.claude) {
+            providerConfig.providers.claude.apiKey = process.env.ANTHROPIC_API_KEY;
+        }
+        if (process.env.GEMINI_API_KEY && providerConfig.providers?.['gemini-api']) {
+            providerConfig.providers['gemini-api'].apiKey = process.env.GEMINI_API_KEY;
+        }
 
-    const selectedProviderName = providerConfig.activeProvider || 'gemini-studio';
-    
-    // Load provider instance
-    activeProvider = await getProviderInstance(selectedProviderName);
-    
-    if (!activeProvider) {
-        console.log(chalk.yellow(`⚠️ Không thể nạp provider "${selectedProviderName}". Sử dụng default.`));
-        activeProvider = await getProviderInstance('gemini-studio');
+        const selectedProviderName = providerConfig.activeProvider || 'gemini-studio';
+        
+        // Load provider instance
+        activeProvider = await getProviderInstance(selectedProviderName);
+        
+        if (!activeProvider) {
+            console.log(chalk.yellow(`⚠️ Không thể nạp provider "${selectedProviderName}". Sử dụng default.`));
+            activeProvider = await getProviderInstance('gemini-studio');
+        }
+        
+        // Lưu vào global state an toàn
+        setGlobalState('activeProvider', activeProvider);
+        setGlobalState('providerConfig', providerConfig);
+        
+        return { activeProvider, providerConfig };
+    } catch (err) {
+        console.error(chalk.red('[Provider] Lỗi nạp provider:'), err);
+        throw err;
     }
-    
-    // Store in global
-    const globalThis = await import('');
-    globalThis.default.activeProvider = activeProvider;
-    globalThis.default.providerConfig = providerConfig;
-    
-    return { activeProvider, providerConfig };
 }
 
 async function getProviderInstance(providerName) {
