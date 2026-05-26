@@ -236,7 +236,7 @@ class QwenWebBot {
             console.error("[Qwen Web Error] Không tìm thấy ô nhập liệu (textarea) trong DOM!");
         }
 
-        await this.page.waitForTimeout(500);
+        await this.page.waitForTimeout(1000);
 
         // 3. Thực thi bấm gửi một cách an toàn
         const submitResult = await this.page.evaluate(() => {

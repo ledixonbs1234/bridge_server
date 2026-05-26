@@ -121,7 +121,8 @@ function validatePython(filePath, content) {
     // SỬA LỖI: Dùng ast.parse để kiểm tra cú pháp trong bộ nhớ, hoàn toàn không sinh tệp compiled (.pyc) gây ô nhiễm
     execSync(`${pythonCmd} -c "import ast; ast.parse(open(r'${tmpFile}', encoding='utf-8').read())"`, { 
       stdio: 'pipe',
-      timeout: 10000 
+      timeout: 10000 ,
+      env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' } // Bổ sung cấu hình env tại đây
     });
     return { valid: true, language: 'python' };
   } catch (err) {

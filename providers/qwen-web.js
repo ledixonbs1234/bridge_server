@@ -31,11 +31,10 @@ Nếu bạn cần chạy một công cụ để lấy thông tin, BẠN PHẢI T
   "args": { "tên_tham_số": "giá_trị" }
 }
 </tool_call>
-Hệ thống sẽ chạy và trả kết quả lại cho bạn để bạn suy nghĩ tiếp.
 QUAN TRỌNG:
-- Mọi ký tự xuống dòng trong JSON phải escape bằng \n
-- Mọi dấu " bên trong string phải escape bằng \"
-- Khi ghi source code dài, ưu tiên dùng content_base64`;
+- Mọi ký tự xuống dòng trong JSON phải escape bằng \\n
+- Mọi dấu " bên trong string phải escape bằng \\"
+- TUYỆT ĐỐI KHÔNG sử dụng các tham số Base64 như 'content_base64' hoặc 'replace_string_base64' vì mô hình của bạn rất dễ sinh mã hóa Base64 bị lỗi gây hỏng file nguồn. Hãy luôn sử dụng tham số chuỗi thường ('content' hoặc 'replace_string').`;
 
         return toolText;
     }

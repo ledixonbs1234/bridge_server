@@ -168,7 +168,8 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
                     const child = spawn(command, {
                         cwd,
                         shell: true,
-                        timeout: getCommandTimeout(command, true)
+                        timeout: getCommandTimeout(command, true),
+                         env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
                     });
 
                     // 2. LƯU LẠI TIẾN TRÌNH VÀO BỘ NHỚ ĐỂ CÓ THỂ TẮT SAU NÀY
@@ -262,7 +263,8 @@ ${chalk.bold.green('🎯 Mục đích :')} ${purpose}
                 const childProcess = exec(command, {
                     cwd,
                     timeout,
-                    maxBuffer: 10 * 1024 * 1024  // 10MB buffer
+                    maxBuffer: 10 * 1024 * 1024  ,
+                    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
                 }, (error, stdout, stderr) => {
                     const duration = Date.now() - startTime;
                     const result = {

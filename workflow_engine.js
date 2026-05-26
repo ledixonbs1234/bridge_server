@@ -251,7 +251,7 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
         if (val.type === 'command') {
             try {
                 // Khắc phục: Gán đúng thư mục làm việc của dự án đích thay vì chạy tại bridge_server
-                execSync(val.value, { cwd: detectedWorkspace, stdio: 'ignore' });
+                execSync(val.value, { cwd: detectedWorkspace, stdio: 'ignore',env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }  });
                 return { passed: true, reason: '' };
             }
             catch {
