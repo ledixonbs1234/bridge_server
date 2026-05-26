@@ -17,14 +17,11 @@ class QwenWebBot {
         this.streamError = null;
         this.currentStreamCallback = null;
 
-        // CDP Native properties
+        // CDP Native properties - Khóa cứng duy nhất 1 Request ID đang hoạt động
         this.client = null;
-        this.activeStreams = new Set();
+        this.activeRequestId = null; 
     }
 
-    /**
-     * Khởi tạo trình duyệt và thiết lập phiên CDP Native ngầm
-     */
     async init() {
         if (this.isReady) return;
         console.log("[Qwen Web] Đang khởi động CloakBrowser...");
@@ -33,7 +30,7 @@ class QwenWebBot {
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
             headless: false,
-            viewport: { width: 1280, height: 1000 },
+            viewport: { width: 1280, height: 720 },
             args: ['--disable-blink-features=AutomationControlled']
         });
 
@@ -57,62 +54,57 @@ class QwenWebBot {
     }
 
     /**
-     * Đăng ký lắng nghe các sự kiện mạng native thông qua CDP
+     * Đăng ký lắng nghe các sự kiện mạng native thông qua CDP với bộ lọc Request ID nghiêm ngặt
      */
     setupCDPListeners() {
-        this.activeStreams = new Set();
-
         // 1. Theo dõi khi nhận phản hồi HTTP Response
         this.client.on('Network.responseReceived', async ({ requestId, response }) => {
             const url = response.url;
             
-            // Lọc đúng các request sinh chữ (Chat Completions) của Qwen
+            // Chỉ lọc các request completion stream của Qwen
             if (url.includes('/api/v2/chat/completions') || url.includes('/chat/completions')) {
-                this.activeStreams.add(requestId);
+                // Khóa cứng: Chỉ chấp nhận xử lý duy nhất Request ID mới nhất này
+                this.activeRequestId = requestId;
+                this.streamFinished = false;
+                this.streamError = null;
+                
                 try {
-                    // Yêu cầu Chromium bắt đầu stream trực tiếp nội dung thô (Raw Stream)
-                    const result = await this.client.send('Network.streamResourceContent', { requestId });
-                    if (result && result.bufferedData) {
-                        const chunkText = Buffer.from(result.bufferedData, 'base64').toString('utf-8');
-                        this.processStreamChunk(chunkText);
-                    }
+                    // Chỉ kích hoạt stream, KHÔNG xử lý bufferedData ở đây để tránh trùng lặp
+                    await this.client.send('Network.streamResourceContent', { requestId });
                 } catch (e) {
-                    // Thầm lặng bỏ qua lỗi nếu kết nối đóng sớm
+                    // Thầm lặng bỏ qua nếu kết nối đóng sớm
                 }
             }
         });
 
         // 2. Lắng nghe dữ liệu mảnh thô (Data Chunks) truyền về liên tục
         this.client.on('Network.dataReceived', ({ requestId, data }) => {
-            if (this.activeStreams.has(requestId) && data) {
+            // KIỂM TRA NGHIÊM NGẶT: Chỉ xử lý mảnh dữ liệu của đúng request ID đang hoạt động
+            if (this.activeRequestId === requestId && data) {
                 const chunkText = Buffer.from(data, 'base64').toString('utf-8');
                 this.processStreamChunk(chunkText);
             }
         });
 
-        // 3. Lắng nghe khi tải hoàn tất
+        // 3. Lắng nghe tín hiệu kết thúc stream
         this.client.on('Network.loadingFinished', ({ requestId }) => {
-            if (this.activeStreams.has(requestId)) {
-                this.activeStreams.delete(requestId);
+            if (this.activeRequestId === requestId) {
                 this.streamFinished = true;
             }
         });
 
-        // 4. Lắng nghe lỗi kết nối mạng
+        // 4. Lắng nghe tín hiệu lỗi stream
         this.client.on('Network.loadingFailed', ({ requestId, errorText }) => {
-            if (this.activeStreams.has(requestId)) {
-                this.activeStreams.delete(requestId);
+            if (this.activeRequestId === requestId) {
                 this.streamFinished = true;
                 this.streamError = errorText;
             }
         });
 
-        // 5. Lắng nghe WebSocket dự phòng (Đón đầu nếu Qwen chuyển đổi phương thức giao tiếp)
+        // 5. Giám sát WebSocket dự phòng
         this.client.on('Network.webSocketFrameReceived', ({ requestId, response }) => {
             const rawPayload = response.payloadData;
             const decoded = this.decodeWebSocketPayload(rawPayload);
-            
-            // Lọc ra các frame WebSocket có cấu trúc chứa thông tin chat
             if (decoded.includes('"content"') || decoded.includes('"text"') || decoded.includes('"chunk"')) {
                 this.processWebSocketFrame(decoded);
             }
@@ -140,7 +132,7 @@ class QwenWebBot {
                 if (choice) {
                     const delta = choice.delta;
                     if (delta && delta.content) {
-                        // Hỗ trợ cả Qwen phase hoặc định dạng OpenAI Standard thô
+                        // Chỉ trích xuất khi phase là 'answer' hoặc không có phase để lấy câu trả lời thô sạch
                         if (delta.phase === 'answer' || !delta.phase) {
                             this.accumulatedAnswer += delta.content;
                             if (this.currentStreamCallback) {
