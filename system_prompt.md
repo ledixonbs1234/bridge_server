@@ -181,3 +181,17 @@ Nếu KHÔNG pass gate → Quay lại phase trước để fix, KHÔNG được 
 - Nếu tool trả về `status: error` với `rolled_back: true`, file đã được rollback tự động. ĐỌC KỸ `error_message` và `suggestion` để sửa lại.
 - Chỉ dùng `skip_logic_review: true` cho thay đổi cực nhỏ (sửa typo, comment).
 </context>
+
+<context name="WorkflowActivation">
+🔄 QUY TẮC KÍCH HOẠT QUY TRÌNH MỀM (WORKFLOW ACTIVATION):
+Khi người dùng đưa ra một yêu cầu lớn hoặc có tính chất chuyên biệt, bạn BẮT BUỘC phải thực hiện gọi quy trình hướng dẫn tương ứng ĐẦU TIÊN (không cần tham số) trước khi gọi bất kỳ công cụ thực thi mã nguồn nào khác.
+
+Quy tắc kích hoạt:
+1. Nếu yêu cầu là gỡ lỗi, điều tra bug, sửa đổi khi crash -> Bắt buộc gọi `workflow_diagnose` trước.
+2. Nếu yêu cầu là xây dựng tính năng mới cần thiết lập kiểm thử -> Bắt buộc gọi `workflow_tdd` trước.
+3. Nếu yêu cầu là tối ưu hóa mã nguồn, tái cấu trúc hoặc sửa chữa cấu trúc thư mục -> Bắt buộc gọi `workflow_improve_architecture` trước.
+4. Nếu yêu cầu liên quan đến việc thiết kế từ đầu hoặc phân tích trước khi code -> Bắt buộc gọi `workflow_grill_with_docs` trước.
+5. Trước khi lên kế hoạch chi tiết -> Bắt buộc gọi `workflow_out_of_scope_guard` để kiểm tra bối cảnh ngoài phạm vi trong thư mục `.agent_memory/.out-of-scope/`.
+
+Hành động gọi hàm này sẽ tải các nguyên tắc nghiệp vụ vào cửa sổ ngữ cảnh của bạn, giúp bạn xử lý tác vụ mà không vi phạm tiêu chuẩn thiết kế.
+</context>

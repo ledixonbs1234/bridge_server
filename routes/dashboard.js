@@ -4,11 +4,12 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import telemetry from '../telemetry.js';
 import tracer from '../tracer.js';
+import db from '../database.js'; // Import database để truy xuất Memories thực tế
 import { getGitDiffStats } from '../utils/gitStats.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const projectRoot = path.join(__dirname, '../..');
+const projectRoot = path.join(__dirname, '..'); // Sửa thành '..' để trỏ đúng vào bridge_server
 
 const router = express.Router();
 
@@ -28,9 +29,25 @@ router.get('/code-changes', (req, res) => {
     }
 });
 
-// Memories endpoint
+// Memories endpoint - Liên kết thực tế đến mock database
 router.get('/memories', (req, res) => {
-    res.json({ memories: [], stats: { total: 0, avg_trust: 0, embedded_count: 0 } });
+    try {
+        const memories = db.prepare('SELECT * FROM memories').all() || [];
+        const total = memories.length;
+        const avg_trust = total > 0 ? memories.reduce((sum, m) => sum + (m.trust_score || 0.7), 0) / total : 0;
+        const embedded_count = memories.filter(m => m.has_embedding).length;
+        
+        res.json({ 
+            memories, 
+            stats: { 
+                total, 
+                avg_trust, 
+                embedded_count 
+            } 
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
 });
 
 // Sessions list endpoint
@@ -175,17 +192,51 @@ router.get('/traces/:traceId', (req, res) => {
     }
 });
 
-// Commands reference endpoint
-router.get('/commands', (req, res) => {
-    const cliCommands = [
-        { cmd: '/new', alias: '/clear', desc: 'Xóa lịch sử chat, bắt đầu phiên mới', category: 'session' },
-        { cmd: '/exit', alias: '/quit', desc: 'Thoát ứng dụng', category: 'system' },
-        { cmd: '/model', alias: null, desc: 'Chọn lại AI Provider và Model', category: 'config' },
-        { cmd: '/skill', alias: null, desc: 'Xem danh sách kỹ năng đang nạp', category: 'info' },
-        { cmd: '/memory', alias: null, desc: 'Xem bộ nhớ hiện tại', category: 'info' },
-        { cmd: '/compact', alias: null, desc: 'Nén lịch sử chat để tiết kiệm token', category: 'session' }
-    ];
-    res.json({ commands: cliCommands });
+// Commands reference endpoint - Trả về cấu trúc chi tiết tương thích hoàn toàn với client
+router.get('/commands', async (req, res) => {
+    try {
+        const cliCommands = [
+            { cmd: '/new', alias: '/clear', desc: 'Xóa lịch sử chat, bắt đầu phiên mới', category: 'session' },
+            { cmd: '/exit', alias: '/quit', desc: 'Thoát ứng dụng', category: 'system' },
+            { cmd: '/model', alias: null, desc: 'Chọn lại AI Provider và Model', category: 'config' },
+            { cmd: '/skill', alias: null, desc: 'Xem danh sách kỹ năng đang nạp', category: 'info' },
+            { cmd: '/memory', alias: null, desc: 'Xem bộ nhớ hiện tại', category: 'info' },
+            { cmd: '/compact', alias: null, desc: 'Nén lịch sử chat để tiết kiệm token', category: 'session' }
+        ];
+
+        const apiEndpoints = [
+            { method: 'GET', path: '/health', desc: 'Kiểm tra trạng thái hệ thống' },
+            { method: 'GET', path: '/api/skills', desc: 'Danh sách các kỹ năng (skills) đã đăng ký' },
+            { method: 'GET', path: '/api/system-prompt', desc: 'Xem chỉ thị hệ thống hiện tại' },
+            { method: 'POST', path: '/api/agent/chat', desc: 'Gửi yêu cầu trò chuyện trực tiếp đến Agent' },
+            { method: 'GET', path: '/api/dashboard/telemetry', desc: 'Truy xuất thông tin độ tin cậy của Tools' },
+            { method: 'GET', path: '/api/dashboard/memories', desc: 'Truy xuất bộ nhớ tích lũy từ database' },
+            { method: 'GET', path: '/api/dashboard/sessions', desc: 'Danh sách lịch sử hội thoại đã lưu' },
+            { method: 'GET', path: '/api/dashboard/traces', desc: 'Xem chuỗi hành động và thời gian thực thi' }
+        ];
+
+        // Đọc động danh sách Skills đang có trong hệ thống
+        const { SKILL_REGISTRY } = await import('../services/skillLoader.js');
+        const skills = Object.entries(SKILL_REGISTRY).map(([name, skill]) => ({
+            name,
+            desc: skill.description || ''
+        }));
+
+        // Trích xuất Provider hiện tại đang kích hoạt
+        const provider = globalThis.activeProvider ? {
+            name: globalThis.activeProvider.getDisplayName?.() || globalThis.activeProvider.name,
+            active: globalThis.activeProvider.name
+        } : { name: 'Chưa nạp', active: 'none' };
+
+        res.json({
+            cli: cliCommands,
+            api: apiEndpoints,
+            skills: skills,
+            provider: provider
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // Helper functions

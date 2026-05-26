@@ -37,11 +37,53 @@
       "skillPath": "skills/frontend-design/SKILL.md",
       "computedHash": "516bd2154eb843a8240e43d5b285229129853114ad7075a5e141e1c08e408c84"
     },
+    "gws-calendar": {
+      "source": "googleworkspace/cli",
+      "sourceType": "github",
+      "skillPath": "skills/gws-calendar/SKILL.md",
+      "computedHash": "8b5b3e44a68bf616b2698a7f733758616f922614d66c81e41216780a97b1ad31"
+    },
+    "gws-drive": {
+      "source": "googleworkspace/cli",
+      "sourceType": "github",
+      "skillPath": "skills/gws-drive/SKILL.md",
+      "computedHash": "90f36f7b0910e785062eabb811be0d95dc125c3bb97a089a3c9e60083171211e"
+    },
+    "gws-gmail": {
+      "source": "googleworkspace/cli",
+      "sourceType": "github",
+      "skillPath": "skills/gws-gmail/SKILL.md",
+      "computedHash": "31b12bd4bfa3fe1b5132067c597f85f5d3456060658a904a54ed6cb5b32ab6e4"
+    },
+    "gws-sheets": {
+      "source": "googleworkspace/cli",
+      "sourceType": "github",
+      "skillPath": "skills/gws-sheets/SKILL.md",
+      "computedHash": "cfa962871f24236925362044aa6cb5f68f44929b50a935bd2c1ea3c55ba6183d"
+    },
+    "gws-sheets-read": {
+      "source": "googleworkspace/cli",
+      "sourceType": "github",
+      "skillPath": "skills/gws-sheets-read/SKILL.md",
+      "computedHash": "aca4344d53da37b2e88751f2901210b7a6fe83b5b15841f886e32c80c7672ec3"
+    },
     "pdf": {
       "source": "anthropics/skills",
       "sourceType": "github",
       "skillPath": "skills/pdf/SKILL.md",
       "computedHash": "37226d4220d844377e6b2a386c51a011df4cd130855ff0b80bcc22f9c28abd57"
+    },
+    "recipe-share-folder-with-team": {
+      "source": "googleworkspace/cli",
+      "sourceType": "github",
+      "skillPath": "skills/recipe-share-folder-with-team/SKILL.md",
+      "computedHash": "7f99afdeafe5e6813056f0ac0a87031303c0f8ad4ac0912f16eeaa8c1855ded5"
+    },
+    "recipe-watch-drive-changes": {
+      "source": "googleworkspace/cli",
+      "sourceType": "github",
+      "skillPath": "skills/recipe-watch-drive-changes/SKILL.md",
+      "computedHash": "09702e13fc391c304cd5efc7f2dcf01115476352cc5cdc91aa594ba18dfa808c"
     },
     "skill-creator": {
       "source": "anthropics/skills",

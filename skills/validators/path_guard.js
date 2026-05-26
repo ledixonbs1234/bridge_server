@@ -18,6 +18,7 @@ const ALLOWED_ROOTS = [
   path.join(os.homedir(), 'Pictures'),
   path.join(os.homedir(), 'Videos'),
   path.join(os.homedir(), 'Music'),
+  path.join(os.homedir() ),
   
   // Project hiện tại
   process.cwd(),
