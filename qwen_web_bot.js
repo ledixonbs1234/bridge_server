@@ -146,26 +146,21 @@ class QwenWebBot {
         return workerBot;
     }
 
-    async waitForResponse(onStreamChunk) {
-        console.log("[Qwen Web] Khởi động waitForResponse, đang chờ 2 giây đầu tiên...");
-        // Đầu tiên chờ 2s để tin nhắn của Qwen xuất hiện và bắt đầu kết xuất
+   async waitForResponse(onStreamChunk) {
+        // Chờ 2 giây ban đầu để tin nhắn của Qwen xuất hiện và bắt đầu kết xuất
         await this.page.waitForTimeout(2000);
-        console.log("[Qwen Web] Bắt đầu vòng lặp theo dõi phản hồi từ DOM...");
 
         let lastLength = 0;
-        let tickCount = 0;
 
         return new Promise((resolve) => {
             const pollInterval = setInterval(async () => {
-                tickCount++;
                 try {
                     const state = await this.page.evaluate(() => {
                         // Tìm block tin nhắn trợ lý chưa đọc gần nhất
                         const chatBlocks = document.querySelectorAll('.qwen-chat-message-assistant:not([data-ai-read="true"])');
-                        const totalBlocks = chatBlocks.length;
 
-                        if (totalBlocks > 0) {
-                            const lastBlock = chatBlocks[totalBlocks - 1];
+                        if (chatBlocks.length > 0) {
+                            const lastBlock = chatBlocks[chatBlocks.length - 1];
                             const contentEl = lastBlock.querySelector('.response-message-content');
                             const text = contentEl ? (contentEl.innerText || '') : '';
                             
@@ -175,56 +170,30 @@ class QwenWebBot {
                             // Chỉ coi là hoàn thành khi các nút hành động đã được chèn vào bên trong (children.length > 0)
                             const hasFinished = !!(iconsWrap && iconsWrap.children.length > 0);
                             
-                            return { 
-                                type: 'streaming', 
-                                text, 
-                                totalBlocks,
-                                hasContentEl: !!contentEl,
-                                iconsWrapExists: !!iconsWrap,
-                                iconsCount: iconsWrap ? iconsWrap.children.length : 0,
-                                hasFinished 
-                            };
+                            return { type: 'streaming', text, hasFinished };
                         }
                         
                         return { type: 'waiting' };
                     });
 
                     if (state.type === 'waiting') {
-                        if (tickCount % 5 === 0) {
-                            console.log(`[Qwen Web Debug] Đang chờ tin nhắn trợ lý xuất hiện trong DOM... (Tick #${tickCount})`);
-                        }
                         return;
                     }
 
                     if (state.type === 'streaming') {
-                        const isNewText = state.text.length > lastLength;
-                        
-                        // In chi tiết trạng thái để bạn dễ dàng debug số lượng các icon hiển thị thực tế
-                        if (tickCount % 3 === 0 || isNewText || state.hasFinished) {
-                            console.log(
-                                `[Qwen Web Debug] Blocks: ${state.totalBlocks} | ` +
-                                `ContentEl: ${state.hasContentEl} | ` +
-                                `Ký tự: ${state.text.length} (Mới: +${state.text.length - lastLength}) | ` +
-                                `Icons Wrap: ${state.iconsWrapExists} | ` +
-                                `Số nút chức năng: ${state.iconsCount} | ` +
-                                `Finished: ${state.hasFinished}`
-                            );
-                        }
-
-                        if (isNewText) {
+                        if (state.text.length > lastLength) {
                             const chunk = state.text.substring(lastLength);
                             if (onStreamChunk) onStreamChunk(chunk);
                             lastLength = state.text.length;
                         }
 
                         if (state.hasFinished) {
-                            console.log(`[Qwen Web] 🎯 Xác nhận hoàn tất phản hồi (Tìm thấy ${state.iconsCount} nút chức năng sau ${tickCount} ticks).`);
                             clearInterval(pollInterval);
                             resolve({ type: 'text', text: state.text });
                         }
                     }
                 } catch (e) {
-                    console.error(`[Qwen Web Debug Error] Lỗi luồng lặp ở Tick #${tickCount}: ${e.message}`);
+                    // Bỏ qua lỗi DOM tạm thời
                 }
             }, 300);
         });

@@ -30,7 +30,6 @@ export function appendToLogBuffer(str) { logBuffer.push(str); }
 /**
  * Hàm điều phối trung tâm thực hiện một lượt xử lý (turn) của Agent.
  */
-// Thay đổi duy nhất tại điểm đầu hàm executeAgentTurn:
 export async function executeAgentTurn({
     message,
     history = [],
@@ -52,6 +51,25 @@ export async function executeAgentTurn({
     const originalAskPermission = global.askPermission;
     if (onAskPermission) {
         global.askPermission = onAskPermission;
+    } else {
+        // Fallback mặc định khi không truyền onAskPermission (ví dụ: chế độ CLI hoặc v1 API)
+        global.askPermission = async (query) => {
+            if (process.argv.includes('--cli')) {
+                // Chế độ CLI Terminal: sử dụng @inquirer/prompts để hiển thị câu hỏi tương tác trực tiếp
+                try {
+                    const { input } = await import('@inquirer/prompts');
+                    const ans = await input({ message: query });
+                    return ans.toLowerCase().trim();
+                } catch {
+                    // Fallback nếu có sự cố khi import prompts
+                    return 'y';
+                }
+            } else {
+                // Chế độ API tự động (như v1/chat/completions): tự động đồng ý để tránh kẹt luồng của Client
+                console.log(chalk.yellow(`[Auto-Approve] Tự động cấp quyền trong chế độ không tương tác cho yêu cầu: "${query}"`));
+                return 'y';
+            }
+        };
     }
 
     try {
@@ -195,7 +213,6 @@ export function classifyIntent(userMessage) {
 }
 
 export function filterSkillsByIntent(intent, fullRegistry) {
-
     if (intent === 'complex' || !SKILL_GROUPS[intent]) return fullRegistry;
     if (intent === 'chat') return {};
     const allowedNames = SKILL_GROUPS[intent];
@@ -222,7 +239,7 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
 
     if (logger) logger(`⚙️ [Tool Call] Kích hoạt: ${functionName}${targetDetail}`);
 
-    const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines', 'get_os_context'];
+    const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines_safe', 'get_os_context'];
     if (!silentFunctions.includes(functionName) && !functionName.startsWith('workflow_')) {
         console.log(chalk.gray(`[Node] 📦 Tham số:`), funcArgs);
     }
@@ -290,7 +307,6 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
 
 export async function runCriticAgent(sessionLog, onLog) {
     const logger = onLog || global.logToWebChat;
-
     const activeProvider = globalThis.activeProvider;
 
     if (!activeProvider || !activeProvider.chat) return;
@@ -470,7 +486,6 @@ async function getProviderInstance(providerName) {
 
     const providerMap = {
         'deepseek-web': '../providers/deepseek-web.js',
-        'qwen-web': '../providers/qwen-web.js',
         'gemini-studio': '../providers/gemini-studio.js',
         'openai': '../providers/openai.js',
         'openai-compatible': '../providers/openai.js',
