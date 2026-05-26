@@ -1,6 +1,7 @@
 import { launchPersistentContext } from "cloakbrowser";
 import path from 'path';
 import { fileURLToPath } from 'url';
+import chalk from 'chalk';
 // Fix lỗi __dirname trong ES Module
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -276,6 +277,45 @@ class AIStudioBot {
         return new Promise(async (resolve, reject) => {
             const pollInterval = setInterval(async () => {
                 try {
+                    // Check for rate limit error
+                    const rateLimitDetected = await this.page.evaluate(() => {
+                        const bodyText = document.body.innerText || "";
+                        return bodyText.includes("You've reached your rate limit. Please try again later.");
+                    });
+
+                    if (rateLimitDetected) {
+                        clearInterval(pollInterval);
+                        console.log(chalk.red("\n[AI Studio] ⚠️ Đã chạm giới hạn tần suất (Rate Limit)!"));
+                        if (typeof global.logToWebChat === 'function') {
+                            global.logToWebChat("⚠️ Phát hiện lỗi Rate Limit trên Google AI Studio!");
+                        }
+                        
+                        if (global.askPermission) {
+                            const answer = await global.askPermission(
+                                "⚠️ Phát hiện lỗi Rate Limit trên AI Studio. Vui lòng đổi sang Model khác trên trình duyệt rồi nhấn 'y' (hoặc click 'Yes') để tiếp tục."
+                            );
+                            
+                            if (answer === 'y' || answer === 'a') {
+                                console.log(chalk.green("[AI Studio] Đang kích hoạt chạy lại với model mới..."));
+                                this.setupFlags = { system: false, functions: false, thinking: false };
+                                
+                                const runBtnSelector = 'ms-run-button button, button[aria-label*="Run prompt"], button[aria-label*="Run"]';
+                                await this.page.click(runBtnSelector);
+                                
+                                // Continue waiting by resolving to the new invocation
+                                const nextResult = await this.waitForResponse(onStreamChunk);
+                                resolve(nextResult);
+                                return;
+                            } else {
+                                reject(new Error("Người dùng đã từ chối chạy tiếp sau lỗi Rate Limit."));
+                                return;
+                            }
+                        } else {
+                            resolve({ type: 'text', data: { text: "You've reached your rate limit. Please try again later.", markdown: "You've reached your rate limit. Please try again later." } });
+                            return;
+                        }
+                    }
+
                     // Đưa logic check DOM xuống trình duyệt
                     const state = await this.page.evaluate(() => {
                         const runBtn = document.querySelector('ms-run-button button, button[aria-label*="Run"], button[aria-label*="Stop"]');

@@ -2,7 +2,7 @@ import express from 'express';
 import chalk from 'chalk';
 import { executeAgentTurn, activeWebSession } from '../services/agentService.js';
 import { getGitDiffStats } from '../utils/gitStats.js';
-
+import { switchProvider, getProviderConfig } from '../services/providerService.js';
 const router = express.Router();
 
 router.post('/chat', async (req, res) => {
@@ -21,6 +21,60 @@ router.post('/chat', async (req, res) => {
     }
 
     try {
+        if (message.trim().startsWith('/model')) {
+            const parts = message.trim().split(/\s+/);
+            const providerConfig = getProviderConfig();
+            const available = Object.keys(providerConfig.providers || {});
+
+            if (parts.length === 1) {
+                const current = providerConfig.activeProvider;
+                const listStr = available.map(p => {
+                    const isCurrent = p === current ? ' (đang hoạt động ★)' : '';
+                    return `- **${p}**${isCurrent}`;
+                }).join('\n');
+
+                const respMsg = `🤖 **Cấu hình AI Provider**\n\nProvider hiện tại: **${current}**\n\nCác provider có sẵn:\n${listStr}\n\nHãy gõ \`/model <tên-provider>\` để chuyển đổi nhanh (ví dụ: \`/model qwen-web\`).`;
+
+                if (stream) {
+                    res.write(`data: ${JSON.stringify({ type: 'done', response: respMsg, history: globalThis.activeWebHistory })}\n\n`);
+                    res.end();
+                } else {
+                    res.json({ success: true, response: respMsg, history: globalThis.activeWebHistory });
+                }
+                return;
+            } else {
+                const targetProvider = parts[1];
+                if (available.includes(targetProvider)) {
+                    const success = await switchProvider(targetProvider);
+                    if (success) {
+                        const respMsg = `✅ Đã chuyển đổi thành công sang AI Provider: **${globalThis.activeProvider?.getDisplayName?.() || targetProvider}**`;
+                        if (stream) {
+                            res.write(`data: ${JSON.stringify({ type: 'done', response: respMsg, history: globalThis.activeWebHistory })}\n\n`);
+                            res.end();
+                        } else {
+                            res.json({ success: true, response: respMsg, history: globalThis.activeWebHistory });
+                        }
+                    } else {
+                        const respMsg = `❌ Không thể chuyển sang provider **${targetProvider}** (vui lòng kiểm tra file cấu hình).`;
+                        if (stream) {
+                            res.write(`data: ${JSON.stringify({ type: 'done', response: respMsg, history: globalThis.activeWebHistory })}\n\n`);
+                            res.end();
+                        } else {
+                            res.json({ success: true, response: respMsg, history: globalThis.activeWebHistory });
+                        }
+                    }
+                } else {
+                    const respMsg = `❌ Provider **${targetProvider}** không tồn tại hoặc chưa được kích hoạt trong config.json.`;
+                    if (stream) {
+                        res.write(`data: ${JSON.stringify({ type: 'done', response: respMsg, history: globalThis.activeWebHistory })}\n\n`);
+                        res.end();
+                    } else {
+                        res.json({ success: true, response: respMsg, history: globalThis.activeWebHistory });
+                    }
+                }
+                return;
+            }
+        }
         // Xử lý lệnh đặc biệt /clear và /new
         if (message.trim() === '/clear' || message.trim() === '/new') {
             globalThis.activeWebSessionFile = null;
@@ -29,7 +83,7 @@ router.post('/chat', async (req, res) => {
                 globalThis.activeProvider.resetSession();
             }
             globalThis.persistentGoal = null;
-            
+
             const respMsg = "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";
             if (stream) {
                 res.write(`data: ${JSON.stringify({ type: 'done', response: respMsg, history: [] })}\n\n`);
@@ -60,18 +114,18 @@ router.post('/chat', async (req, res) => {
             onSystem: stream ? (content) => {
                 res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
             } : null,
-          onAskPermission: async (query) => {
+            onAskPermission: async (query) => {
                 const { randomUUID } = await import('crypto');
                 const permId = 'perm_' + randomUUID();
                 // Import logBuffer từ service
                 const agentService = await import('../services/agentService.js');
                 const cleanDetails = agentService.logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
-                
+
                 // SỬA LỖI: Gọi hàm clearLogBuffer() thay vì gán trực tiếp vào thuộc tính chỉ đọc
                 agentService.clearLogBuffer();
 
                 res.write(`data: ${JSON.stringify({ type: 'ask_permission', id: permId, query: query.replace(/\x1b\[[0-9;]*m/g, ''), details: cleanDetails })}\n\n`);
-                
+
                 const pendingPermissions = await import('../services/agentService.js').then(m => m.pendingPermissions);
                 return new Promise((resolve) => pendingPermissions.set(permId, resolve));
             },

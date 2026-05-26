@@ -29,7 +29,7 @@ class QwenWebBot {
         await this.page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded' });
 
         await this.page.waitForFunction(() => {
-            return !!(document.querySelector('#dropzone-container > div.message-input > div > div.message-input-container > div > div > textarea'));
+            return !!(document.querySelector('textarea.message-input-textarea') || document.querySelector('textarea'));
         }, { timeout: 60000 });
 
         console.log("[Qwen Web] ✅ Đã vào được màn hình chat Qwen!");
@@ -56,6 +56,7 @@ class QwenWebBot {
     async sendPrompt(promptText) {
         if (!this.isReady) await this.init();
 
+        // 1. Đánh dấu tất cả tin nhắn cũ là đã đọc
         await this.page.evaluate(() => {
             document.querySelectorAll('.qwen-chat-message-assistant:not([data-ai-read="true"])').forEach(el => {
                 el.setAttribute('data-ai-read', 'true');
@@ -64,8 +65,11 @@ class QwenWebBot {
 
         console.log(`[Qwen Web] Đang nhập dữ liệu (${promptText.length} ký tự)...`);
 
-        await this.page.evaluate((text) => {
-            const textarea = document.querySelector('#dropzone-container > div.message-input > div > div.message-input-container > div > div > textarea');
+        // 2. Sử dụng Selector đơn giản để điền dữ liệu (Bypass React State)
+        const filled = await this.page.evaluate((text) => {
+            const textarea = document.querySelector('textarea.message-input-textarea') || 
+                             document.querySelector('.message-input-container textarea') ||
+                             document.querySelector('textarea');
 
             if (textarea) {
                 textarea.focus();
@@ -78,27 +82,42 @@ class QwenWebBot {
 
                 textarea.blur();
                 textarea.focus();
+                return true;
             }
+            return false;
         }, promptText);
+
+        if (!filled) {
+            console.error("[Qwen Web Error] Không tìm thấy ô nhập liệu (textarea) trong DOM!");
+        }
 
         await this.page.waitForTimeout(500);
 
-        await this.page.evaluate(() => {
-            const sendButton = document.querySelector('#dropzone-container > div.message-input > div > div.message-input-container > div > div > div.message-input-right-button > div.message-input-right-button-send > div > button');
+        // 3. Thực thi bấm gửi một cách an toàn và ghi nhận phương pháp click thực tế
+        const submitResult = await this.page.evaluate(() => {
+            const sendButton = document.querySelector('.message-input-right-button-send button') || 
+                               document.querySelector('.message-input-right-button button') ||
+                               document.querySelector('button[class*="send"]');
             
             if (sendButton && !sendButton.disabled) {
                 sendButton.click();
-                console.log("🖱️ Đã click nút Gửi!");
+                return { success: true, method: 'click' };
             } else {
-                console.log("⌨️ Không tìm thấy nút Gửi sáng, thử Enter...");
-                const textarea = document.querySelector('#dropzone-container > div.message-input > div > div.message-input-container > div > div > textarea');
+                const textarea = document.querySelector('textarea.message-input-textarea') || 
+                                 document.querySelector('textarea');
                 if (textarea) {
                     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                    return { success: true, method: 'enter_fallback' };
                 }
             }
+            return { success: false };
         });
 
-        console.log("[Qwen Web] Đã phát lệnh gửi!");
+        if (submitResult.success) {
+            console.log(`[Qwen Web] Đã phát lệnh gửi! (Phương thức: ${submitResult.method})`);
+        } else {
+            console.error("[Qwen Web Error] Gửi tin nhắn thất bại, không tìm thấy nút Gửi hoặc phần tử nhập liệu để kích hoạt!");
+        }
         await this.page.waitForTimeout(500);
     }
 
@@ -116,7 +135,7 @@ class QwenWebBot {
         await workerPage.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded' });
         
         await workerPage.waitForFunction(() => {
-            return !!(document.querySelector('#dropzone-container > div.message-input > div > div.message-input-container > div > div > textarea'));
+            return !!(document.querySelector('textarea.message-input-textarea') || document.querySelector('textarea'));
         }, { timeout: 60000 });
         
         workerBot.closeWorker = async () => {
@@ -128,50 +147,84 @@ class QwenWebBot {
     }
 
     async waitForResponse(onStreamChunk) {
+        console.log("[Qwen Web] Khởi động waitForResponse, đang chờ 2 giây đầu tiên...");
+        // Đầu tiên chờ 2s để tin nhắn của Qwen xuất hiện và bắt đầu kết xuất
+        await this.page.waitForTimeout(2000);
+        console.log("[Qwen Web] Bắt đầu vòng lặp theo dõi phản hồi từ DOM...");
+
         let lastLength = 0;
-        let stableCount = 0;
-        const STABLE_THRESHOLD = 15;
+        let tickCount = 0;
 
         return new Promise((resolve) => {
             const pollInterval = setInterval(async () => {
+                tickCount++;
                 try {
                     const state = await this.page.evaluate(() => {
-                        const isGenerating = !!Array.from(document.querySelectorAll('div[role="button"]')).find(e => e.innerText && e.innerText.includes('Stop'));
+                        // Tìm block tin nhắn trợ lý chưa đọc gần nhất
+                        const chatBlocks = document.querySelectorAll('.qwen-chat-message-assistant:not([data-ai-read="true"])');
+                        const totalBlocks = chatBlocks.length;
 
-                        let text = '';
-                        const chatBlocks = document.querySelectorAll('.qwen-chat-message-assistant:not([data-ai-read="true"]) .response-message-content');
-
-                        if (chatBlocks.length > 0) {
-                            text = chatBlocks[chatBlocks.length - 1].innerText || '';
-                            return { type: 'streaming', text, isGenerating };
+                        if (totalBlocks > 0) {
+                            const lastBlock = chatBlocks[totalBlocks - 1];
+                            const contentEl = lastBlock.querySelector('.response-message-content');
+                            const text = contentEl ? (contentEl.innerText || '') : '';
+                            
+                            // Tìm phần tử bọc các nút hành động (Copy, Thumbs up, v.v.)
+                            const iconsWrap = lastBlock.querySelector('.qwen-chat-package-comp-new-action-control-icons');
+                            
+                            // Chỉ coi là hoàn thành khi các nút hành động đã được chèn vào bên trong (children.length > 0)
+                            const hasFinished = !!(iconsWrap && iconsWrap.children.length > 0);
+                            
+                            return { 
+                                type: 'streaming', 
+                                text, 
+                                totalBlocks,
+                                hasContentEl: !!contentEl,
+                                iconsWrapExists: !!iconsWrap,
+                                iconsCount: iconsWrap ? iconsWrap.children.length : 0,
+                                hasFinished 
+                            };
                         }
                         
-                        return { type: 'waiting', isGenerating };
+                        return { type: 'waiting' };
                     });
 
                     if (state.type === 'waiting') {
-                        stableCount = 0;
+                        if (tickCount % 5 === 0) {
+                            console.log(`[Qwen Web Debug] Đang chờ tin nhắn trợ lý xuất hiện trong DOM... (Tick #${tickCount})`);
+                        }
                         return;
                     }
 
                     if (state.type === 'streaming') {
-                        if (state.text.length > lastLength) {
+                        const isNewText = state.text.length > lastLength;
+                        
+                        // In chi tiết trạng thái để bạn dễ dàng debug số lượng các icon hiển thị thực tế
+                        if (tickCount % 3 === 0 || isNewText || state.hasFinished) {
+                            console.log(
+                                `[Qwen Web Debug] Blocks: ${state.totalBlocks} | ` +
+                                `ContentEl: ${state.hasContentEl} | ` +
+                                `Ký tự: ${state.text.length} (Mới: +${state.text.length - lastLength}) | ` +
+                                `Icons Wrap: ${state.iconsWrapExists} | ` +
+                                `Số nút chức năng: ${state.iconsCount} | ` +
+                                `Finished: ${state.hasFinished}`
+                            );
+                        }
+
+                        if (isNewText) {
                             const chunk = state.text.substring(lastLength);
                             if (onStreamChunk) onStreamChunk(chunk);
                             lastLength = state.text.length;
-                            stableCount = 0;
-                        } else if (!state.isGenerating) {
-                            stableCount++;
-                            if (stableCount >= STABLE_THRESHOLD) {
-                                clearInterval(pollInterval);
-                                resolve({ type: 'text', text: state.text });
-                            }
-                        } else {
-                            stableCount = 0;
+                        }
+
+                        if (state.hasFinished) {
+                            console.log(`[Qwen Web] 🎯 Xác nhận hoàn tất phản hồi (Tìm thấy ${state.iconsCount} nút chức năng sau ${tickCount} ticks).`);
+                            clearInterval(pollInterval);
+                            resolve({ type: 'text', text: state.text });
                         }
                     }
                 } catch (e) {
-                    // Lỗi DOM tạm thời
+                    console.error(`[Qwen Web Debug Error] Lỗi luồng lặp ở Tick #${tickCount}: ${e.message}`);
                 }
             }, 300);
         });

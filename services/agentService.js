@@ -41,10 +41,11 @@ export async function executeAgentTurn({
     onSystem = null,
     onAskPermission = null,
     onLog = null,
-    activeProvider
+    activeProvider = globalThis.activeProvider
 }) {
+    const resolvedProvider = activeProvider || globalThis.activeProvider;
     const traceId = tracer.createTrace(message.substring(0, 80));
-    
+
     if (onLog) global.logToWebChat = onLog;
 
     // KHẮC PHỤC LỖI: Liên kết chặt chẽ askPermission lên phạm vi toàn cục ngay khi nhận lượt chat
@@ -58,7 +59,7 @@ export async function executeAgentTurn({
         if (onLog) onLog("🔍 Đang chuẩn bị bối cảnh và trích xuất bộ nhớ...");
 
         const [reformulatedText, injectedMemory] = await Promise.all([
-            useReformulate ? reformulateQuery(message, activeProvider, onLog) : Promise.resolve(message),
+            useReformulate ? reformulateQuery(message, resolvedProvider, onLog) : Promise.resolve(message),
             recallMemory(message, history.map(m => m.content).join(' '), onLog)
         ]);
 
@@ -66,14 +67,14 @@ export async function executeAgentTurn({
         currentHistory.push({ role: 'user', content: reformulatedText });
 
         // Nén ngữ cảnh nếu chat history quá dài
-        if (currentHistory.length > 15 && activeProvider?.chat) {
+        if (currentHistory.length > 15 && resolvedProvider?.chat) {
             if (onSystem) onSystem("⚙️ Lịch sử hội thoại quá dài, đang nén ngữ cảnh...");
             if (onLog) onLog("⚙️ Lịch sử hội thoại quá dài, đang nén ngữ cảnh...");
             const messagesToCompress = currentHistory.slice(0, 10);
             const compPrompt = `Hãy tóm tắt ngắn gọn bối cảnh và những thông tin quan trọng nhất từ đoạn hội thoại sau thành 1 đoạn văn ngắn (dưới 100 chữ). KHÔNG giải thích gì thêm.\n\n` +
                 messagesToCompress.map(m => `${m.role}: ${m.content}`).join('\n');
             try {
-                let summary = await activeProvider.chat({
+                let summary = await resolvedProvider.chat({
                     messages: [{ role: 'user', content: compPrompt }],
                     skillRegistry: {},
                     executeSkill: async () => { },
@@ -114,7 +115,7 @@ export async function executeAgentTurn({
                 const toolSpanId = traceId ? tracer.startSpan(traceId, funcName, 'tool', llmSpanId, args) : null;
 
                 try {
-                    const toolResult = await executeSkillForProvider(funcName, args, activeProvider, onLog);
+                    const toolResult = await executeSkillForProvider(funcName, args, resolvedProvider, onLog);
                     if (toolSpanId) {
                         try {
                             const parsed = JSON.parse(toolResult);
@@ -139,8 +140,8 @@ export async function executeAgentTurn({
         if (result === "__HANDOVER_TO_ENGINE__" || (typeof result === 'string' && result.includes("__HANDOVER_TO_ENGINE__"))) {
             if (onSystem) onSystem("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
             if (onLog) onLog("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
-            
-            const engine = new WorkflowEngine(activeProvider, SKILL_REGISTRY, (fn, args) => executeSkillForProvider(fn, args, activeProvider, onLog), message);
+
+            const engine = new WorkflowEngine(resolvedProvider, SKILL_REGISTRY, (fn, args) => executeSkillForProvider(fn, args, resolvedProvider, onLog), message);
             await engine.run();
 
             const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
@@ -194,7 +195,7 @@ export function classifyIntent(userMessage) {
 }
 
 export function filterSkillsByIntent(intent, fullRegistry) {
-    
+
     if (intent === 'complex' || !SKILL_GROUPS[intent]) return fullRegistry;
     if (intent === 'chat') return {};
     const allowedNames = SKILL_GROUPS[intent];
@@ -289,9 +290,9 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
 
 export async function runCriticAgent(sessionLog, onLog) {
     const logger = onLog || global.logToWebChat;
-    
+
     const activeProvider = globalThis.activeProvider;
-    
+
     if (!activeProvider || !activeProvider.chat) return;
 
     const errorEntries = sessionLog.filter(e => e.success === false);
@@ -392,7 +393,7 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
 export async function reformulateQuery(userMessage, activeProvider, onLog) {
     const logger = onLog || global.logToWebChat;
     if (!activeProvider || !activeProvider.chat) return userMessage;
-
+    const resolvedProvider = activeProvider || globalThis.activeProvider;
     const msgLower = userMessage.toLowerCase().trim();
 
     const isContinuationOrSimpleCmd = msgLower.length < 60 && (
@@ -414,7 +415,7 @@ export async function reformulateQuery(userMessage, activeProvider, onLog) {
     const prompt = `Tin nhắn gốc của người dùng: "${userMessage}"`;
 
     try {
-        let optimizedMessage = await activeProvider.chat({
+        let optimizedMessage = await resolvedProvider.chat({
             messages: [{ role: 'user', content: prompt }],
             skillRegistry: {},
             executeSkill: async () => { },
@@ -438,10 +439,10 @@ export async function reformulateQuery(userMessage, activeProvider, onLog) {
 
 export function saveSession(chatHistory, goalText, customFileName = null) {
     if (chatHistory.length === 0) return null;
-    
+
     const SESSION_DIR = path.join(projectRoot, '.agent_memory', 'sessions');
     if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
-    
+
     let filePath;
     let fileName;
     if (customFileName) {
@@ -452,9 +453,9 @@ export function saveSession(chatHistory, goalText, customFileName = null) {
         fileName = `session_${timestamp}.jsonl`;
         filePath = path.join(SESSION_DIR, fileName);
     }
-    
+
     const providerName = globalThis.activeProvider?.getDisplayName ? globalThis.activeProvider.getDisplayName() : 'unknown';
-    
+
     const meta = { _type: 'meta', goal: goalText, provider: providerName, savedAt: new Date().toISOString() };
     const lines = [JSON.stringify(meta), ...chatHistory.map(m => JSON.stringify(m))];
     fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
@@ -466,9 +467,10 @@ const loadedProviders = {};
 
 async function getProviderInstance(providerName) {
     if (loadedProviders[providerName]) return loadedProviders[providerName];
-    
+
     const providerMap = {
         'deepseek-web': '../providers/deepseek-web.js',
+        'qwen-web': '../providers/qwen-web.js',
         'gemini-studio': '../providers/gemini-studio.js',
         'openai': '../providers/openai.js',
         'openai-compatible': '../providers/openai.js',
@@ -476,10 +478,10 @@ async function getProviderInstance(providerName) {
         'ollama': '../providers/ollama.js',
         'gemini-api': '../providers/gemini-api.js',
     };
-    
+
     const adapterPath = providerMap[providerName];
     if (!adapterPath) return null;
-    
+
     // Load config
     const configPath = path.join(projectRoot, 'config.json');
     let providerConfig = {};
@@ -490,10 +492,10 @@ async function getProviderInstance(providerName) {
     } catch (err) {
         providerConfig = { activeProvider: 'gemini-studio', providers: {} };
     }
-    
+
     const settings = providerConfig.providers?.[providerName] || {};
     if (!settings.enabled) return null;
-    
+
     try {
         const module = await import(adapterPath);
         const ProviderClass = module.default;
@@ -513,7 +515,7 @@ function getFailoverChain() {
     } catch (err) {
         providerConfig = { activeProvider: 'gemini-studio', providers: {} };
     }
-    
+
     if (providerConfig.failoverChain && Array.isArray(providerConfig.failoverChain)) {
         return providerConfig.failoverChain;
     }

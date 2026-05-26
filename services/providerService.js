@@ -56,6 +56,7 @@ async function getProviderInstance(providerName) {
     
     const providerMap = {
         'deepseek-web': '../providers/deepseek-web.js',
+        'qwen-web': '../providers/qwen-web.js',
         'gemini-studio': '../providers/gemini-studio.js',
         'openai': '../providers/openai.js',
         'openai-compatible': '../providers/openai.js',

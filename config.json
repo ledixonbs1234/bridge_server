@@ -1,11 +1,16 @@
 {
-  "activeProvider": "gemini-studio",
+  "activeProvider": "qwen-web",
   "providers": {
     "deepseek-web": {
       "name": "DeepSeek Web (Free Chat)",
       "enabled": true,
       "description": "Dùng trình duyệt tự động điều khiển chat.deepseek.com",
       "model": "deepseek-chat"
+    },
+    "qwen-web": {
+      "name": "Qwen Web (CloakBrowser)",
+      "enabled": true,
+      "description": "Dùng trình duyệt tự động điều khiển chat.qwen.ai"
     },
     "gemini-studio": {
       "name": "Gemini Studio (Free Web)",

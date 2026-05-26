@@ -72,7 +72,7 @@ class CircuitBreaker {
 // =================================================================
 export default class WorkflowEngine {
     constructor(provider, skillRegistry, executeSkillFn, globalContext = "") {
-        this.provider = provider;
+        this.provider = provider || globalThis.activeProvider; // Tự động dự phòng nếu provider bị undefined
         this.skillRegistry = skillRegistry;
         this.executeSkillFn = executeSkillFn;
         this.globalContext = globalContext;
@@ -222,7 +222,7 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
         return prompt;
     }
     // === VALIDATOR AGENT ===
- // === VALIDATOR AGENT (Cải tiến xử lý CWD) ===
+    // === VALIDATOR AGENT (Cải tiến xử lý CWD) ===
     async validateStep(step, executorOutput) {
         const val = step.validation || { type: 'llm_check', value: `Kiểm tra xem tác vụ "${step.task}" đã được hoàn thành đúng chưa.` };
 
@@ -249,13 +249,13 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
 
         // 2. Chạy lệnh kiểm thử terminal trực tiếp
         if (val.type === 'command') {
-            try { 
+            try {
                 // Khắc phục: Gán đúng thư mục làm việc của dự án đích thay vì chạy tại bridge_server
-                execSync(val.value, { cwd: detectedWorkspace, stdio: 'ignore' }); 
-                return { passed: true, reason: '' }; 
+                execSync(val.value, { cwd: detectedWorkspace, stdio: 'ignore' });
+                return { passed: true, reason: '' };
             }
-            catch { 
-                return { passed: false, reason: `Lệnh kiểm tra thất bại: ${val.value} (Thư mục chạy: ${detectedWorkspace})` }; 
+            catch {
+                return { passed: false, reason: `Lệnh kiểm tra thất bại: ${val.value} (Thư mục chạy: ${detectedWorkspace})` };
             }
         }
 
@@ -406,13 +406,13 @@ ${error ? `Lỗi: ${error.message}` : ''}
     }
 
     // === EXECUTE SINGLE STEP ===
-   async executeStep(step, pipeline) {
+    async executeStep(step, pipeline) {
         const stepKey = step.step_key;
         const maxRetries = (step.validation?.max_retries) || 3;
 
         while (true) {
             const stepState = this.getStepState('CURRENT', stepKey);
-            
+
             // XÁC ĐỊNH SỐ LẦN RETRY TỐI ĐA THỰC TẾ DỰA TRÊN LOẠI LỖI GẦN NHẤT
             const errors = JSON.parse(stepState?.error_history || '[]');
             const lastError = errors[errors.length - 1] || '';
@@ -444,7 +444,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
             const preStepStatus = this.getGitStatus();
             const journalContext = this.buildJournalContext(pipeline);
-            
+
             const currentStepState = this.getStepState('CURRENT', stepKey);
             const retryCount = currentStepState?.retry_count || 0;
             const errorHistory = currentStepState?.error_history || '[]';
@@ -458,7 +458,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
             try {
                 const workerSkills = {};
-               const vitalSkills = ['read_file', 'read_file_lines', 'replace_by_lines_safe', 'write_file', 'find_files', 'get_os_context', 'execute_terminal_command'];
+                const vitalSkills = ['read_file', 'read_file_lines', 'replace_by_lines_safe', 'write_file', 'find_files', 'get_os_context', 'execute_terminal_command'];
                 if (step.tool && this.skillRegistry[step.tool]) {
                     workerSkills[step.tool] = this.skillRegistry[step.tool];
                 }
@@ -538,15 +538,17 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
             // GHI NHẬN LỖI VÀ CHUẨN HÓA LOẠI LỖI (SYSTEM_ERROR)
             if (execError) {
-                const isSystemError = execError.message.includes('API Error') || 
-                                      execError.message.includes('Improperly formed request') || 
-                                      execError.message.includes('403') || 
-                                      execError.message.includes('400') ||
-                                      execError.message.includes('fetch') ||
-                                      execError.message.includes('ECONNRESET');
 
-                const formattedError = isSystemError ? `[SYSTEM_ERROR] ${execError.message}` : execError.message;
-                
+                const errMsg = execError.message || String(execError) || "Unknown error";
+                const isSystemError = errMsg.includes('API Error') ||
+                    errMsg.includes('Improperly formed request') ||
+                    errMsg.includes('403') ||
+                    errMsg.includes('400') ||
+                    errMsg.includes('fetch') ||
+                    errMsg.includes('ECONNRESET');
+
+                const formattedError = isSystemError ? `[SYSTEM_ERROR] ${errMsg}` : errMsg;
+
                 this.appendError('CURRENT', stepKey, formattedError);
                 this.rollbackChanges(preStepStatus);
             }

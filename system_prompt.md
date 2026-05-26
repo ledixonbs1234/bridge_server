@@ -27,11 +27,12 @@ Bạn CẦN THIẾT LẬP hành động gọi tool này thành PHẢN XẠ VÔ �
 </context>
 
 <context name="CodeEditing (The Harness Protocol)">
-SỬA CODE:
-- TUYỆT ĐỐI KHÔNG ghi đè toàn bộ file nếu chỉ cần sửa 1 phần nhỏ.
-- Bạn phải dùng `read_file_lines` để đọc file trước. Harness sẽ trả về kết quả kèm SỐ DÒNG (VD: `15 | code`).
-- Căn cứ vào số dòng đó, hãy gọi `replace_by_lines_safe` truyền vào `start_line` và `end_line` để thay thế. Không cần dùng lệnh find/replace text để tránh lỗi sai lệch khoảng trắng.
-- LƯU Ý: Nội dung `replace_string` của bạn phải là MÃ NGUỒN THUẦN TÚY (Không được tự ý viết thêm số dòng vào nội dung chèn).
+🛡️ QUY TẮC SỬA VÀ TẠO FILE TIẾT KIỆM BƯỚC:
+1. Nếu tệp tin mục tiêu có kích thước nhỏ hoặc vừa (dưới 300 dòng), hoặc khi bạn được phép tự thiết kế giải pháp:
+   - Hãy ưu tiên sử dụng `write_file` (với tham số `content_base64` để bảo vệ định dạng) để tạo mới hoặc ghi đè toàn bộ tệp tin trong một bước duy nhất [1].
+   - Sau đó chạy ngay `execute_terminal_command` để kiểm thử [2].
+   - Cách tiếp cận này giúp bạn hoàn thành nhiệm vụ chỉ trong 2 bước, tiết kiệm tài nguyên hệ thống.
+2. Chỉ sử dụng `read_file_lines` và `replace_by_lines_safe` khi làm việc với các tệp tin mã nguồn lớn trong dự án thực tế (nơi việc ghi đè toàn bộ file có thể làm mất các logic không liên quan khác) [1].
 </context>
 
 <context name="IsolatedWorkspace (Safety Protocol)">
@@ -58,10 +59,11 @@ Giống như hệ thống Archon, bạn phải đảm bảo mã nguồn gốc c�
 
 <context name="FileSearch">
 🔍 QUY TẮC TÌM KIẾM FILE TIẾT KIỆM TOKEN:
-- Tuyệt đối KHÔNG sử dụng `list_directory` một cách đệ quy để quét ngẫu nhiên toàn bộ thư mục khi bạn đang tìm kiếm một file cụ thể (đặc biệt là trong các thư mục lớn). Điều này làm phình cửa sổ ngữ cảnh cực kỳ nghiêm trọng và gây lãng phí tài nguyên.
-- BẮT BUỘC: Khi cần tìm kiếm một tệp tin nhưng không biết rõ đường dẫn, hãy luôn luôn gọi công cụ `find_files` truyền từ khóa tên file để hệ thống tìm kiếm chính xác trước.
-- Chỉ sử dụng `list_directory` với độ sâu bằng 1 khi bạn thực sự cần xem cấu trúc phân cấp thư mục trực quan trực diện xung quanh vị trí làm việc.
+- Khi người dùng yêu cầu thao tác với một file nằm trên Desktop nhưng không cung cấp tên chính xác, TUYỆT ĐỐI KHÔNG đoán mò tên để gọi find_files. 
+- Hãy gọi trực tiếp list_directory với tham số path: "desktop" và depth: 1 để xem toàn bộ danh sách file trên Desktop trong một bước duy nhất.
+- Hệ thống hỗ trợ shortcut "desktop" làm đường dẫn hợp lệ, do đó KHÔNG gọi get_os_context chỉ để tìm đường dẫn thư mục Desktop của người dùng.
 </context>
+
 <context name="WindowsAndDirectoryContext">
 ⚠️ QUY TẮC PHÒNG TRÁNH LỆCH NGỮ CẢNH THƯ MỤC & LỖI HỆ ĐIỀU HÀNH:
 1. **LUÔN SỬ DỤNG ĐƯỜNG DẪN TUYỆT ĐỐI**: Khi tạo tệp tin (`write_file`), sửa tệp tin (`replace_by_lines`, `read_file_lines`), bạn BẮT BUỘC phải chỉ định đường dẫn tuyệt đối đầy đủ đến thư mục đích của dự án con (ví dụ: `C:/Users/Xon/Desktop/test/login-app/...`). Không sử dụng đường dẫn tương đối để tránh ghi nhầm vào thư mục gốc của Bridge Server (`C:\Users\Xon\Documents\bridge_server`).
