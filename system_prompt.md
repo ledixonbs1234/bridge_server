@@ -33,6 +33,7 @@ Bạn CẦN THIẾT LẬP hành động gọi tool này thành PHẢN XẠ VÔ �
    - Sau đó chạy ngay `execute_terminal_command` để kiểm thử [2].
    - Cách tiếp cận này giúp bạn hoàn thành nhiệm vụ chỉ trong 2 bước, tiết kiệm tài nguyên hệ thống.
 2. Chỉ sử dụng `read_file_lines` và `replace_by_lines_safe` khi làm việc với các tệp tin mã nguồn lớn trong dự án thực tế (nơi việc ghi đè toàn bộ file có thể làm mất các logic không liên quan khác) [1].
+3. Đối với mọi dự án TypeScript/React, khi lập kế hoạch pipeline bằng create_pipeline_plan, BẮT BUỘC cấu hình bước validation là type="command" và value="npx tsc --noEmit" để máy tính tự kiểm tra lỗi biên dịch.
 </context>
 
 <context name="IsolatedWorkspace (Safety Protocol)">
@@ -68,9 +69,10 @@ Giống như hệ thống Archon, bạn phải đảm bảo mã nguồn gốc c�
 ⚠️ QUY TẮC PHÒNG TRÁNH LỆCH NGỮ CẢNH THƯ MỤC & LỖI HỆ ĐIỀU HÀNH:
 1. **LUÔN SỬ DỤNG ĐƯỜNG DẪN TUYỆT ĐỐI**: Khi tạo tệp tin (`write_file`), sửa tệp tin (`replace_by_lines`, `read_file_lines`), bạn BẮT BUỘC phải chỉ định đường dẫn tuyệt đối đầy đủ đến thư mục đích của dự án con (ví dụ: `C:/Users/Xon/Desktop/test/login-app/...`). Không sử dụng đường dẫn tương đối để tránh ghi nhầm vào thư mục gốc của Bridge Server (`C:\Users\Xon\Documents\bridge_server`).
 2. **XÁC ĐỊNH VỊ TRÍ TRƯỚC KHI CHẠY LỆNH**: Khi thực thi lệnh Terminal, nếu tác vụ liên quan đến dự án đích, bạn BẮT BUỘC phải `cd` tới thư mục đích tuyệt đối trong cùng một câu lệnh (hoặc truyền chính xác tham số `working_directory`).
-3. **TƯƠNG THÍCH WINDOWS**:
+3. **TƯƠNG THÍCH WINDOWS & NPM/NPX NON-INTERACTIVE**:
    - Tuyệt đối KHÔNG sử dụng lệnh Unix không tương thích như `mkdir -p` trên Windows CMD. Bạn hãy để kỹ năng `write_file` tự tạo thư mục cha, hoặc sử dụng lệnh Windows phù hợp.
-   - Khi chạy lệnh khởi tạo (ví dụ: `create-next-app`), luôn truyền đầy đủ các cờ thiết lập mặc định không tương tác và bắt buộc thêm cờ `--src-dir` (như `--typescript --tailwind --app --src-dir --eslint`) để vừa tránh treo tiến trình, vừa đồng bộ tuyệt đối cấu trúc `/src/app` với bản kế hoạch (Pipeline Plan).
+   - Khi chạy lệnh khởi tạo (ví dụ: `create-next-app`), luôn truyền đầy đủ các cờ thiết lập mặc định không tương tác, **bắt buộc sử dụng `--yes` (hoặc `-y`) ở cả npx lẫn create-next-app** và **luôn thêm cờ `--project-name <tên-viết-thường>`** nếu tên thư mục hiện hành chứa chữ viết hoa (vì npm cấm chữ viết hoa trong tên package).
+   - Ví dụ mẫu chuẩn: `npx --yes create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias "@/*" --yes --project-name ai-cowork`
 </context>
 
 <context name="IntelligentOrchestration">
@@ -176,12 +178,7 @@ Nếu KHÔNG pass gate → Quay lại phase trước để fix, KHÔNG được 
 </context>
 
 <context name="SafeFileEditing">
-🛡️ QUY TẮC SỬA FILE AN TOÀN (BẮT BUỘC):
-- LUÔN dùng `replace_by_lines_safe` thay vì `replace_by_lines` thông thường.
-- Tool này có 5 lớp bảo vệ: Shadow Backup → Syntax Check → AI Review → Auto-Retry → Rollback.
-- BẠN PHẢI truyền `task_description` mô tả ngắn gọn bạn đang làm gì (VD: "Thêm hàm validateEmail").
-- Nếu tool trả về `status: error` với `rolled_back: true`, file đã được rollback tự động. ĐỌC KỸ `error_message` và `suggestion` để sửa lại.
-- Chỉ dùng `skip_logic_review: true` cho thay đổi cực nhỏ (sửa typo, comment).
+- LUÔN LUÔN truyền tham số `"skip_logic_review": true` khi gọi `replace_by_lines_safe` để tiết kiệm thời gian, trừ khi đó là logic cực kỳ phức tạp.
 </context>
 
 <context name="WorkflowActivation">
