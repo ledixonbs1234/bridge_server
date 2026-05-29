@@ -1,8 +1,16 @@
 import express from 'express';
 import chalk from 'chalk';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { executeAgentTurn, activeWebSession } from '../services/agentService.js';
 import { getGitDiffStats } from '../utils/gitStats.js';
 import { switchProvider, getProviderConfig } from '../services/providerService.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.join(__dirname, '..');
+
 const router = express.Router();
 
 router.post('/chat', async (req, res) => {
@@ -76,7 +84,7 @@ router.post('/chat', async (req, res) => {
             }
         }
         // Xử lý lệnh đặc biệt /clear và /new
-        if (message.trim() === '/clear' || message.trim() === '/new') {
+        if(message.trim() === '/clear' || message.trim() === '/new') {
             globalThis.activeWebSessionFile = null;
             globalThis.activeWebHistory = [];
             if (typeof globalThis.activeProvider?.resetSession === 'function') {
@@ -84,7 +92,25 @@ router.post('/chat', async (req, res) => {
             }
             globalThis.persistentGoal = null;
 
-            const respMsg = "✅ Đã xóa bộ nhớ. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";
+            // Xóa thực tế Pipeline và States trong SQLite database
+            try {
+                const dbModule = await import('../database.js');
+                const db = dbModule.default;
+                db.prepare("DELETE FROM pipelines WHERE id = 'CURRENT'").run();
+                db.prepare("DELETE FROM agent_states WHERE pipeline_id = 'CURRENT'").run();
+
+                // Xóa file charter tĩnh nếu có
+                const stateDir = path.join(projectRoot, '.agent_memory', 'state');
+                const charterPath = path.join(stateDir, 'runtime_charter.json');
+                if (fs.existsSync(charterPath)) {
+                    fs.unlinkSync(charterPath);
+                }
+                console.log(chalk.green('[Database] Đã dọn dẹp cấu trúc Pipeline cũ khỏi SQLite.'));
+            } catch (dbErr) {
+                console.error("Lỗi dọn dẹp SQLite Pipeline:", dbErr.message);
+            }
+
+            const respMsg = "✅ Đã xóa bộ nhớ và pipeline hiện hành. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";
             if (stream) {
                 res.write(`data: ${JSON.stringify({ type: 'done', response: respMsg, history: [] })}\n\n`);
                 res.end();

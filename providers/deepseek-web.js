@@ -41,7 +41,7 @@ QUAN TRỌNG:
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default' } = options;
+       const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default' } = options;
 
         await deepseekBot.init();
         
@@ -50,6 +50,7 @@ QUAN TRỌNG:
             bot = await deepseekBot.getWorkerBot(workerType);
         }
 
+        const isThinkingMode = (mode === 'thinking'); // Xác định cờ
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
 
         // ---------------------------------------------------------
@@ -86,7 +87,7 @@ QUAN TRỌNG:
             finalPrompt = lastUserMessage;
         }
 
-        await bot.sendPrompt(finalPrompt);
+       await bot.sendPrompt(finalPrompt, isThinkingMode);
 
         let stepCount = 0;
 
@@ -116,9 +117,8 @@ QUAN TRỌNG:
                     const resultString = typeof funcRes === 'object' ? JSON.stringify(funcRes) : String(funcRes);
 
                     // FEEDBACK: Báo cho DeepSeek biết kết quả để nó làm tiếp
-                    const feedbackPrompt = `[KẾT QUẢ TỪ HỆ THỐNG CHO LỆNH ${toolJson.name}]\n${resultString}\n\nDựa vào kết quả này, hãy phân tích và đưa ra câu trả lời cuối cùng, HOẶC tiếp tục gọi <tool_call> nếu cần thêm thông tin.`;
-
-                    await bot.sendPrompt(feedbackPrompt);
+                     const feedbackPrompt = `[KẾT QUẢ TỪ HỆ THỐNG CHO LỆNH ${toolJson.name}]\n${resultString}\n\nDựa vào kết quả này, hãy phân tích và đưa ra câu trả lời cuối cùng, HOẶC tiếp tục gọi <tool_call> nếu cần thêm thông tin.`;
+                    await bot.sendPrompt(feedbackPrompt, isThinkingMode);
                     continue; // Chờ vòng lặp tiếp theo
 
                 } catch (e) {

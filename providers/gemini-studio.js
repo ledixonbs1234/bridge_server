@@ -15,7 +15,7 @@ class GeminiStudioProvider extends BaseProvider {
     }
 
    async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default' } = options;
+       const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default' } = options;
         await aiStudioBot.init();
 
         // 1. Phân lập Tab (Cô lập Context theo ý tưởng của bạn)
@@ -39,8 +39,8 @@ class GeminiStudioProvider extends BaseProvider {
             if (skill.parameters) decl.parameters = skill.parameters;
             return decl;
         });
-
-        await bot.setupAgentEnvironment(systemPrompt, JSON.stringify(functionDeclarations, null, 2), "High");
+       const thinkingLevel = (mode === 'thinking') ? "High" : "None";
+        await bot.setupAgentEnvironment(systemPrompt, JSON.stringify(functionDeclarations, null, 2), thinkingLevel);
 
         // 3. Gửi Prompt
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";

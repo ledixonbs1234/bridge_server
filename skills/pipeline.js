@@ -7,8 +7,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default {
-    "create_pipeline_plan": {
-        description: "[QUAN TRỌNG] Lập kế hoạch Pipeline. BẮT BUỘC dùng công cụ này ĐẦU TIÊN khi người dùng giao một task lớn, phức tạp. Phân chia task thành các Stages (giai đoạn) và Steps (bước) giống như Harness CI/CD. Hỗ trợ chạy song song bằng parallel_group và tuần tự bằng depends_on.",
+   "create_pipeline_plan": {
+        description: "[QUAN TRỌNG] Lập kế hoạch Pipeline theo mô hình Architect - Editor. BẮT BUỘC dùng công cụ này ĐẦU TIÊN khi người dùng giao một tác vụ lớn hoặc phức tạp. Các Stage lập kế hoạch phải tuân thủ nghiêm ngặt nguyên tắc chia nhỏ nhiệm vụ thành 2 bước nối tiếp:\n" +
+                     "1. ARCHITECT STEP (Khảo sát & Thiết kế): Chạy công cụ đọc tệp/thư mục để khảo sát dự án đích và viết tài liệu thiết kế kĩ thuật chi tiết dạng tệp tin (ví dụ: 'spec_design.md').\n" +
+                     "2. EDITOR STEP (Biên tập & Kiểm thử): Chạy công cụ viết tệp hoặc thay thế dòng để lập trình chính xác dựa trên tài liệu thiết kế ở bước 1, sau đó tự chạy kiểm thử (compiler check).\n" +
+                     "Hỗ trợ chạy song song bằng parallel_group và tuần tự bằng depends_on.",
         parameters: {
             type: "object",
             properties: {

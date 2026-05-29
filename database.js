@@ -80,13 +80,13 @@ function parseWhere(whereClause, params, paramOffset) {
 
   const conditions = [];
   let idx = paramOffset;
-  
+
   // Tách theo AND
   const parts = whereClause.split(/\s+AND\s+/i);
-  
+
   for (const part of parts) {
     const trimmed = part.trim();
-    
+
     // Match: column operator ?
     const match = trimmed.match(/^(\w+)\s*(=|!=|<>|<=|>=|<|>)\s*\?$/i);
     if (match) {
@@ -95,7 +95,7 @@ function parseWhere(whereClause, params, paramOffset) {
       conditions.push({ column, operator, value });
       continue;
     }
-    
+
     // Match: column operator literal (string hoặc number)
     const literalMatch = trimmed.match(/^(\w+)\s*(=|!=|<>|<=|>=|<|>)\s*('([^']*)'|"([^"]*)"|(\d+(?:\.\d+)?))$/i);
     if (literalMatch) {
@@ -105,7 +105,7 @@ function parseWhere(whereClause, params, paramOffset) {
       continue;
     }
   }
-  
+
   const filter = (row) => {
     return conditions.every(({ column, operator, value }) => {
       const rowVal = row[column];
@@ -120,7 +120,7 @@ function parseWhere(whereClause, params, paramOffset) {
       }
     });
   };
-  
+
   return { filter, paramCount: idx - paramOffset };
 }
 
@@ -131,7 +131,7 @@ function parseWhere(whereClause, params, paramOffset) {
 function parseSet(setClause, params, paramOffset) {
   const updates = [];
   let idx = paramOffset;
-  
+
   // Tách các assignments bởi dấu phẩy (cẩn thận với string có dấu phẩy)
   const parts = [];
   let current = '';
@@ -147,7 +147,7 @@ function parseSet(setClause, params, paramOffset) {
     current += char;
   }
   if (current.trim()) parts.push(current.trim());
-  
+
   for (const part of parts) {
     // column = ?
     const placeholderMatch = part.match(/^(\w+)\s*=\s*\?$/);
@@ -155,18 +155,18 @@ function parseSet(setClause, params, paramOffset) {
       updates.push({ column: placeholderMatch[1], type: 'param', paramIndex: idx++ });
       continue;
     }
-    
+
     // column = column + N hoặc column = column - N
     const incrementMatch = part.match(/^(\w+)\s*=\s*\1\s*([+-])\s*(\d+(?:\.\d+)?)$/);
     if (incrementMatch) {
-      updates.push({ 
-        column: incrementMatch[1], 
-        type: 'increment', 
-        delta: (incrementMatch[2] === '+' ? 1 : -1) * parseFloat(incrementMatch[3]) 
+      updates.push({
+        column: incrementMatch[1],
+        type: 'increment',
+        delta: (incrementMatch[2] === '+' ? 1 : -1) * parseFloat(incrementMatch[3])
       });
       continue;
     }
-    
+
     // column = 'literal' hoặc column = number
     const literalMatch = part.match(/^(\w+)\s*=\s*('([^']*)'|"([^"]*)"|(\d+(?:\.\d+)?))$/);
     if (literalMatch) {
@@ -176,7 +176,7 @@ function parseSet(setClause, params, paramOffset) {
       continue;
     }
   }
-  
+
   return { updates, paramCount: idx - paramOffset };
 }
 
@@ -189,15 +189,57 @@ const db = {
     // CREATE TABLE / CREATE INDEX - chỉ log, không cần làm gì với JSON
     return;
   },
-  
+
   prepare(sql) {
     const sqlLower = sql.toLowerCase().trim();
     const sqlNorm = sql.replace(/\s+/g, ' ').trim();
-    
+
     return {
       // ============ RUN (INSERT / UPDATE / DELETE) ============
       run(...params) {
         try {
+          if (sqlLower.startsWith('delete from pipelines')) {
+            const whereMatch = sqlNorm.match(/WHERE\s+(.+)$/i);
+            if (whereMatch) {
+              // Phân tích mệnh đề WHERE (ví dụ: id = 'CURRENT') thành bộ lọc filter
+              const { filter } = parseWhere(whereMatch[1], params, 0);
+              const initialLength = dbData.pipelines.length;
+
+              // Lọc bỏ các dòng thỏa mãn điều kiện xóa
+              dbData.pipelines = dbData.pipelines.filter(row => !filter(row));
+              const changes = initialLength - dbData.pipelines.length;
+
+              // Nếu có dòng bị xóa, tiến hành lưu lại vào tệp JSON
+              if (changes > 0) saveDb();
+              return { changes };
+            } else {
+              // Trường hợp xóa không có điều kiện WHERE (xóa sạch bảng)
+              const changes = dbData.pipelines.length;
+              dbData.pipelines = [];
+              if (changes > 0) saveDb();
+              return { changes };
+            }
+          }
+
+          // -------- XỬ LÝ LỆNH: DELETE FROM agent_states --------
+          if (sqlLower.startsWith('delete from agent_states')) {
+            const whereMatch = sqlNorm.match(/WHERE\s+(.+)$/i);
+            if (whereMatch) {
+              const { filter } = parseWhere(whereMatch[1], params, 0);
+              const initialLength = dbData.agent_states.length;
+
+              dbData.agent_states = dbData.agent_states.filter(row => !filter(row));
+              const changes = initialLength - dbData.agent_states.length;
+
+              if (changes > 0) saveDb();
+              return { changes };
+            } else {
+              const changes = dbData.agent_states.length;
+              dbData.agent_states = [];
+              if (changes > 0) saveDb();
+              return { changes };
+            }
+          }
           // -------- INSERT OR REPLACE INTO pipelines --------
           if (sqlLower.includes('insert or replace into pipelines')) {
             const [id, name, status, data] = params;
@@ -215,7 +257,7 @@ const db = {
             saveDb();
             return { changes: 1 };
           }
-          
+
           // -------- INSERT OR REPLACE INTO agent_states --------
           if (sqlLower.includes('insert or replace into agent_states')) {
             const [pipeline_id, step_key, state, retry_count, error_history, updated_at] = params;
@@ -236,7 +278,7 @@ const db = {
             saveDb();
             return { changes: 1 };
           }
-          
+
           // -------- INSERT INTO traces --------
           if (sqlLower.startsWith('insert into traces')) {
             const [id, name, pipeline_id, status, created_at] = params;
@@ -244,7 +286,7 @@ const db = {
             saveDb();
             return { changes: 1 };
           }
-          
+
           // -------- INSERT INTO trace_spans --------
           if (sqlLower.startsWith('insert into trace_spans')) {
             const [id, trace_id, parent_span_id, name, type, status, started_at, input] = params;
@@ -252,18 +294,18 @@ const db = {
             saveDb();
             return { changes: 1 };
           }
-          
+
           // -------- INSERT INTO memories --------
           if (sqlLower.startsWith('insert into memories')) {
             const [id, date, tags, situation, solution, trust_score, use_count] = params;
-            dbData.memories.push({ 
-              id: id || autoIncrements.memories++, 
-              date, tags, situation, solution, trust_score, use_count 
+            dbData.memories.push({
+              id: id || autoIncrements.memories++,
+              date, tags, situation, solution, trust_score, use_count
             });
             saveDb();
             return { changes: 1, lastInsertRowid: dbData.memories.length };
           }
-          
+
           // -------- INSERT INTO tool_telemetry --------
           if (sqlLower.startsWith('insert into tool_telemetry')) {
             const [tool_name, timestamp, success, duration_ms, error_message] = params;
@@ -274,16 +316,16 @@ const db = {
             saveDb();
             return { changes: 1, lastInsertRowid: dbData.tool_telemetry.length };
           }
-          
+
           // -------- UPDATE pipelines --------
           if (sqlLower.startsWith('update pipelines')) {
             // UPDATE pipelines SET data = ?, status = ? WHERE id = ?
             const setMatch = sqlNorm.match(/SET\s+(.+?)\s+WHERE\s+(.+)$/i);
             if (!setMatch) return { changes: 0 };
-            
+
             const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
             const { filter } = parseWhere(setMatch[2], params, setParamCount);
-            
+
             let changes = 0;
             for (const row of dbData.pipelines) {
               if (filter(row)) {
@@ -298,15 +340,15 @@ const db = {
             if (changes > 0) saveDb();
             return { changes };
           }
-          
+
           // -------- UPDATE agent_states --------
           if (sqlLower.startsWith('update agent_states')) {
             const setMatch = sqlNorm.match(/SET\s+(.+?)\s+WHERE\s+(.+)$/i);
             if (!setMatch) return { changes: 0 };
-            
+
             const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
             const { filter } = parseWhere(setMatch[2], params, setParamCount);
-            
+
             let changes = 0;
             for (const row of dbData.agent_states) {
               if (filter(row)) {
@@ -321,15 +363,15 @@ const db = {
             if (changes > 0) saveDb();
             return { changes };
           }
-          
+
           // -------- UPDATE traces --------
           if (sqlLower.startsWith('update traces')) {
             const setMatch = sqlNorm.match(/SET\s+(.+?)\s+WHERE\s+(.+)$/i);
             if (!setMatch) return { changes: 0 };
-            
+
             const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
             const { filter } = parseWhere(setMatch[2], params, setParamCount);
-            
+
             let changes = 0;
             for (const row of dbData.traces) {
               if (filter(row)) {
@@ -344,15 +386,15 @@ const db = {
             if (changes > 0) saveDb();
             return { changes };
           }
-          
+
           // -------- UPDATE trace_spans --------
           if (sqlLower.startsWith('update trace_spans')) {
             const setMatch = sqlNorm.match(/SET\s+(.+?)\s+WHERE\s+(.+)$/i);
             if (!setMatch) return { changes: 0 };
-            
+
             const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
             const { filter } = parseWhere(setMatch[2], params, setParamCount);
-            
+
             let changes = 0;
             for (const row of dbData.trace_spans) {
               if (filter(row)) {
@@ -367,15 +409,15 @@ const db = {
             if (changes > 0) saveDb();
             return { changes };
           }
-          
+
           // -------- UPDATE memories --------
           if (sqlLower.startsWith('update memories')) {
             const setMatch = sqlNorm.match(/SET\s+(.+?)\s+WHERE\s+(.+)$/i);
             if (!setMatch) return { changes: 0 };
-            
+
             const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
             const { filter } = parseWhere(setMatch[2], params, setParamCount);
-            
+
             let changes = 0;
             for (const row of dbData.memories) {
               if (filter(row)) {
@@ -390,25 +432,48 @@ const db = {
             if (changes > 0) saveDb();
             return { changes };
           }
-          
+
           return { changes: 0 };
         } catch (err) {
           console.error('[DB] RUN error:', err.message, '\nSQL:', sqlNorm);
           return { changes: 0 };
         }
       },
-      
+
       // ============ GET (SELECT single row) ============
       get(...params) {
         try {
           // SELECT * FROM agent_states WHERE pipeline_id = ? AND step_key = ?
-          if (sqlLower.includes('from agent_states') && sqlLower.includes('where')) {
-            const whereMatch = sqlNorm.match(/WHERE\s+(.+)$/i);
-            if (!whereMatch) return undefined;
-            const { filter } = parseWhere(whereMatch[1], params, 0);
-            return dbData.agent_states.find(filter) || undefined;
+          if (sqlLower.includes('from agent_states') && sqlLower.includes('where pipeline_id')) {
+            let pipelineId = params[0];
+            let stepKey = params[1]; // Nạp thêm tham số thứ 2 là step_key
+
+            // KHẮC PHỤC LỖI TRUY VẤN: Nếu không truyền tham số qua bind (?)
+            // mà viết cứng 'CURRENT' vào chuỗi truy vấn, tiến hành quét chuỗi để lấy giá trị.
+            if (pipelineId === undefined) {
+              const match = sqlNorm.match(/pipeline_id\s*=\s*(?:'([^']*)'|"([^"]*)")/i);
+              if (match) {
+                pipelineId = match[1] || match[2];
+              }
+            }
+
+            // Tương tự, nếu không truyền stepKey qua bind (?), tiến hành quét chuỗi truy vấn để lấy giá trị
+            if (stepKey === undefined) {
+              const match = sqlNorm.match(/step_key\s*=\s*(?:'([^']*)'|"([^"]*)")/i);
+              if (match) {
+                stepKey = match[1] || match[2];
+              }
+            }
+
+            // SỬA ĐỔI: Sử dụng .find() thay vì .filter() để trả về một Object duy nhất (thay vì mảng)
+            // Đồng thời bắt buộc phải khớp cả 'pipeline_id' và 'step_key'
+            const found = dbData.agent_states.find(
+              s => s.pipeline_id === pipelineId && s.step_key === stepKey
+            );
+
+            return found || undefined;
           }
-          
+
           // SELECT data FROM pipelines WHERE id = ? AND status = ?
           if (sqlLower.includes('from pipelines') && sqlLower.includes('where')) {
             const whereMatch = sqlNorm.match(/WHERE\s+(.+)$/i);
@@ -416,7 +481,7 @@ const db = {
             const { filter } = parseWhere(whereMatch[1], params, 0);
             return dbData.pipelines.find(filter) || undefined;
           }
-          
+
           // SELECT * FROM traces WHERE id = ?
           if (sqlLower.includes('from traces') && !sqlLower.includes('trace_spans') && sqlLower.includes('where')) {
             const whereMatch = sqlNorm.match(/WHERE\s+(.+)$/i);
@@ -424,7 +489,7 @@ const db = {
             const { filter } = parseWhere(whereMatch[1], params, 0);
             return dbData.traces.find(filter) || undefined;
           }
-          
+
           // SELECT created_at FROM traces WHERE id = ?
           if (sqlLower.includes('select created_at from traces')) {
             const whereMatch = sqlNorm.match(/WHERE\s+(.+)$/i);
@@ -432,7 +497,7 @@ const db = {
             const { filter } = parseWhere(whereMatch[1], params, 0);
             return dbData.traces.find(filter) || undefined;
           }
-          
+
           // SELECT started_at FROM trace_spans WHERE id = ?
           if (sqlLower.includes('select started_at from trace_spans')) {
             const whereMatch = sqlNorm.match(/WHERE\s+(.+)$/i);
@@ -440,13 +505,13 @@ const db = {
             const { filter } = parseWhere(whereMatch[1], params, 0);
             return dbData.trace_spans.find(filter) || undefined;
           }
-          
+
           // SELECT * FROM memories WHERE id = ?
           if (sqlLower.includes('from memories') && sqlLower.includes('where id')) {
             const [id] = params;
             return dbData.memories.find(m => m.id === id) || undefined;
           }
-          
+
           // SELECT ... FROM tool_telemetry WHERE tool_name = ?
           if (sqlLower.includes('from tool_telemetry') && sqlLower.includes('where tool_name')) {
             const [toolName] = params;
@@ -458,14 +523,14 @@ const db = {
             const avg_duration = records.reduce((sum, r) => sum + (r.duration_ms || 0), 0) / total;
             return { total, success_count, fail_count, avg_duration };
           }
-          
+
           return undefined;
         } catch (err) {
           console.error('[DB] GET error:', err.message, '\nSQL:', sqlNorm);
           return undefined;
         }
       },
-      
+
       // ============ ALL (SELECT multiple rows) ============
       all(...params) {
         try {
@@ -478,7 +543,7 @@ const db = {
             }
             return rows;
           }
-          
+
           // SELECT t.*, (SELECT COUNT(*) ...) FROM traces t ORDER BY created_at DESC LIMIT ?
           if (sqlLower.includes('from traces') && sqlLower.includes('order by') && sqlLower.includes('limit')) {
             const [limit] = params;
@@ -494,13 +559,13 @@ const db = {
             if (typeof limit === 'number') rows = rows.slice(0, limit);
             return rows;
           }
-          
+
           // SELECT * FROM agent_states WHERE pipeline_id = ?
           if (sqlLower.includes('from agent_states') && sqlLower.includes('where pipeline_id')) {
             const [pipelineId] = params;
             return dbData.agent_states.filter(s => s.pipeline_id === pipelineId);
           }
-          
+
           // SELECT ... FROM memories (với filter trust_score)
           if (sqlLower.includes('from memories')) {
             if (sqlLower.includes('trust_score') && sqlLower.includes('order by trust_score desc')) {
@@ -514,7 +579,7 @@ const db = {
             }
             return dbData.memories.filter(m => (m.trust_score ?? 0.7) > 0.3);
           }
-          
+
           // SELECT ... FROM tool_telemetry GROUP BY tool_name
           if (sqlLower.includes('from tool_telemetry') && sqlLower.includes('group by tool_name')) {
             if (!dbData.tool_telemetry) return [];
@@ -537,7 +602,7 @@ const db = {
               avg_duration: g.total > 0 ? g.sum_duration / g.total : 0
             }));
           }
-          
+
           return [];
         } catch (err) {
           console.error('[DB] ALL error:', err.message, '\nSQL:', sqlNorm);

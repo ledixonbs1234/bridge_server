@@ -162,13 +162,170 @@ router.post('/permission/respond', async (req, res) => {
         res.status(404).json({ error: 'Phiên yêu cầu cấp quyền không tồn tại hoặc đã hết hạn.' });
     }
 });
+router.delete('/pipeline-state', (req, res) => {
+    try {
+        db.prepare("DELETE FROM pipelines WHERE id = 'CURRENT'").run();
+        db.prepare("DELETE FROM agent_states WHERE pipeline_id = 'CURRENT'").run();
+        
+        // Xóa file charter tĩnh trong .agent_memory/state
+        const stateDir = path.join(projectRoot, '.agent_memory', 'state');
+        const charterPath = path.join(stateDir, 'runtime_charter.json');
+        if (fs.existsSync(charterPath)) {
+            fs.unlinkSync(charterPath);
+        }
+        
+        res.json({ success: true, message: "Đã xóa sạch pipeline hiện tại khỏi cơ sở dữ liệu." });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 
 // Pipeline state endpoint
 router.get('/pipeline-state', (req, res) => {
     try {
-        res.json({ active: false, pipeline: null, states: [] });
+        const pipelineRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
+        if (pipelineRow && pipelineRow.data) {
+            const pipeline = JSON.parse(pipelineRow.data);
+            const states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
+            
+            res.json({ 
+                active: pipeline.status === 'IN_PROGRESS', 
+                pipeline, 
+                states 
+            });
+        } else {
+            res.json({ active: false, pipeline: null, states: [] });
+        }
     } catch (e) {
         res.status(500).json({ error: e.message });
+    }
+});
+
+router.get('/active-workspace', (req, res) => {
+    try {
+        const pipelineRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
+        const providerName = globalThis.activeProvider ? (globalThis.activeProvider.getDisplayName?.() || globalThis.activeProvider.name) : 'None';
+        const providerKey = globalThis.providerConfig?.activeProvider || 'none';
+        const modelName = globalThis.activeProvider?.model || 'unknown';
+
+        let pipeline = null;
+        let states = [];
+        if (pipelineRow && pipelineRow.data) {
+            pipeline = JSON.parse(pipelineRow.data);
+            states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
+        }
+
+        // Khởi tạo trạng thái mặc định cho các Agent thực tế
+        let orchestratorState = 'idle';
+        let llmState = 'idle';
+        let validatorState = 'idle';
+        let criticState = 'idle';
+        let activeTaskDescription = '';
+        let currentStepKey = '';
+
+        // Tìm các bước đang chạy hoặc đang được kiểm thử
+        const runningStep = states.find(s => s.state === 'RUNNING');
+        const validatingStep = states.find(s => s.state === 'VALIDATING');
+        const blockedStep = states.find(s => s.state === 'BLOCKED' || s.state === 'FAILED');
+
+        if (runningStep) {
+            orchestratorState = 'idle'; // Đã giao việc, Architect ở trạng thái chờ
+            llmState = 'running';       // LLM Worker đang thực thi code
+            currentStepKey = runningStep.step_key;
+            const stepObj = pipeline?.stages.flatMap(st => st.steps).find(s => s.step_key === runningStep.step_key);
+            activeTaskDescription = stepObj ? stepObj.task : '';
+        } else if (validatingStep) {
+            orchestratorState = 'idle';
+            llmState = 'waiting';       // Chờ kết quả kiểm duyệt
+            validatorState = 'running'; // Validator đang biên dịch, kiểm tra cú pháp
+            currentStepKey = validatingStep.step_key;
+            const stepObj = pipeline?.stages.flatMap(st => st.steps).find(s => s.step_key === validatingStep.step_key);
+            activeTaskDescription = stepObj ? stepObj.task : '';
+        } else if (blockedStep) {
+            orchestratorState = 'waiting'; // Đang chờ con người phê duyệt
+            criticState = 'running';       // Critic Agent đang phân tích log lỗi để rút kinh nghiệm
+        } else if (pipeline && pipeline.status === 'IN_PROGRESS') {
+            orchestratorState = 'running'; // Architect đang lập kế hoạch phân rã tác vụ
+        }
+
+        res.json({
+            success: true,
+            provider: {
+                key: providerKey,
+                name: providerName,
+                model: modelName
+            },
+            agents: [
+                {
+                    id: 'orchestrator',
+                    name: 'Lead Technical Architect',
+                    type: 'orchestrator',
+                    provider: 'System Host',
+                    model: 'Master Engine',
+                    tools: ['create_pipeline_plan', 'update_pipeline_status'],
+                    toolCalls: [],
+                    status: {
+                        state: orchestratorState,
+                        currentTask: orchestratorState === 'running' ? 'Planning next Stage...' : (orchestratorState === 'waiting' ? 'Waiting for human feedback...' : 'Delegating tasks'),
+                        progress: orchestratorState === 'running' ? 50 : 0,
+                        lastUpdate: Date.now()
+                    }
+                },
+                {
+                    id: 'llm_worker',
+                    name: providerName,
+                    type: 'specialist',
+                    provider: providerKey,
+                    model: modelName,
+                    tools: ['read_file', 'write_file', 'replace_by_lines_safe', 'execute_terminal_command'],
+                    toolCalls: [],
+                    status: {
+                        state: llmState,
+                        currentTask: llmState === 'running' ? activeTaskDescription : undefined,
+                        progress: llmState === 'running' ? 50 : 0,
+                        lastUpdate: Date.now()
+                    }
+                },
+                {
+                    id: 'validator',
+                    name: 'Syntax & Logic Validator',
+                    type: 'worker',
+                    provider: 'Local Compiler',
+                    model: 'PathGuard & AST',
+                    tools: ['npx tsc', 'syntax_validator'],
+                    toolCalls: [],
+                    status: {
+                        state: validatorState,
+                        currentTask: validatorState === 'running' ? 'Compiling & checking Logic...' : undefined,
+                        progress: validatorState === 'running' ? 50 : 0,
+                        lastUpdate: Date.now()
+                    }
+                },
+                {
+                    id: 'critic',
+                    name: 'Quality Critic Agent',
+                    type: 'worker',
+                    provider: 'Self-Learning System',
+                    model: 'Reflection Engine',
+                    tools: ['memorize_lesson', 'memorize_rule'],
+                    toolCalls: [],
+                    status: {
+                        state: criticState,
+                        currentTask: criticState === 'running' ? 'Analyzing failure logs...' : undefined,
+                        progress: criticState === 'running' ? 50 : 0,
+                        lastUpdate: Date.now()
+                    }
+                }
+            ],
+            pipeline,
+            states,
+            activeTask: {
+                step_key: currentStepKey,
+                description: activeTaskDescription
+            }
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 

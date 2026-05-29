@@ -116,14 +116,15 @@ export async function executeAgentTurn({
         const systemPrompt = getCompiledSystemPrompt();
         const apiIntent = classifyIntent(message);
         const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
-
-        const llmSpanId = traceId ? tracer.startSpan(traceId, `LLM Chat (Full Context)`, 'llm', null, {
+        const runMode = (apiIntent === 'complex' || apiIntent === 'research') ? 'thinking' : 'fast';
+        const llmSpanId = traceId ? tracer.startSpan(traceId, `LLM Chat (${runMode.toUpperCase()})`, 'llm', null, {
             system_prompt: systemPrompt,
             messages: enrichedMessages
         }) : null;
 
         const result = await chatWithFailover({
             messages: enrichedMessages,
+            mode: runMode, // 🚀 TRUYỀN MODE XUỐNG PROVIDER
             skillRegistry: filteredSkills,
             systemPrompt,
             maxSteps: 25,
@@ -336,8 +337,9 @@ Chỉ trả lời cực ngắn gọn (1-2 câu).`;
     try {
         const skills = {};
 
-        const response = await activeProvider.chat({
+       const response = await activeProvider.chat({
             messages: [{ role: 'user', content: criticPrompt }],
+            mode: 'thinking', // 🧠 BẬT TƯ DUY SÂU CHO CRITIC
             skillRegistry: skills,
             executeSkill: async (funcName, args) => {
                 console.log(chalk.magenta(`[Critic Agent] 💡 Tự động gọi: ${funcName}`));
@@ -431,8 +433,9 @@ export async function reformulateQuery(userMessage, activeProvider, onLog) {
     const prompt = `Tin nhắn gốc của người dùng: "${userMessage}"`;
 
     try {
-        let optimizedMessage = await resolvedProvider.chat({
+       let optimizedMessage = await resolvedProvider.chat({
             messages: [{ role: 'user', content: prompt }],
+            mode: 'fast', // 🚀 TẮT TƯ DUY ĐỂ XỬ LÝ NHANH
             skillRegistry: {},
             executeSkill: async () => { },
             systemPrompt: systemPrompt,

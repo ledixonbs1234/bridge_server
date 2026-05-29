@@ -19,7 +19,7 @@ class QwenWebBot {
 
         // CDP Native properties - Khóa cứng duy nhất 1 Request ID đang hoạt động
         this.client = null;
-        this.activeRequestId = null; 
+        this.activeRequestId = null;
     }
 
     async init() {
@@ -60,14 +60,14 @@ class QwenWebBot {
         // 1. Theo dõi khi nhận phản hồi HTTP Response
         this.client.on('Network.responseReceived', async ({ requestId, response }) => {
             const url = response.url;
-            
+
             // Chỉ lọc các request completion stream của Qwen
             if (url.includes('/api/v2/chat/completions') || url.includes('/chat/completions')) {
                 // Khóa cứng: Chỉ chấp nhận xử lý duy nhất Request ID mới nhất này
                 this.activeRequestId = requestId;
                 this.streamFinished = false;
                 this.streamError = null;
-                
+
                 try {
                     // Chỉ kích hoạt stream, KHÔNG xử lý bufferedData ở đây để tránh trùng lặp
                     await this.client.send('Network.streamResourceContent', { requestId });
@@ -119,7 +119,7 @@ class QwenWebBot {
         for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed || !trimmed.startsWith('data: ')) continue;
-            
+
             const jsonStr = trimmed.slice(6);
             if (jsonStr === '[DONE]') {
                 this.streamFinished = true;
@@ -193,44 +193,91 @@ class QwenWebBot {
         }
     }
 
-    async sendPrompt(promptText) {
+    async sendPrompt(promptText, useThinking = false) {
         if (!this.isReady) await this.init();
 
-        // 1. Đánh dấu tất cả tin nhắn cũ là đã đọc
         await this.page.evaluate(() => {
             document.querySelectorAll('.qwen-chat-message-assistant:not([data-ai-read="true"])').forEach(el => {
                 el.setAttribute('data-ai-read', 'true');
             });
         });
 
-        // Reset trạng thái stream cho lượt giao tiếp mới
         this.accumulatedAnswer = '';
         this.streamFinished = false;
         this.streamError = null;
 
-        console.log(`[Qwen Web] Đang nhập dữ liệu (${promptText.length} ký tự)...`);
+        console.log(`[Qwen Web] Đang nhập dữ liệu (${promptText.length} ký tự)... (Reasoning: ${useThinking ? 'ON (Think)' : 'OFF (Fast)'})`);
 
-        // 2. Sử dụng Selector để điền dữ liệu (Bypass React State)
-        const filled = await this.page.evaluate((text) => {
-            const textarea = document.querySelector('textarea.message-input-textarea') || 
-                             document.querySelector('.message-input-container textarea') ||
-                             document.querySelector('textarea');
+        const filled = await this.page.evaluate(async ({ text, useDeepThink }) => {
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+            // Hàm mô phỏng click chuột thực tế (Cách 1 đã thành công)
+            const simulateClick = (element) => {
+                if (!element) return;
+                element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                element.click();
+            };
+
+
+
+            // 3. Nhập văn bản vào ô chat
+            const textarea = document.querySelector('textarea.message-input-textarea') ||
+                document.querySelector('.message-input-container textarea') ||
+                document.querySelector('textarea');
 
             if (textarea) {
                 textarea.focus();
-
                 const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
                 nativeInputValueSetter.call(textarea, text);
-
                 textarea.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
                 textarea.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
-
                 textarea.blur();
                 textarea.focus();
+
+
+                // Dựa vào hình ảnh: Tùy chọn là "Think" hoặc "Fast"
+                const targetModeText = useDeepThink ? 'Think' : 'Fast';
+
+                // 1. Tìm nút Toggle hiện tại (chứa chữ Auto, Fast, hoặc Think)
+                const buttons = Array.from(document.querySelectorAll('div[role="menuitem"], div[role="option"], li, button, span'));
+                const modelSelectorBtn = buttons.find(btn => {
+                    const btnText = btn.innerText?.trim();
+                    return btnText === 'Auto' || btnText === 'Fast' || btnText === 'Think' || btnText === 'Thinking';
+                });
+                console.log(`[Qwen Web] Nút chọn chế độ hiện tại: ${modelSelectorBtn ? modelSelectorBtn.innerText.trim() : 'Không tìm thấy'}`);
+               
+                if (modelSelectorBtn) {
+                    const currentMode = modelSelectorBtn.innerText?.trim();
+
+                    // Nếu chế độ hiện tại chưa đúng với yêu cầu thì mới click đổi
+                    if (currentMode !== targetModeText) {
+                        // Click mở menu thả xuống
+                        simulateClick(modelSelectorBtn);
+                        await sleep(500); // Đợi 300ms cho menu xuất hiện hiệu ứng (animation)
+ debugger;
+                        // 2. Quét các phần tử trong menu thả xuống
+                        const menuItems = Array.from(document.querySelectorAll('.qwen-select-option-selected-label-container'));
+
+                        // Tìm đúng item có chữ 'Think' hoặc 'Fast' (Bỏ qua chính nút Toggle ban đầu)
+                        const targetItem = menuItems.find(item =>
+                            item.innerText?.trim() === targetModeText && item !== modelSelectorBtn
+                        );
+
+                        if (targetItem) {
+                            // Click chọn item
+                            simulateClick(targetItem);
+                            await sleep(300); // Đợi UI cập nhật
+                        } else {
+                            // Nếu lỗi không tìm thấy menu item, click lại nút gốc để đóng menu
+                            simulateClick(modelSelectorBtn);
+                        }
+                    }
+                }
                 return true;
             }
             return false;
-        }, promptText);
+        }, { text: promptText, useDeepThink: useThinking });
 
         if (!filled) {
             console.error("[Qwen Web Error] Không tìm thấy ô nhập liệu (textarea) trong DOM!");
@@ -238,18 +285,18 @@ class QwenWebBot {
 
         await this.page.waitForTimeout(1000);
 
-        // 3. Thực thi bấm gửi một cách an toàn
+        // Thực thi bấm nút Gửi (Send)
         const submitResult = await this.page.evaluate(() => {
-            const sendButton = document.querySelector('.message-input-right-button-send button') || 
-                               document.querySelector('.message-input-right-button button') ||
-                               document.querySelector('button[class*="send"]');
-            
+            const sendButton = document.querySelector('.message-input-right-button-send button') ||
+                document.querySelector('.message-input-right-button button') ||
+                document.querySelector('button[class*="send"]');
+
             if (sendButton && !sendButton.disabled) {
                 sendButton.click();
                 return { success: true, method: 'click' };
             } else {
-                const textarea = document.querySelector('textarea.message-input-textarea') || 
-                                 document.querySelector('textarea');
+                const textarea = document.querySelector('textarea.message-input-textarea') ||
+                    document.querySelector('textarea');
                 if (textarea) {
                     textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
                     return { success: true, method: 'enter_fallback' };
@@ -271,14 +318,14 @@ class QwenWebBot {
      */
     async createWorkerBot() {
         if (!this.context) await this.init();
-        
+
         console.log("\n[Qwen Web] 🌍 Mở Tab Worker mới để xử lý tác vụ con độc lập...");
         const workerPage = await this.context.newPage();
-        
+
         const workerBot = new QwenWebBot();
         workerBot.context = this.context;
         workerBot.page = workerPage;
-        
+
         // Cấu hình CDP cho Worker
         console.log("[Qwen Web] Thiết lập phiên kết nối CDP cho Worker Bot...");
         workerBot.client = await workerPage.context().newCDPSession(workerPage);
@@ -286,18 +333,18 @@ class QwenWebBot {
         workerBot.setupCDPListeners();
 
         workerBot.isReady = true;
-        
+
         await workerPage.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded' });
-        
+
         await workerPage.waitForFunction(() => {
             return !!(document.querySelector('textarea.message-input-textarea') || document.querySelector('textarea'));
         }, { timeout: 60000 });
-        
+
         workerBot.closeWorker = async () => {
             console.log("[Qwen Web] 🗑️ Hoàn thành tác vụ con. Đóng Tab Worker...");
             await workerPage.close();
         };
-        
+
         return workerBot;
     }
 

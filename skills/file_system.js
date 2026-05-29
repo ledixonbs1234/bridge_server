@@ -178,6 +178,14 @@ export default {
                 const result = [];
 
                 for (const entry of entries) {
+                    // 🚨 BỘ LỌC AN TOÀN: Bỏ qua thư mục thư viện, rác và bộ nhớ đệm để tránh tràn text và lệch ngữ cảnh
+                    if (entry.isDirectory() && [
+                        'node_modules', '.git', 'profile', 'dist', 'build', 'out', 
+                        '.next', '.agent_memory', '.agents', 'venv', '.venv', 'env'
+                    ].includes(entry.name)) {
+                        continue;
+                    }
+
                     const fullPath = path.join(currentPath, entry.name);
                     const item = {
                         name: entry.name,
@@ -201,14 +209,14 @@ export default {
     },
 
    "replace_by_lines_safe": {
-        description: "[SAFE MODE] Thay thế code theo số dòng với các lớp bảo vệ. Chấp nhận replace_string_base64 dạng mã hóa hoặc replace_string dạng thường, ưu tiên dùng replace_string_base64 để tránh lỗi escape ký tự. ",
+        description: "[SAFE MODE] Thay thế code theo số dòng với các lớp bảo vệ. Tool chỉ sửa đúng phạm vi dòng được chỉ định, phần còn lại của file tự động được bảo toàn ",
         parameters: {
             type: "object",
             properties: {
                 file_path: { type: "string", description: "Đường dẫn tuyệt đối đến file." },
                 start_line: { type: "number", description: "Dòng bắt đầu cần xóa/thay thế (tính từ 1)." },
                 end_line: { type: "number", description: "Dòng kết thúc cần xóa/thay thế (tính từ 1)." },
-                replace_string: { type: "string", description: "Mã nguồn MỚI dạng chuỗi thường." },
+                replace_string: { type: "string", description: "Mã nguồn MỚI dạng chuỗi thường.tuyệt đối không copy-paste tiêu đề/dòng kế tiếp của file gốc." },
                 replace_string_base64: { type: "string", description: "Mã nguồn MỚI dạng mã hóa Base64." },
                 task_description: { type: "string", description: "Mô tả ngắn gọn bạn đang cố làm gì." },
                 skip_logic_review: { type: "boolean", description: "Bỏ qua bước AI review (mặc định: false)." }

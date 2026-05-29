@@ -60,49 +60,45 @@ class DeepSeekWebBot {
    // ==========================================
     // 2. GỬI TIN NHẮN (PROMPT INJECTION)
     // ==========================================
-    async sendPrompt(promptText) {
+        async sendPrompt(promptText, useThinking = false) {
         if (!this.isReady) await this.init();
 
-        // 🔥 FIX VÒNG LẶP: Đánh dấu tất cả tin AI trên màn hình hiện tại là "Đã Cũ"
-        // Để hàm waitForResponse không bao giờ đọc lại tin cũ chứa <tool_call>
         await this.page.evaluate(() => {
             document.querySelectorAll('.ds-assistant-message-main-content:not([data-ai-read="true"])').forEach(el => {
                 el.setAttribute('data-ai-read', 'true');
             });
         });
 
-        console.log(`[DeepSeek Web] Đang nhập dữ liệu (${promptText.length} ký tự)...`);
+        console.log(`[DeepSeek Web] Đang nhập dữ liệu (${promptText.length} ký tự)... (DeepThink: ${useThinking ? 'ON' : 'OFF'})`);
 
-        // BƯỚC 1: ĐIỀN TEXT BẰNG "NATIVE SETTER HACK" (Bypass React)
-        await this.page.evaluate((text) => {
-            // Bật DeepThink
+        await this.page.evaluate(({ text, useDeepThink }) => {
+            // TỰ ĐỘNG BẬT/TẮT DEEPTHINK TRÊN GIAO DIỆN
             const d = Array.from(document.querySelectorAll('div[role="button"]')).find(e => e.innerText && e.innerText.includes('DeepThink'));
-            if (d && d.getAttribute('aria-pressed') !== 'true') {
-                d.click();
-                console.log("✅ Đã bật DeepThink");
+            if (d) {
+                const isPressed = d.getAttribute('aria-pressed') === 'true';
+                if (useDeepThink && !isPressed) {
+                    d.click(); // Bật nếu đang tắt
+                } else if (!useDeepThink && isPressed) {
+                    d.click(); // Tắt nếu đang bật
+                }
             }
 
-            // Ưu tiên bắt id="chat-input", nếu không có lấy textarea cuối cùng (tránh ô Search Modal)
             const textareas = document.querySelectorAll('textarea');
             const t = document.querySelector('textarea#chat-input') || textareas[textareas.length - 1];
 
             if (t) {
                 t.focus();
-
-                // 🔥 MAGIC HACK: Vượt rào React State
                 const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set;
                 nativeInputValueSetter.call(t, text);
 
-                // Kích hoạt các sự kiện để React nhận diện chữ và nhả khóa nút Gửi
                 t.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
                 t.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
 
                 t.blur();
                 t.focus();
             }
-        }, promptText);
+        }, { text: promptText, useDeepThink: useThinking });
 
-        // Chờ 500ms cho UI của React render lại (đổi aria-disabled sang false)
         await this.page.waitForTimeout(500);
 
         // BƯỚC 2: TÌM VÀ CLICK NÚT GỬI (Quét từ dưới lên để tránh trúng nút Kính lúp ở thanh menu)
