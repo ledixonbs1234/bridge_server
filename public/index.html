@@ -42,17 +42,85 @@
     </div>
 
     <div class="tabs">
-        <div class="tab active" data-panel="telemetry">📊 Telemetry</div>
+        <!-- Đưa Web Terminal lên vị trí đầu tiên -->
+        <div class="tab active" data-panel="terminal">💬 Web Terminal</div>
+        <div class="tab" data-panel="telemetry">📊 Telemetry</div>
         <div class="tab" data-panel="traces">🔍 Traces</div>
         <div class="tab" data-panel="memory">🧠 Memory</div>
         <div class="tab" data-panel="sessions">💾 Sessions</div>
         <div class="tab" data-panel="commands">📖 Commands</div>
-        <div class="tab" data-panel="terminal">💬 Web Terminal</div>
     </div>
 
     <div class="content">
+        <!-- WEB TERMINAL PANEL (Mặc định active) -->
+        <div class="panel active" id="panel-terminal">
+            <div class="chat-layout-container">
+                <!-- LEFT SIDEBAR PANEL - Chat History & Progress -->
+                <div class="chat-left-sidebar" id="chat-left-sidebar">
+                    <!-- Dynamic chat history content will be inserted here -->
+                    
+                    <!-- Prompt Input Area (fixed at bottom) -->
+                    <div class="prompt-input-area">
+                        <div class="input-wrapper">
+                            <textarea 
+                                id="chat-input" 
+                                rows="3" 
+                                placeholder="Code your creativity here. (Tab: Reformulate ON)"
+                                class="chat-textarea"></textarea>
+                            <button id="chat-send" class="send-button" disabled>
+                                Coding ➔
+                            </button>
+                        </div>
+                        <div class="input-disclaimer">
+                            AI-generated content may contain inaccuracies.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- RIGHT CONTENT PANEL - Live Logs -->
+                <div class="chat-right-content" id="chat-right-content">
+                    <!-- Top Bar with Tabs -->
+                    <div class="content-top-bar">
+                        <div class="tab-switcher">
+                            <button class="tab-btn active" data-tab="log">Log</button>
+                            <button class="tab-btn" data-tab="difference">Difference</button>
+                        </div>
+                        <button class="expand-btn" title="Expand">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- Log Tab Content (Mặc định Hiển thị) -->
+                    <div class="tab-content" id="tab-log">
+                        <div class="log-stream" id="log-stream">
+                            <!-- Dynamic log entries will be appended here -->
+                        </div>
+                    </div>
+
+                    <!-- Difference Tab Content -->
+                    <div class="tab-content" id="tab-difference" style="display: none;">
+                        <div class="diff-container" id="diff-container">
+                            <div class="empty-state">
+                                <div class="icon">📝</div>
+                                <p>Chưa có thay đổi nào. Các file được chỉnh sửa sẽ hiển thị ở đây.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Quick API Test Card (below main layout) -->
+            <div class="card" style="margin-top:16px">
+                <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">🔍 Quick API Test</h3>
+                <div style="display:flex;gap:8px;flex-wrap:wrap" id="quick-tests"></div>
+                <pre id="api-result" style="margin-top:12px;padding:12px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--muted);max-height:300px;overflow:auto;display:none"></pre>
+            </div>
+        </div>
+
         <!-- TELEMETRY PANEL -->
-        <div class="panel active" id="panel-telemetry">
+        <div class="panel" id="panel-telemetry">
             <div class="grid grid-4" id="telemetry-stats" style="margin-bottom:20px"></div>
             <div class="grid grid-2" style="margin-bottom:20px">
                 <div class="card chart-card">
@@ -143,73 +211,6 @@
             <div class="card">
                 <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">🧩 Registered Skills (<span id="skill-count">0</span>)</h3>
                 <div class="skill-grid" id="skills-list"></div>
-            </div>
-        </div>
-
-        <!-- WEB TERMINAL PANEL -->
-        <div class="panel" id="panel-terminal">
-            <div class="chat-layout-container">
-                <!-- LEFT SIDEBAR PANEL - Chat History & Progress -->
-                <div class="chat-left-sidebar" id="chat-left-sidebar">
-                    <!-- Dynamic chat history content will be inserted here -->
-                    
-                    <!-- Prompt Input Area (fixed at bottom) -->
-                    <div class="prompt-input-area">
-                        <div class="input-wrapper">
-                            <textarea 
-                                id="chat-input" 
-                                rows="3" 
-                                placeholder="Code your creativity here."
-                                class="chat-textarea"></textarea>
-                            <button id="chat-send" class="send-button" disabled>
-                                Coding ➔
-                            </button>
-                        </div>
-                        <div class="input-disclaimer">
-                            AI-generated content may contain inaccuracies.
-                        </div>
-                    </div>
-                </div>
-
-                <!-- RIGHT CONTENT PANEL - Live Logs -->
-                <div class="chat-right-content" id="chat-right-content">
-                    <!-- Top Bar with Tabs -->
-                    <div class="content-top-bar">
-                        <div class="tab-switcher">
-                            <button class="tab-btn active" data-tab="difference">Difference</button>
-                            <button class="tab-btn" data-tab="log">Log</button>
-                        </div>
-                        <button class="expand-btn" title="Expand">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
-                            </svg>
-                        </button>
-                    </div>
-
-                    <!-- Difference Tab Content -->
-                    <div class="tab-content" id="tab-difference">
-                        <div class="diff-container" id="diff-container">
-                            <div class="empty-state">
-                                <div class="icon">📝</div>
-                                <p>Chưa có thay đổi nào. Các file được chỉnh sửa sẽ hiển thị ở đây.</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Log Tab Content -->
-                    <div class="tab-content" id="tab-log" style="display: none;">
-                        <div class="log-stream" id="log-stream">
-                            <!-- Dynamic log entries will be appended here -->
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Quick API Test Card (below main layout) -->
-            <div class="card" style="margin-top:16px">
-                <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">🔍 Quick API Test</h3>
-                <div style="display:flex;gap:8px;flex-wrap:wrap" id="quick-tests"></div>
-                <pre id="api-result" style="margin-top:12px;padding:12px;background:var(--bg);border-radius:8px;font-size:12px;color:var(--muted);max-height:300px;overflow:auto;display:none"></pre>
             </div>
         </div>
     </div>
