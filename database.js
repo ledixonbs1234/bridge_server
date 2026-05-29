@@ -245,7 +245,7 @@ const db = {
               dbData.pipelines.push(record);
             }
             saveDb();
-            return { NodeChanges: 1 };
+            return { changes: 1 };
           }
 
           if (sqlLower.includes('insert or replace into agent_states')) {
@@ -396,6 +396,23 @@ const db = {
             return dbData.pipelines.find(filter);
           }
 
+          // 💥 SỬA ĐỔI KHÓA CỨNG: Bộc lộ cấu trúc tìm kiếm traces trực tiếp không qua parseWhere phức tạp
+          if (sqlLower.includes('from traces') && !sqlLower.includes('trace_spans') && sqlLower.includes('id =')) {
+            const traceId = params[0];
+            const found = dbData.traces.find(t => t.id === traceId);
+            if (sqlLower.includes('select created_at')) {
+              return found ? { created_at: found.created_at } : undefined;
+            }
+            return found || undefined;
+          }
+
+          // 💥 SỬA ĐỔI KHÓA CỨNG: Tìm kiếm trực tiếp spans không qua parseWhere phức tạp
+          if (sqlLower.includes('from trace_spans') && sqlLower.includes('id =')) {
+            const spanId = params[0];
+            const found = dbData.trace_spans.find(s => s.id === spanId);
+            return found || undefined;
+          }
+
           if (sqlLower.includes('from memories') && sqlLower.includes('where id')) {
             const [id] = params;
             return dbData.memories.find(m => m.id === id);
@@ -414,7 +431,7 @@ const db = {
             return dbData.memory_edges;
           }
 
-          // 💥 SỬA ĐỔI: Đưa traces lên trên đầu so với trace_spans để tránh bị subquery (SELECT COUNT(*)...) nhận diện sai
+          // Đưa traces lên trên đầu so với trace_spans để tránh bị subquery (SELECT COUNT(*)...) nhận diện sai
           if (sqlLower.includes('from traces') && sqlLower.includes('order by') && sqlLower.includes('limit')) {
             const [limit] = params;
             let rows = [...dbData.traces];
