@@ -6,7 +6,7 @@ import telemetry from '../telemetry.js';
 import tracer from '../tracer.js';
 import db from '../database.js'; // Import database để truy xuất Memories thực tế
 import { getGitDiffStats } from '../utils/gitStats.js';
-
+import { consolidateProceduralMemory } from '../services/fluxMemConsolidator.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..'); // Sửa thành '..' để trỏ đúng vào bridge_server
@@ -395,6 +395,17 @@ router.get('/commands', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+router.post('/consolidate', async (req, res) => {
+    try {
+        if (!globalThis.activeProvider) {
+            return res.status(400).json({ success: false, error: "AI Provider chưa được nạp hoặc chưa hoạt động." });
+        }
+        await consolidateProceduralMemory(globalThis.activeProvider);
+        res.json({ success: true, message: "Quá trình hợp nhất và tiến hóa bộ nhớ FluxMem Stage III hoàn thành!" });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 
 // Helper functions
 function listSessions(sessionDir) {
@@ -439,5 +450,6 @@ function getLatestSession(sessionDir) {
     }
     return { file: latestFile, messages, meta, ageMinutes: Math.round(ageMinutes) };
 }
+
 
 export default router;

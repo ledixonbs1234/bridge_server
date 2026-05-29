@@ -672,9 +672,37 @@ Thư mục dự án đích: ${workspace}
                     reason: valResult.reason || 'Thành công'
                 });
 
-                if (valResult.passed) {
+ if (valResult.passed) {
                     valSpinner.succeed(chalk.green(`Kiểm duyệt thành công!`));
                     const summary = await this.generateStepSummary(step, response);
+
+                    // =================================================================
+                    // 💥 [FLUXMEM STAGE II] - Tăng cường lực liên kết đồ thị khi chạy PASS
+                    // =================================================================
+                    try {
+                        const memories = db.prepare('SELECT * FROM memories').all() || [];
+                        const taskKeyword = step.task.toLowerCase();
+                        
+                        memories.forEach(m => {
+                            let tags = [];
+                            try { tags = JSON.parse(m.tags || '[]'); } catch { }
+                            if (tags.some(t => taskKeyword.includes(t.toLowerCase()))) {
+                                // Tăng nhẹ 0.05 điểm và tăng lượt dùng
+                                const currentScore = m.trust_score ?? 0.7;
+                                const newScore = Math.min(1.0, currentScore + 0.05);
+                                const newUseCount = (m.use_count || 0) + 1;
+                                
+                                db.prepare(`UPDATE memories SET trust_score = ?, use_count = ? WHERE id = ?`)
+                                  .run(newScore, newUseCount, m.id);
+                                
+                                // Ghi nhận cạnh liên kết tích cực lên đồ thị
+                                db.prepare(`INSERT INTO memory_edges (source_id, target_id, type, weight) VALUES (?, ?, ?, ?)`)
+                                  .run(stepKey, m.id, 'feedback_strengthened', newScore);
+                            }
+                        });
+                    } catch (e) {
+                        console.warn("[FluxMem Stage II] Lỗi củng cố liên kết bộ nhớ:", e.message);
+                    }
 
                     try {
                         const artifactPath = path.join(process.cwd(), '.agent_memory', 'state', 'artifacts', `${stepKey}_artifact.json`);
@@ -691,11 +719,38 @@ Thư mục dự án đích: ${workspace}
                         logMessage(chalk.red(`[FSM] ⚠️ Không thể ghi nhận file Artifact: ${artErr.message}`));
                     }
 
-                    this.transitionState('CURRENT', stepKey, 'DONE', { summary });
+                    this.transitionState('CURRENT', step.step_key, 'DONE', { summary });
                     return { success: true };
                 } else {
                     valSpinner.fail(chalk.red(`Kiểm duyệt thất bại: ${valResult.reason}`));
                     lastValidationError = valResult.reason;
+
+                    // =================================================================
+                    // 💥 [FLUXMEM STAGE II] - Cắt tỉa liên kết hỏng (Connection Pruning) khi FAIL
+                    // =================================================================
+                    try {
+                        const memories = db.prepare('SELECT * FROM memories').all() || [];
+                        const taskKeyword = step.task.toLowerCase();
+
+                        memories.forEach(m => {
+                            let tags = [];
+                            try { tags = JSON.parse(m.tags || '[]'); } catch { }
+                            if (tags.some(t => taskKeyword.includes(t.toLowerCase()))) {
+                                // Giảm mạnh 0.15 điểm để cô lập node nhiễu khỏi các lần truy xuất sau
+                                const currentScore = m.trust_score ?? 0.7;
+                                const newScore = Math.max(0.1, currentScore - 0.15);
+                                
+                                db.prepare(`UPDATE memories SET trust_score = ? WHERE id = ?`)
+                                  .run(newScore, m.id);
+
+                                // Ghi nhận cạnh cắt tỉa hỏng lên đồ thị
+                                db.prepare(`INSERT INTO memory_edges (source_id, target_id, type, weight) VALUES (?, ?, ?, ?)`)
+                                  .run(stepKey, m.id, 'feedback_pruned', newScore);
+                            }
+                        });
+                    } catch (e) {
+                        console.warn("[FluxMem Stage II] Lỗi cắt tỉa liên kết nhiễu:", e.message);
+                    }
                 }
             } else {
                 lastValidationError = execError.message || String(execError);

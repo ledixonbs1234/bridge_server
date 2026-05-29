@@ -170,6 +170,8 @@ async function loadTelemetry() {
 }
 
 // Memories Loader
+// Thay thế hàm loadMemories() trong tệp ridge_server/public/app.js:
+
 async function loadMemories() {
     try {
         const r = await fetch(API + '/api/dashboard/memories').then(r => r.json());
@@ -178,23 +180,36 @@ async function loadMemories() {
 
         document.getElementById('memory-stats').innerHTML = `
             <div class="card"><h3>Total Memories</h3><div class="value blue">${stats.total || 0}</div></div>
-            <div class="card"><h3>Avg Trust</h3><div class="value green">${(stats.avg_trust || 0).toFixed(2)}</div></div>
+            <div class="card"><h3>Avg Trust / PEMS</h3><div class="value green">${(stats.avg_trust || 0).toFixed(2)}</div></div>
             <div class="card"><h3>Embedded</h3><div class="value">${stats.embedded_count || 0}<span style="font-size:14px;color:var(--muted)">/${stats.total||0}</span></div></div>
-            <div class="card"><h3>High Trust (≥0.7)</h3><div class="value green">${mems.filter(m=>(m.trust_score||0)>=0.7).length}</div></div>
+            <div class="card"><h3>High Maturity (≥0.7)</h3><div class="value green">${mems.filter(m=>(m.trust_score||0)>=0.7).length}</div></div>
         `;
 
         const tbody = document.querySelector('#memory-table tbody');
         tbody.innerHTML = mems.map(m => {
-            let tags = ''; try { tags = JSON.parse(m.tags||'[]').map(t=>`<span class="badge blue">${t}</span>`).join(' '); } catch {}
+            let tags = ''; 
+            try { tags = JSON.parse(m.tags||'[]').map(t=>`<span class="badge blue">${t}</span>`).join(' '); } catch {}
+            
+            // Phân biệt màu sắc nhãn dán cho các phân lớp bộ nhớ đồ thị FluxMem
+            const memoryType = m.type || 'episodic';
+            let layerBadge = '';
+            if (memoryType === 'procedural') {
+                layerBadge = '<span class="badge yellow">𝒱_proc</span>';
+            } else if (memoryType === 'semantic') {
+                layerBadge = '<span class="badge green">𝒱_sem</span>';
+            } else {
+                layerBadge = '<span class="badge blue">𝒱_epi</span>';
+            }
+
             return `<tr>
                 <td>${trustBar(m.trust_score)}</td>
-                <td style="max-width:280px">${m.situation||'-'}</td>
-                <td style="max-width:280px;color:var(--muted)">${m.solution||'-'}</td>
+                <td>${layerBadge}</td>
+                <td style="max-width:240px; font-weight: 500;">${m.situation||'-'}</td>
+                <td style="max-width:320px; color:var(--muted); font-size:12px; font-family: monospace; white-space: pre-wrap;">${m.solution ? m.solution.substring(0, 180) + (m.solution.length > 180 ? '...' : '') : '-'}</td>
                 <td>${tags}</td>
-                <td>${m.has_embedding ? '<span class="badge green">🧠 Yes</span>' : '<span class="badge" style="opacity:.4">No</span>'}</td>
                 <td class="mono">${m.use_count||0}</td>
             </tr>`;
-        }).join('') || '<tr><td colspan="6" class="empty"><div class="icon">🧠</div>Chưa có memory nào</td></tr>';
+        }).join('') || '<tr><td colspan="6" class="empty"><div class="icon">🧠</div>Chưa có memory nào được ghi nhận</td></tr>';
 
         const buckets = [0,0,0,0,0];
         mems.forEach(m => { const t = m.trust_score||0.7; const i = Math.min(Math.floor(t*5),4); buckets[i]++; });
@@ -1322,6 +1337,29 @@ if (expandBtn && chatLayoutContainer && chatLeftSidebar) {
         }
     });
 }
+
+window.triggerConsolidation = async function() {
+    if (!confirm("Bắt đầu thực thi tiến trình hợp nhất ngoại tuyến (FluxMem Stage III)? Hệ thống sẽ phân tích lịch sử chạy gần đây và chưng cất thành các kỹ năng quy trình chuẩn dựa trên chỉ số PEMS.")) return;
+    try {
+        const btn = document.querySelector('.consolidate-btn');
+        btn.textContent = "⏳";
+        btn.disabled = true;
+        
+        const r = await fetch(API + '/api/dashboard/consolidate', { method: 'POST' }).then(res => res.json());
+        if (r.success) {
+            alert("🎉 Tiến trình FluxMem Stage III hoàn thành! Kịch bản quy trình ổn định đã được nâng cấp lên Procedural Layer.");
+            loadMemories();
+        } else {
+            alert("Quá trình thất bại: " + r.error);
+        }
+    } catch(e) {
+        alert("Lỗi kết nối tới Server: " + e.message);
+    } finally {
+        const btn = document.querySelector('.consolidate-btn');
+        btn.textContent = "💤";
+        btn.disabled = false;
+    }
+};
 // // Health Check Monitor
 // async function checkHealth() {
 //   try {

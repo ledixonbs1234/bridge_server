@@ -96,8 +96,20 @@
                 </div>
             </div>
             <div class="card">
-                <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">📋 All Memories</h3>
-                <table id="memory-table"><thead><tr><th>Trust</th><th>Situation</th><th>Solution</th><th>Tags</th><th>Embedded</th><th>Uses</th></tr></thead><tbody></tbody></table>
+                <h3 style="font-size:14px;font-weight:600;margin-bottom:12px">📋 All Memories (FluxMem Heterogeneous Layers)</h3>
+                <table id="memory-table">
+                    <thead>
+                        <tr>
+                            <th>Trust / PEMS</th>
+                            <th>Layer</th>
+                            <th>Situation / Goal</th>
+                            <th>Solution / Procedure</th>
+                            <th>Tags</th>
+                            <th>Uses</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
             </div>
         </div>
 
@@ -152,7 +164,6 @@
                     </div>
                 </div>
 
-
                 <!-- RIGHT CONTENT PANEL - Live Logs -->
                 <div class="chat-right-content" id="chat-right-content">
                     <!-- Top Bar with Tabs -->
@@ -196,7 +207,10 @@
         </div>
     </div>
 
-    <button class="refresh-btn" onclick="loadAll()" title="Refresh">↻</button>
+    <div class="floating-actions" style="position: fixed; bottom: 24px; right: 24px; display: flex; gap: 10px; z-index: 1000;">
+        <button class="consolidate-btn" onclick="triggerConsolidation()" title="Hợp nhất bộ nhớ FluxMem Stage III (Sleep-Time)" style="width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--warn); font-size: 20px; cursor: pointer; transition: all .2s; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">💤</button>
+        <button class="refresh-btn" onclick="loadAll()" title="Refresh" style="width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface); color: var(--accent); font-size: 20px; cursor: pointer; transition: all .2s; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">↻</button>
+    </div>
 
     <!-- Custom script defer loaded -->
     <script src="app.js" defer></script>

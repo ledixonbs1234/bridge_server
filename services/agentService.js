@@ -369,40 +369,86 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
 
     const msgLower = lastUserMessage.toLowerCase().trim();
 
+    // Loại trừ các câu lệnh điều hành cực ngắn để tránh truy vấn thừa
     const isContinuationOrSimpleCmd = msgLower.length < 40 && (
         /^(tiếp tục|chạy tiếp|chạy nữa|tiếp|tiếp đi|continue|go on|next|chạy đi)$/.test(msgLower) ||
-        /^(ok|được|được rồi|yes|y|no|n|sure|đồng ý|hủy)$/.test(msgLower) ||
-        /^(hãy )?(fix lỗi|sửa lỗi|sửa lỗi này|fix lỗi này|fix bug|sửa bug|chạy lại)$/.test(msgLower)
+        /^(ok|được|được rồi|yes|y|no|n|sure|đồng ý|hủy)$/.test(msgLower)
     );
 
     if (isContinuationOrSimpleCmd) {
-        if (logger) logger(`📖 Đã bỏ qua tìm kiếm bộ nhớ (lệnh đơn giản/tiếp tục)`);
+        if (logger) logger(`📖 [FluxMem I] Bỏ qua truy xuất đồ thị (câu lệnh điều khiển đơn giản)`);
         return "";
     }
 
-    let injectedContext = "\n\n[HỆ THỐNG TRÍ NHỚ (CONTEXTUAL MEMORY)]:\nLưu ý: Đây là những nguyên tắc bắt buộc từ người dùng. Hãy áp dụng ngay:\n";
+    if (logger) logger(`📖 [FluxMem Stage I] Đang truy xuất đồ thị bộ nhớ đa lớp (Semantic, Episodic, Procedural)...`);
+
+    let injectedContext = "\n\n[FLUXMEM - HỆ THỐNG TRÍ NHỚ ĐỒ THỊ TỰ TIẾN HÓA]:\n";
     let hasMemory = false;
 
+    // 1. LỚP TRI THỨC NGỮ NGHĨA (𝒱_sem) - Đọc các tệp quy tắc chung tĩnh
     const globalFile = path.join(memoryDir, 'rules', 'rules_global.md');
     if (fs.existsSync(globalFile)) {
-        injectedContext += `\n--- QUY TẮC CHUNG ---\n${fs.readFileSync(globalFile, 'utf8')}\n`;
+        injectedContext += `\n--- QUY TẮC CHUNG (𝒱_sem) ---\n${fs.readFileSync(globalFile, 'utf8')}\n`;
         hasMemory = true;
-        if (logger) logger(`📖 Đã tải bộ quy tắc phát triển chung (rules_global.md)`);
     }
 
-    const rulesDir = path.join(memoryDir, 'rules');
-    if (fs.existsSync(rulesDir)) {
-        const ruleFiles = fs.readdirSync(rulesDir).filter(f => f.endsWith('.md') && f !== 'rules_global.md');
+    // 2. LỚP TRẢI NGHIỆM SỰ KIỆN (𝒱_epi) - Tìm các vết sửa lỗi hoặc thành công trùng khớp ngữ cảnh
+    try {
+        const memories = db.prepare('SELECT * FROM memories').all() || [];
+        const searchSpace = (lastUserMessage + " " + allMessagesContext).toLowerCase();
+        
+        // Lọc các node episodic có tag liên quan và độ tin cậy kết nối ổn định
+        const relevantEpisodes = memories.filter(m => {
+            const memoryType = m.type || 'episodic';
+            if (memoryType !== 'episodic') return false;
+            
+            let tags = [];
+            try { tags = JSON.parse(m.tags || '[]'); } catch { }
+            
+            const matchesTag = tags.some(tag => searchSpace.includes(tag.toLowerCase()));
+            const isReliable = (m.trust_score ?? 0.7) > 0.35;
+            return matchesTag && isReliable;
+        });
+
+        if (relevantEpisodes.length > 0) {
+            injectedContext += `\n--- KINH NGHIỆM CHẠY THỰC TẾ TRONG QUÁ KHỨ (𝒱_epi) ---\n`;
+            relevantEpisodes.slice(0, 3).forEach((ep, idx) => {
+                injectedContext += `Trải nghiệm #${idx + 1} [Trọng số kết nối: ${(ep.trust_score ?? 0.7).toFixed(2)}]:\n- Bối cảnh: ${ep.situation}\n- Giải pháp: ${ep.solution}\n\n`;
+            });
+            hasMemory = true;
+            if (logger) logger(`📖 [FluxMem I] Đã thiết lập liên kết thành công tới ${relevantEpisodes.length} node Episodic.`);
+        }
+    } catch (e) {
+        console.warn("[FluxMem] Lỗi tải episodic memory:", e.message);
+    }
+
+    // 3. LỚP KỸ NĂNG QUY TRÌNH (𝒱_proc) - Tải các kịch bản chuẩn được chưng cất tự động
+    try {
+        const memories = db.prepare('SELECT * FROM memories').all() || [];
         const searchSpace = (lastUserMessage + " " + allMessagesContext).toLowerCase();
 
-        for (const file of ruleFiles) {
-            const keyword = file.replace('.md', '');
-            if (searchSpace.includes(keyword)) {
-                injectedContext += `\n--- QUY TẮC CHO [${keyword.toUpperCase()}] ---\n${fs.readFileSync(path.join(rulesDir, file), 'utf8')}\n`;
-                hasMemory = true;
-                if (logger) logger(`📖 Đã tải bối cảnh quy định cho công nghệ: [${keyword.toUpperCase()}]`);
-            }
+        const relevantProcedures = memories.filter(m => {
+            const memoryType = m.type || 'episodic';
+            if (memoryType !== 'procedural') return false;
+
+            let tags = [];
+            try { tags = JSON.parse(m.tags || '[]'); } catch { }
+
+            const matchesTag = tags.some(tag => searchSpace.includes(tag.toLowerCase()));
+            const isMature = (m.trust_score ?? 0.7) > 0.45; // Ngưỡng điểm PEMS để kích hoạt
+            return matchesTag && isMature;
+        });
+
+        if (relevantProcedures.length > 0) {
+            injectedContext += `\n--- QUY TRÌNH THỰC THI MẪU CHUẨN ĐÃ CHƯNG CẤT (𝒱_proc) ---\n`;
+            relevantProcedures.slice(0, 2).forEach((proc, idx) => {
+                injectedContext += `Quy trình #${idx + 1} [Maturity Score: ${(proc.trust_score ?? 0.7).toFixed(2)}]:\n- Mục tiêu: ${proc.situation}\n- Kịch bản các bước: ${proc.solution}\n\n`;
+            });
+            hasMemory = true;
+            if (logger) logger(`📖 [FluxMem I] Đã kế thừa kịch bản quy trình từ ${relevantProcedures.length} node Procedural.`);
         }
+    } catch (e) {
+        console.warn("[FluxMem] Lỗi tải procedural memory:", e.message);
     }
 
     return hasMemory ? injectedContext : "";
