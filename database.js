@@ -12,11 +12,11 @@ if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true });
 const dbPath = path.join(memoryDir, 'agent_state.json');
 
 // =================================================================
-// 💾 DATABASE STORAGE - Hỗ trợ thêm bảng memory_edges của FluxMem
+// 💾 DATABASE STORAGE - Cấu trúc bộ nhớ
 // =================================================================
 let dbData = {
-  memories: [],        // Mỗi bản ghi sẽ có thêm thuộc tính 'type' ('semantic' | 'episodic' | 'procedural')
-  memory_edges: [],    // Bảng lưu trữ liên kết có hướng giữa các node bộ nhớ
+  memories: [],
+  memory_edges: [],
   pipelines: [],
   agent_states: [],
   traces: [],
@@ -40,12 +40,9 @@ function loadDb() {
     if (fs.existsSync(dbPath)) {
       const loaded = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
       dbData = { ...dbData, ...loaded };
-      
-      // Khởi tạo mảng trống nếu chưa tồn tại trong file JSON cũ
       if (!dbData.memory_edges) dbData.memory_edges = [];
       if (!dbData.memories) dbData.memories = [];
 
-      // Đồng bộ chỉ số tự tăng lớn nhất
       for (const table of Object.keys(autoIncrements)) {
         if (Array.isArray(dbData[table]) && dbData[table].length > 0) {
           const maxId = Math.max(...dbData[table]
@@ -82,7 +79,7 @@ function parseWhere(whereClause, params, paramOffset) {
 
   const conditions = [];
   let idx = paramOffset;
-  const parts = whereClause.split(/\s+AND\s+/i);
+  const parts = whereClause.split(/\s+and\s+/i);
 
   for (const part of parts) {
     const trimmed = part.trim();
@@ -175,13 +172,12 @@ const db = {
   },
 
   prepare(sql) {
-    const sqlLower = sql.toLowerCase().trim();
     const sqlNorm = sql.replace(/\s+/g, ' ').trim();
+    const sqlLower = sqlNorm.toLowerCase();
 
     return {
       run(...params) {
         try {
-          // INSERT INTO memory_edges
           if (sqlLower.startsWith('insert into memory_edges')) {
             const [source_id, target_id, type, weight] = params;
             const existingIdx = dbData.memory_edges.findIndex(
@@ -202,7 +198,7 @@ const db = {
           }
 
           if (sqlLower.startsWith('delete from pipelines')) {
-            const whereMatch = sqlNorm.match(/WHERE\s+(.+)$/i);
+            const whereMatch = sqlNorm.match(/where\s+(.+)$/i);
             if (whereMatch) {
               const { filter } = parseWhere(whereMatch[1], params, 0);
               const initialLength = dbData.pipelines.length;
@@ -219,7 +215,7 @@ const db = {
           }
 
           if (sqlLower.startsWith('delete from agent_states')) {
-            const whereMatch = sqlNorm.match(/WHERE\s+(.+)$/i);
+            const whereMatch = sqlNorm.match(/where\s+(.+)$/i);
             if (whereMatch) {
               const { filter } = parseWhere(whereMatch[1], params, 0);
               const initialLength = dbData.agent_states.length;
@@ -249,7 +245,7 @@ const db = {
               dbData.pipelines.push(record);
             }
             saveDb();
-            return { changes: 1 };
+            return { NodeChanges: 1 };
           }
 
           if (sqlLower.includes('insert or replace into agent_states')) {
@@ -307,9 +303,8 @@ const db = {
             return { changes: 1, lastInsertRowid: dbData.tool_telemetry.length };
           }
 
-          // UPDATE memories
           if (sqlLower.startsWith('update memories')) {
-            const setMatch = sqlNorm.match(/SET\s+(.+?)\s+WHERE\s+(.+)$/i);
+            const setMatch = sqlNorm.match(/set\s+(.+?)\s+where\s+(.+)$/i);
             if (!setMatch) return { changes: 0 };
             const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
             const { filter } = parseWhere(setMatch[2], params, setParamCount);
@@ -330,7 +325,7 @@ const db = {
           }
 
           if (sqlLower.startsWith('update pipelines')) {
-            const setMatch = sqlNorm.match(/SET\s+(.+?)\s+WHERE\s+(.+)$/i);
+            const setMatch = sqlNorm.match(/set\s+(.+?)\s+where\s+(.+)$/i);
             if (!setMatch) return { changes: 0 };
             const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
             const { filter } = parseWhere(setMatch[2], params, setParamCount);
@@ -351,7 +346,7 @@ const db = {
           }
 
           if (sqlLower.startsWith('update agent_states')) {
-            const setMatch = sqlNorm.match(/SET\s+(.+?)\s+WHERE\s+(.+)$/i);
+            const setMatch = sqlNorm.match(/set\s+(.+?)\s+where\s+(.+)$/i);
             if (!setMatch) return { changes: 0 };
             const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
             const { filter } = parseWhere(setMatch[2], params, setParamCount);
@@ -395,7 +390,7 @@ const db = {
           }
 
           if (sqlLower.includes('from pipelines') && sqlLower.includes('where')) {
-            const whereMatch = sqlNorm.match(/WHERE\s+(.+)$/i);
+            const whereMatch = sqlNorm.match(/where\s+(.+)$/i);
             if (!whereMatch) return undefined;
             const { filter } = parseWhere(whereMatch[1], params, 0);
             return dbData.pipelines.find(filter);
@@ -415,20 +410,11 @@ const db = {
 
       all(...params) {
         try {
-          // SELECT * FROM memory_edges
           if (sqlLower.includes('from memory_edges')) {
             return dbData.memory_edges;
           }
 
-          if (sqlLower.includes('from trace_spans') && sqlLower.includes('where trace_id')) {
-            const [traceId] = params;
-            let rows = dbData.trace_spans.filter(s => s.trace_id === traceId);
-            if (sqlLower.includes('order by started_at asc')) {
-              rows = rows.sort((a, b) => (a.started_at || '').localeCompare(b.started_at || ''));
-            }
-            return rows;
-          }
-
+          // 💥 SỬA ĐỔI: Đưa traces lên trên đầu so với trace_spans để tránh bị subquery (SELECT COUNT(*)...) nhận diện sai
           if (sqlLower.includes('from traces') && sqlLower.includes('order by') && sqlLower.includes('limit')) {
             const [limit] = params;
             let rows = [...dbData.traces];
@@ -443,13 +429,52 @@ const db = {
             return rows;
           }
 
+          if (sqlLower.includes('from trace_spans') && sqlLower.includes('where trace_id')) {
+            const [traceId] = params;
+            let rows = dbData.trace_spans.filter(s => s.trace_id === traceId);
+            if (sqlLower.includes('order by started_at asc')) {
+              rows = rows.sort((a, b) => (a.started_at || '').localeCompare(b.started_at || ''));
+            }
+            return rows;
+          }
+
           if (sqlLower.includes('from agent_states') && sqlLower.includes('where pipeline_id')) {
             const [pipelineId] = params;
             return dbData.agent_states.filter(s => s.pipeline_id === pipelineId);
           }
 
           if (sqlLower.includes('from memories')) {
+            if (sqlLower.includes('trust_score') && sqlLower.includes('order by trust_score desc')) {
+              const limitMatch = sqlLower.match(/limit\s+(\d+)/);
+              const limit = limitMatch ? parseInt(limitMatch[1]) : 100;
+              return dbData.memories
+                .filter(m => (m.trust_score ?? 0.7) > 0.1)
+                .sort((a, b) => (b.trust_score || 0) - (a.trust_score || 0) || (b.use_count || 0) - (a.use_count || 0))
+                .slice(0, limit);
+            }
             return dbData.memories.filter(m => (m.trust_score ?? 0.7) > 0.1);
+          }
+
+          if (sqlLower.includes('from tool_telemetry') && sqlLower.includes('group by tool_name')) {
+            if (!dbData.tool_telemetry) return [];
+            const grouped = {};
+            for (const record of dbData.tool_telemetry) {
+              const name = record.tool_name;
+              if (!grouped[name]) {
+                grouped[name] = { tool_name: name, total: 0, success_count: 0, fail_count: 0, sum_duration: 0 };
+              }
+              grouped[name].total++;
+              if (record.success === 1) grouped[name].success_count++;
+              else grouped[name].fail_count++;
+              grouped[name].sum_duration += (record.duration_ms || 0);
+            }
+            return Object.values(grouped).map(g => ({
+              tool_name: g.tool_name,
+              total: g.total,
+              success_count: g.success_count,
+              fail_count: g.fail_count,
+              avg_duration: g.total > 0 ? g.sum_duration / g.total : 0
+            }));
           }
 
           return [];
