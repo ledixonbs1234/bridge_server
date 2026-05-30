@@ -1,11 +1,175 @@
-import { exec } from 'child_process';
-import util from 'util';
+import { launchPersistentContext } from "cloakbrowser";
+import path from 'path';
+import fs from 'fs';
 import chalk from 'chalk';
-const execPromise = util.promisify(exec);
+
+const profilePath = path.join(process.cwd(), 'profile', 'Profile_Reader');
+
+/**
+ * Thuật toán làm sạch DOM và trích xuất cấu trúc văn bản Markdown sạch ngay trên trang
+ */
+function cleanDomAndExtract() {
+    // Loại bỏ các thẻ thừa và các khối định dạng không liên quan đến nội dung chính
+    const junkSelectors = [
+        'script', 'style', 'noscript', 'iframe', 'svg', 'header', 'footer', 'nav',
+        'aside', '.ads', '.advertisement', '#footer', '#header', '#nav', '.nav',
+        '.menu', '.sidebar', '.widget', 'form', 'button', 'input', 'select', 'textarea',
+        '.social-share', '.comments', '#comments', '.cookie-banner', '.popup'
+    ];
+    junkSelectors.forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => el.remove());
+    });
+
+    // Chuyển đổi một số HTML Element phổ biến sang Markdown
+    let lines = [];
+    
+    const parseNode = (node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const text = node.textContent.trim();
+            if (text) lines.push(text);
+            return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+        const tagName = node.tagName.toLowerCase();
+        
+        // Bỏ qua các phần tử bị ẩn trên giao diện
+        const style = window.getComputedStyle(node);
+        if (style.display === 'none' || style.visibility === 'hidden') return;
+
+        if (/^h[1-6]$/.test(tagName)) {
+            const level = parseInt(tagName[1], 10);
+            const headingPrefix = '#'.repeat(level);
+            lines.push(`\n${headingPrefix} ${node.textContent.trim()}\n`);
+        } else if (tagName === 'p') {
+            const text = node.textContent.trim();
+            if (text) lines.push(`\n${text}\n`);
+        } else if (tagName === 'li') {
+            const text = node.textContent.trim();
+            if (text) lines.push(`- ${text}`);
+        } else if (tagName === 'pre' || tagName === 'code') {
+            lines.push(`\n\`\`\`\n${node.textContent.trim()}\n\`\`\`\n`);
+        } else if (tagName === 'a') {
+            const href = node.getAttribute('href');
+            const text = node.textContent.trim();
+            if (text) {
+                if (href && href.startsWith('http')) {
+                    lines.push(` [${text}](${href}) `);
+                } else {
+                    lines.push(` ${text} `);
+                }
+            }
+        } else if (['div', 'section', 'article', 'main', 'ol', 'ul'].includes(tagName)) {
+            // Tiếp tục đệ quy xuống các node con của block container
+            node.childNodes.forEach(parseNode);
+        } else {
+            // Với các inline elements thông thường khác
+            node.childNodes.forEach(parseNode);
+        }
+    };
+
+    if (document.body) {
+        document.body.childNodes.forEach(parseNode);
+    }
+
+    // Kết hợp các dòng và chuẩn hóa khoảng trống thừa
+    return lines.join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+
+/**
+ * Tải một URL đơn lẻ và thực hiện trích xuất nội dung văn bản
+ */
+async function scrapeUrlWithCloak(url) {
+    const parentDir = path.dirname(profilePath);
+    if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+    }
+
+    let context = null;
+    try {
+        context = await launchPersistentContext({
+            userDataDir: profilePath,
+            headless: true, // Chạy ngầm để tối đa hóa tốc độ xử lý
+            viewport: { width: 1280, height: 720 },
+            args: [
+                '--disable-blink-features=AutomationControlled',
+                '--blink-settings=imagesEnabled=false' // Chốt chặn tắt tải ảnh, tăng tốc độ render DOM
+            ]
+        });
+
+        const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+        
+        console.log(chalk.gray(`[Cloak Reader] Navigating to: ${url}`));
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.waitForSelector('body', { timeout: 10000 });
+
+        const cleanedText = await page.evaluate(cleanDomAndExtract);
+
+        await context.close();
+        return cleanedText;
+    } catch (err) {
+        if (context) {
+            try { await context.close(); } catch (_) {}
+        }
+        throw err;
+    }
+}
+
+/**
+ * Tải song song danh sách nhiều URL bằng cách mở nhiều trang trong cùng một context
+ */
+async function scrapeMultipleUrlsWithCloak(urls) {
+    const parentDir = path.dirname(profilePath);
+    if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+    }
+
+    let context = null;
+    try {
+        context = await launchPersistentContext({
+            userDataDir: profilePath,
+            headless: true,
+            viewport: { width: 1280, height: 720 },
+            args: [
+                '--disable-blink-features=AutomationControlled',
+                '--blink-settings=imagesEnabled=false'
+            ]
+        });
+
+        const results = await Promise.all(urls.map(async (url) => {
+            let page = null;
+            try {
+                page = await context.newPage();
+                console.log(chalk.gray(`[Cloak Parallel] Loading: ${url}`));
+                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+                await page.waitForSelector('body', { timeout: 8000 });
+
+                const cleanedText = await page.evaluate(cleanDomAndExtract);
+                await page.close();
+                return { url, content: cleanedText, success: true };
+            } catch (e) {
+                if (page) {
+                    try { await page.close(); } catch (_) {}
+                }
+                return { url, content: `Lỗi đọc web: ${e.message}`, success: false };
+            }
+        }));
+
+        await context.close();
+        return results;
+    } catch (err) {
+        if (context) {
+            try { await context.close(); } catch (_) {}
+        }
+        throw err;
+    }
+}
 
 export default {
     web_markdown_reader: {
-        description: "[ƯU TIÊN DÙNG - TIẾT KIỆM TOKEN] Trích xuất nội dung văn bản của một trang web, trả về định dạng Markdown sạch. Dùng công cụ này thay vì 'browser_action' khi bạn chỉ cần đọc thông tin từ một link cụ thể.",
+        description: "[ƯU TIÊN DÙNG - TIẾT KIỆM TOKEN] Trích xuất nội dung văn bản của một trang web, tự động làm sạch DOM và trả về định dạng Markdown sạch qua CloakBrowser ngầm.",
         parameters: {
             type: "object",
             properties: {
@@ -18,33 +182,20 @@ export default {
         },
         handler: async (args) => {
             const { url } = args;
-            const targetUrl = `https://r.jina.ai/${url}`;
-            
-            console.log(`\n[Jina Web] Fetching: ${targetUrl}`);
             try {
-                const response = await fetch(targetUrl, {
-                    headers: {
-                        'Accept': 'text/plain',
-                        'X-Retain-Images': 'none'
-                    }
-                });
-                
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                
-                const markdown = await response.text();
-                
+                const markdown = await scrapeUrlWithCloak(url);
                 const MAX_CHARS = 80000;
                 return markdown.length > MAX_CHARS 
                     ? markdown.substring(0, MAX_CHARS) + "\n\n...[Trang quá dài, đã cắt bớt một phần]" 
                     : markdown;
             } catch (err) {
-                throw new Error(`Lỗi đọc web: ${err.message}`);
+                throw new Error(`Lỗi đọc web qua CloakBrowser: ${err.message}`);
             }
         }
     },
 
     parallel_web_summarizer: {
-        description: "[SIÊU TỐC ĐỘ] Nhận vào một danh sách các URL, tự động tải song song nội dung của tất cả các trang (Promise.all), sau đó dùng một Worker LLM để tóm tắt và tổng hợp thông tin bám sát câu hỏi người dùng.",
+        description: "[SIÊU TỐC ĐỘ] Nhận vào một danh sách các URL, tự động tải song song nội dung bằng tab ngầm của CloakBrowser, sau đó dùng một Worker LLM để tóm tắt và tổng hợp thông tin bám sát câu hỏi người dùng.",
         parameters: {
             type: "object",
             properties: {
@@ -64,32 +215,24 @@ export default {
             const { urls, user_query } = args;
             const limitUrls = urls.slice(0, 5); // Giới hạn tối đa 5 trang để tránh quá tải
             
-            console.log(chalk.cyan(`\n[Parallel Reader] 🌐 Khởi chạy đọc song song ${limitUrls.length} URLs...`));
+            console.log(chalk.cyan(`\n[Parallel Reader] 🌐 Khởi chạy đọc song song ${limitUrls.length} URLs bằng CloakBrowser...`));
             
-            const readPromises = limitUrls.map(async (url) => {
-                const targetUrl = `https://r.jina.ai/${url}`;
-                try {
-                    const response = await fetch(targetUrl, {
-                        headers: {
-                            'Accept': 'text/plain',
-                            'X-Retain-Images': 'none'
-                        },
-                        signal: AbortSignal.timeout(15000) // Giới hạn 15 giây cho mỗi trang
-                    });
-                    if (!response.ok) return { url, content: `Lỗi tải: HTTP ${response.status}`, success: false };
-                    const text = await response.text();
-                    const cropped = text.length > 15000 ? text.substring(0, 15000) + "\n...[Nội dung quá dài, đã được cắt bớt]" : text;
-                    return { url, content: cropped, success: true };
-                } catch (err) {
-                    return { url, content: `Lỗi kết nối: ${err.message}`, success: false };
-                }
-            });
-            
-            const results = await Promise.all(readPromises);
+            let results;
+            try {
+                results = await scrapeMultipleUrlsWithCloak(limitUrls);
+            } catch (err) {
+                return {
+                    status: "error",
+                    error_message: `Lỗi trong quá trình tải trang song song: ${err.message}`
+                };
+            }
             
             let compiledContext = "";
             results.forEach((res, idx) => {
-                compiledContext += `=== TRANG #${idx + 1} (${res.url}) ===\n${res.content}\n\n`;
+                const contentSnippet = res.success 
+                    ? (res.content.length > 15000 ? res.content.substring(0, 15000) + "\n...[Nội dung quá dài, đã được cắt bớt]" : res.content)
+                    : res.content;
+                compiledContext += `=== TRANG #${idx + 1} (${res.url}) ===\n${contentSnippet}\n\n`;
             });
             
             const activeProvider = globalThis.activeProvider;

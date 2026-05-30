@@ -4,6 +4,119 @@ import fs from 'fs';
 import chalk from 'chalk';
 
 const profilePath = path.join(process.cwd(), 'profile', 'Profile_Search');
+const readerProfilePath = path.join(process.cwd(), 'profile', 'Profile_Reader');
+
+/**
+ * Thuật toán làm sạch DOM và trích xuất cấu trúc văn bản Markdown sạch ngay trên trang
+ */
+function cleanDomAndExtract() {
+    const junkSelectors = [
+        'script', 'style', 'noscript', 'iframe', 'svg', 'header', 'footer', 'nav',
+        'aside', '.ads', '.advertisement', '#footer', '#header', '#nav', '.nav',
+        '.menu', '.sidebar', '.widget', 'form', 'button', 'input', 'select', 'textarea',
+        '.social-share', '.comments', '#comments', '.cookie-banner', '.popup'
+    ];
+    junkSelectors.forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => el.remove());
+    });
+
+    let lines = [];
+    const parseNode = (node) => {
+        if (node.nodeType === Node.TEXT_NODE) {
+            const text = node.textContent.trim();
+            if (text) lines.push(text);
+            return;
+        }
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+        const tagName = node.tagName.toLowerCase();
+        const style = window.getComputedStyle(node);
+        if (style.display === 'none' || style.visibility === 'hidden') return;
+
+        if (/^h[1-6]$/.test(tagName)) {
+            const level = parseInt(tagName[1], 10);
+            lines.push(`\n${'#'.repeat(level)} ${node.textContent.trim()}\n`);
+        } else if (tagName === 'p') {
+            const text = node.textContent.trim();
+            if (text) lines.push(`\n${text}\n`);
+        } else if (tagName === 'li') {
+            const text = node.textContent.trim();
+            if (text) lines.push(`- ${text}`);
+        } else if (tagName === 'pre' || tagName === 'code') {
+            lines.push(`\n\`\`\`\n${node.textContent.trim()}\n\`\`\`\n`);
+        } else if (tagName === 'a') {
+            const href = node.getAttribute('href');
+            const text = node.textContent.trim();
+            if (text) {
+                if (href && href.startsWith('http')) {
+                    lines.push(` [${text}](${href}) `);
+                } else {
+                    lines.push(` ${text} `);
+                }
+            }
+        } else if (['div', 'section', 'article', 'main', 'ol', 'ul'].includes(tagName)) {
+            node.childNodes.forEach(parseNode);
+        } else {
+            node.childNodes.forEach(parseNode);
+        }
+    };
+
+    if (document.body) {
+        document.body.childNodes.forEach(parseNode);
+    }
+
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/**
+ * Tải song song danh sách nhiều URL phục vụ cho việc tổng hợp thông tin tìm kiếm
+ */
+async function scrapeMultipleUrlsWithCloak(urls) {
+    const parentDir = path.dirname(readerProfilePath);
+    if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+    }
+
+    let context = null;
+    try {
+        context = await launchPersistentContext({
+            userDataDir: readerProfilePath,
+            headless: true,
+            viewport: { width: 1280, height: 720 },
+            args: [
+                '--disable-blink-features=AutomationControlled',
+                '--blink-settings=imagesEnabled=false' // Tắt tải ảnh để tối ưu hóa băng thông và thời gian tải
+            ]
+        });
+
+        const results = await Promise.all(urls.map(async (url) => {
+            let page = null;
+            try {
+                page = await context.newPage();
+                console.log(chalk.gray(`[Smart Search Parallel] Loading: ${url}`));
+                await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+                await page.waitForSelector('body', { timeout: 8000 });
+
+                const cleanedText = await page.evaluate(cleanDomAndExtract);
+                await page.close();
+                return { url, content: cleanedText, success: true };
+            } catch (e) {
+                if (page) {
+                    try { await page.close(); } catch (_) {}
+                }
+                return { url, content: `Lỗi đọc web: ${e.message}`, success: false };
+            }
+        }));
+
+        await context.close();
+        return results;
+    } catch (err) {
+        if (context) {
+            try { await context.close(); } catch (_) {}
+        }
+        throw err;
+    }
+}
 
 // Helper thực hiện tìm kiếm Google dùng chung
 async function runGoogleSearchInternal(query, limit) {
@@ -178,7 +291,7 @@ export default {
     },
 
     "google_search_and_summarize": {
-        description: "[SIÊU TỐC ĐỘ] Vừa tìm kiếm Google, vừa tự động tải song song nội dung các trang web hàng đầu và dùng một Worker LLM để tổng hợp, trả lời trực tiếp bám sát câu hỏi người dùng.",
+        description: "[SIÊU TỐC ĐỘ] Vừa tìm kiếm Google, vừa tự động tải song song nội dung các trang web hàng đầu bằng CloakBrowser và dùng một Worker LLM để tổng hợp, trả lời trực tiếp bám sát câu hỏi người dùng.",
         parameters: {
             type: "object",
             properties: {
@@ -221,39 +334,32 @@ export default {
                 };
             }
 
-            // Lấy danh sách các URL hợp lệ
+            // Lấy danh sách các URL hợp lệ để tiến hành cào dữ liệu song song
             const targetUrls = searchResults
                 .map(r => r.link)
                 .filter(link => link && link.startsWith('http'))
                 .slice(0, actualReadLimit);
 
-            console.log(chalk.cyan(`[Smart Search] 🌐 Bước 2: Tải song song nội dung của ${targetUrls.length} trang web hàng đầu...`));
+            console.log(chalk.cyan(`[Smart Search] 🌐 Bước 2: Tải song song nội dung của ${targetUrls.length} trang web bằng CloakBrowser...`));
             
-            const fetchPromises = targetUrls.map(async (url) => {
-                const targetUrl = `https://r.jina.ai/${url}`;
-                try {
-                    const response = await fetch(targetUrl, {
-                        headers: {
-                            'Accept': 'text/plain',
-                            'X-Retain-Images': 'none'
-                        },
-                        signal: AbortSignal.timeout(15000) // Giới hạn 15s mỗi trang
-                    });
-                    if (!response.ok) return { url, content: `HTTP Error ${response.status}`, success: false };
-                    const text = await response.text();
-                    const cropped = text.length > 15000 ? text.substring(0, 15000) + "\n...[Nội dung quá dài, đã được cắt bớt]" : text;
-                    return { url, content: cropped, success: true };
-                } catch (e) {
-                    return { url, content: `Không thể kết nối: ${e.message}`, success: false };
-                }
-            });
-
-            const fetchResults = await Promise.all(fetchPromises);
+            let fetchResults;
+            try {
+                fetchResults = await scrapeMultipleUrlsWithCloak(targetUrls);
+            } catch (err) {
+                return {
+                    status: "error",
+                    error_message: `Lỗi trong quá trình tải trang song song: ${err.message}`,
+                    searchResults
+                };
+            }
 
             // Gom nội dung thành một bối cảnh văn bản chung
             let contextText = "";
             fetchResults.forEach((res, idx) => {
-                contextText += `=== TÀI LIỆU #${idx + 1} (${res.url}) ===\n${res.content}\n\n`;
+                const textSnippet = res.success 
+                    ? (res.content.length > 15000 ? res.content.substring(0, 15000) + "\n...[Nội dung quá dài, đã được cắt bớt]" : res.content)
+                    : res.content;
+                contextText += `=== TÀI LIỆU #${idx + 1} (${res.url}) ===\n${textSnippet}\n\n`;
             });
 
             const activeProvider = globalThis.activeProvider;
@@ -278,7 +384,7 @@ CÂU HỎI NGƯỜI DÙNG: "${user_question}"
 Nhiệm vụ của bạn:
 1. Đọc kỹ và đối chiếu chéo thông tin từ các nguồn trên để trả lời đầy đủ, chính xác và trung thực nhất cho câu hỏi của người dùng.
 2. Trích xuất các dữ liệu, mốc thời gian, số liệu quan trọng bám sát câu hỏi. Loại bỏ thông tin quảng cáo, rác hoặc trùng lặp.
-3. Trình bày báo cáo tổng hợp chi tiết bằng tiếng Việt một cách khoa học, chuyên nghiệp. Ghi chú rõ nguồn thông tin tham chiếu từ tài liệu nào (Ví dụ: [Nguồn: Táị liệu #1], [Nguồn: Tài liệu #2]) để người dùng dễ đối sánh.
+3. Trình bày báo cáo tổng hợp chi tiết bằng tiếng Việt một cách khoa học, chuyên nghiệp. Ghi chú rõ nguồn thông tin tham chiếu từ tài liệu nào (Ví dụ: [Nguồn: Tài liệu #1], [Nguồn: Tài liệu #2]) để người dùng dễ đối sánh.
 
 Hãy trả về báo cáo tổng hợp trực tiếp bám sát yêu cầu.`;
 
