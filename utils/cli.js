@@ -1,3 +1,4 @@
+// ridge_server/utils/cli.js
 import { input, select } from '@inquirer/prompts';
 import chalk from 'chalk';
 import { executeAgentTurn } from '../services/agentService.js';
@@ -7,12 +8,20 @@ import db from '../database.js';
 
 export async function startTerminalChatLoop() {
     console.log(chalk.bold.cyan('\n💬 CHẾ ĐỘ TERMINAL INTERACTIVE CHAT\n'));
-    console.log(chalk.gray('Các lệnh hỗ trợ: /model (chọn provider), /skill (danh sách skill), /memory (bộ nhớ), /clear, /exit\n'));
+    console.log(chalk.gray('Các lệnh hỗ trợ: /model (chọn provider), /skill (danh sách skill), /memory, /reformulate (bật/tắt tối ưu), /clear, /exit\n'));
     
+    // Khai báo biến lưu trạng thái Reformulate cho phiên chạy Terminal (Mặc định: Bật)
+    let cliUseReformulate = true;
+
     while (true) {
         let userText;
         try {
-            userText = await input({ message: chalk.blue('▌ ') });
+            // Hiển thị tiền tố kèm theo chỉ báo trạng thái Reformulate hiện hành để người dùng dễ quan sát
+            const statusIndicator = cliUseReformulate 
+                ? chalk.green('[Ref: ON] ') 
+                : chalk.yellow('[Ref: OFF] ');
+            
+            userText = await input({ message: statusIndicator + chalk.blue('▌ ') });
         } catch {
             process.exit(0);
         }
@@ -20,7 +29,7 @@ export async function startTerminalChatLoop() {
         const text = userText.trim();
         if (!text) continue;
 
-        // Xử lý các lệnh CLI cục bộ bắt đầu bằng dấu '/'
+        // Xử lý các lệnh CLI bắt đầu bằng dấu '/'
         if (text.startsWith('/')) {
             const parts = text.split(/\s+/);
             const command = parts[0].toLowerCase();
@@ -28,6 +37,17 @@ export async function startTerminalChatLoop() {
             if (command === '/exit' || command === '/quit') {
                 console.log(chalk.yellow('👋 Tạm biệt!'));
                 process.exit(0);
+            }
+
+            // Lệnh Bật/Tắt tính năng tối ưu câu hỏi (Reformulate)
+            if (command === '/reformulate' || command === '/ref') {
+                cliUseReformulate = !cliUseReformulate;
+                if (cliUseReformulate) {
+                    console.log(chalk.green('✨ Đã BẬT tính năng tự động tối ưu câu hỏi (Reformulate ON).'));
+                } else {
+                    console.log(chalk.yellow('⚠️ Đã TẮT tính năng tự động tối ưu câu hỏi (Reformulate OFF).'));
+                }
+                continue;
             }
 
             if (command === '/clear' || command === '/new') {
@@ -93,7 +113,7 @@ export async function startTerminalChatLoop() {
                 continue;
             }
 
-            console.log(chalk.red(`❌ Lệnh không hợp lệ: ${command}. Hãy sử dụng: /model, /skill, /memory, /clear, hoặc /exit.`));
+            console.log(chalk.red(`❌ Lệnh không hợp lệ: ${command}. Hãy sử dụng: /model, /skill, /memory, /reformulate, /clear, hoặc /exit.`));
             continue;
         }
 
@@ -101,6 +121,7 @@ export async function startTerminalChatLoop() {
             const result = await executeAgentTurn({
                 message: text,
                 activeProvider: globalThis.activeProvider,
+                useReformulate: cliUseReformulate, // Sử dụng cấu hình vừa đổi qua slash command
                 onChunk: (chunk) => process.stdout.write(chunk),
                 onAction: (tool) => console.log(chalk.gray(`\n[Action] Đang kích hoạt: ${tool}`))
             });

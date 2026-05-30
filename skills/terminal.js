@@ -3,6 +3,7 @@ import os from 'os';
 import boxen from 'boxen';
 import chalk from 'chalk';
 import { analyzeCommand, printCommandWarning, getCommandTimeout } from './validators/command_guard.js';
+import { presentApprovalRequest } from '../utils/display.js';
 // 1. Quản lý các tiến trình đang chạy ngầm
 const activeProcesses = new Map();
 let processCounter = 1;
@@ -138,22 +139,15 @@ export default {
             const isSafeCommand = analysis.level === 'safe';
             
             if (!global.isAutoApproveAll && !isSafeCommand) {
-                const cmdText = isBackground
-                    ? chalk.magenta(command) + chalk.bgMagenta.white(' BACKGROUND PROCESS ')
-                    : chalk.yellow(command);
-
-                const promptContent = `
-${chalk.bold.cyan('📁 Thư mục :')} ${cwd}
-${chalk.bold.cyan('💻 Lệnh    :')} ${cmdText}
-${chalk.bold.green('🔧 Chức năng:')} ${functionality}
-${chalk.bold.green('🎯 Mục đích :')} ${purpose}
-`;
-                console.log(boxen(promptContent, {
-                    title: chalk.gray(' Action Required '),
-                    padding: 1,
-                    borderColor: 'gray',
-                    borderStyle: 'round'
-                }));
+                presentApprovalRequest(
+                    '⚠️ YÊU CẦU THỰC THI TERMINAL',
+                    {
+                        file_path: cwd, // Thư mục làm việc
+                        range: command, // Câu lệnh chạy
+                        functionality: `Chức năng: ${functionality} | Mục đích: ${purpose}`
+                    },
+                    { command }
+                );
 
                 const answer = await global.askPermission(chalk.bold.white(`👉 Allow execution? [y: Yes / a: Yes to All / n: No] : `));
                 if (answer === 'a') { global.isAutoApproveAll = true; }

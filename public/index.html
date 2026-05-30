@@ -61,11 +61,20 @@
                     
                     <!-- Prompt Input Area (fixed at bottom) -->
                     <div class="prompt-input-area">
+                        <!-- Vùng điều chỉnh chế độ Reformulate bằng Toggle Switch -->
+                        <div class="reformulate-container">
+                            <span class="reformulate-label">Tối ưu câu hỏi (Reformulate):</span>
+                            <label class="switch">
+                                <input type="checkbox" id="reformulate-toggle" checked>
+                                <span class="slider round"></span>
+                            </label>
+                        </div>
+
                         <div class="input-wrapper">
                             <textarea 
                                 id="chat-input" 
                                 rows="3" 
-                                placeholder="Code your creativity here. (Tab: Reformulate ON)"
+                                placeholder="Code your creativity here..."
                                 class="chat-textarea"></textarea>
                             <button id="chat-send" class="send-button" disabled>
                                 Coding ➔

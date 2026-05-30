@@ -8,6 +8,7 @@ import { validatePath, printPathWarning } from './validators/path_guard.js';
 import { validateSyntax } from './validators/syntax_validator.js';
 import { createShadow, cleanupOldShadows } from './validators/shadow_file.js';
 import { reviewLogicChange } from './validators/logic_reviewer.js';
+import { presentApprovalRequest } from '../utils/display.js';
 
 /**
  * Chuẩn hóa path để tránh lỗi ký tự phân tách trên các OS khác nhau
@@ -123,7 +124,7 @@ async function autoFixSyntaxError({ originalCode, syntaxError, language, filePat
         const resp = await globalThis.activeProvider.chat({
             messages: [{ role: 'user', content: prompt }],
             skillRegistry: {},
-            executeSkill: async () => {},
+            executeSkill: async () => { },
             systemPrompt: "Chỉ trả về code, không giải thích.",
             maxSteps: 1, isWorker: true, workerType: 'syntax_fixer'
         });
@@ -140,7 +141,7 @@ async function applyReviewSuggestion({ originalCode, issues, suggestion, filePat
         const resp = await globalThis.activeProvider.chat({
             messages: [{ role: 'user', content: prompt }],
             skillRegistry: {},
-            executeSkill: async () => {},
+            executeSkill: async () => { },
             systemPrompt: "Chỉ trả về code.",
             maxSteps: 1, isWorker: true, workerType: 'logic_fixer'
         });
@@ -180,7 +181,7 @@ export default {
                 for (const entry of entries) {
                     // 🚨 BỘ LỌC AN TOÀN: Bỏ qua thư mục thư viện, rác và bộ nhớ đệm để tránh tràn text và lệch ngữ cảnh
                     if (entry.isDirectory() && [
-                        'node_modules', '.git', 'profile', 'dist', 'build', 'out', 
+                        'node_modules', '.git', 'profile', 'dist', 'build', 'out',
                         '.next', '.agent_memory', '.agents', 'venv', '.venv', 'env'
                     ].includes(entry.name)) {
                         continue;
@@ -208,7 +209,7 @@ export default {
         }
     },
 
-   "replace_by_lines_safe": {
+    "replace_by_lines_safe": {
         description: "[SAFE MODE] Thay thế code theo số dòng với các lớp bảo vệ. Tool chỉ sửa đúng phạm vi dòng được chỉ định, phần còn lại của file tự động được bảo toàn ",
         parameters: {
             type: "object",
@@ -341,31 +342,18 @@ export default {
                 }
 
                 if (!global.isAutoApproveAll) {
-                    const highlightedCode = currentReplaceString
-                        ? highlight(currentReplaceString, { language: getLangFromExt(filePath), ignoreIllegals: true })
-                        : chalk.red.italic('// Xóa bỏ');
-
-                    console.log(boxen(`
-${chalk.bold.yellow('📂 File :')} ${chalk.cyan(args.file_path)}
-${chalk.bold.yellow('📍 Dòng :')} ${chalk.bgGray.white(` ${args.start_line} đến ${args.end_line} `)}
-${chalk.bold.green('✨ Preview:')}
-${chalk.gray('----------------------------------------')}
-${highlightedCode}
-${chalk.gray('----------------------------------------')}
-${chalk.gray('[Đã qua: Syntax Check ✓ | Logic Review ✓ | Shadow Backup ✓]')}
-`, {
-                        title: chalk.bold.redBright(' ⚠️ YÊU CẦU SỬA CODE (SAFE MODE) '),
-                        padding: 1, borderColor: 'yellow', borderStyle: 'round'
-                    }));
-
-                    const answer = await global.askPermission(
-                        chalk.bold.greenBright(`👉 Cho phép thay thế? [y/a/n] : `)
+                    presentApprovalRequest(
+                        '⚠️ YÊU CẦU TẠO / GHI ĐÈ FILE',
+                        {
+                            file_path: args.file_path,
+                            range: 'Toàn bộ file',
+                            functionality: 'Ghi mới/ghi đè nội dung tệp tin'
+                        },
+                        { content: fileContent } // Truyền dữ liệu thô
                     );
+                    const answer = await global.askPermission(`👉 Cho phép tạo/ghi đè file này? [y/a/n] : `);
                     if (answer === 'a') global.isAutoApproveAll = true;
-                    else if (answer !== 'y') {
-                        shadow.cleanup();
-                        throw new Error("PERMISSION_DENIED");
-                    }
+                    else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
                 }
 
                 fs.writeFileSync(filePath, newContent, 'utf8');
@@ -398,7 +386,7 @@ ${chalk.gray('[Đã qua: Syntax Check ✓ | Logic Review ✓ | Shadow Backup ✓
         handler: async (args) => {
             const filePath = resolveUserPath(args.file_path);
             if (!fs.existsSync(filePath)) throw new Error(`File không tồn tại: ${args.file_path}`);
-            
+
             // Sửa lỗi: Sử dụng biến filePath tuyệt đối đã xác thực để đọc
             const content = fs.readFileSync(filePath, 'utf8');
             const lines = content.split(/\r?\n/);
@@ -542,7 +530,7 @@ ${chalk.gray('[Đã qua: Syntax Check ✓ | Logic Review ✓ | Shadow Backup ✓
     //     }
     // },
 
-   "write_file": {
+    "write_file": {
         description: "Tạo file mới hoàn toàn hoặc ghi đè TOÀN BỘ nội dung vào file đã có. Hỗ trợ tự động tạo thư mục cha. Chấp nhận chuỗi thường (content) hoặc chuỗi mã hóa base64 (content_base64) để tránh lỗi unicode/JSON escape.",
         parameters: {
             type: "object",
@@ -555,7 +543,7 @@ ${chalk.gray('[Đã qua: Syntax Check ✓ | Logic Review ✓ | Shadow Backup ✓
         },
         handler: async (args) => {
             const filePath = resolveUserPath(args.file_path);
-            
+
             // Tự động giải mã nếu nhận được dữ liệu mã hóa Base64
             let fileContent = "";
             if (args.content_base64) {
@@ -567,17 +555,15 @@ ${chalk.gray('[Đã qua: Syntax Check ✓ | Logic Review ✓ | Shadow Backup ✓
             }
 
             if (!global.isAutoApproveAll) {
-                const ext = filePath.split('.').pop() || 'javascript';
-                const highlightedCode = fileContent
-                    ? highlight(fileContent, { language: ext, ignoreIllegals: true })
-                    : chalk.gray.italic('// Bỏ trống (File rỗng)');
-
-                const promptContent = `\n${chalk.bold.yellow('📂 File :')} ${chalk.cyan(args.file_path)}\n${chalk.bold.green('✨ Nội dung sẽ GHI ĐÈ / TẠO MỚI:')}\n${chalk.gray('----------------------------------------')}\n${highlightedCode}\n${chalk.gray('----------------------------------------')}\n`;
-                console.log(boxen(promptContent, {
-                    title: chalk.bold.redBright(' ⚠️ YÊU CẦU TẠO / GHI ĐÈ TOÀN BỘ FILE '),
-                    titleAlignment: 'center',
-                    padding: 1, borderColor: 'yellow', borderStyle: 'round'
-                }));
+                presentApprovalRequest(
+                    '⚠️ YÊU CẦU TẠO / GHI ĐÈ TOÀN BỘ FILE',
+                    {
+                        file_path: args.file_path,
+                        range: 'Toàn bộ file (Ghi mới hoặc ghi đè)',
+                        functionality: 'Tạo hoặc ghi đè toàn bộ tệp tin nguồn'
+                    },
+                    { content: fileContent }
+                );
 
                 const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép tạo/ghi đè file này? [y/a/n] : `));
                 if (answer === 'a') global.isAutoApproveAll = true;

@@ -727,7 +727,15 @@ let currentFileChanges = [];
 
 // Toggle state for reformulateQuery feature
 let isReformulateEnabled = true; // Default: enabled
-
+document.addEventListener('DOMContentLoaded', () => {
+    const reformulateRadios = document.querySelectorAll('input[name="reformulate"]');
+    reformulateRadios.forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            isReformulateEnabled = (e.target.value === 'on');
+            console.log(`[Chat] ReformulateQuery: ${isReformulateEnabled ? 'ON' : 'OFF'}`);
+        });
+    });
+});
 // Helper to get current timestamp
 function getCurrentTimestamp() {
     const now = new Date();
@@ -870,15 +878,14 @@ function getCurrentTime() {
 
 // Initialize chat with welcome message (only show when terminal tab is active)
 function initChat() {
-    // Show chat messages container for initial welcome message
     if (chatMessages && chatMessages.style.display === 'none') {
         chatMessages.style.display = 'flex';
     }
     appendMsg('bot', 'Xin chào! Hãy trò chuyện trực tiếp tại đây. Tất cả các yêu cầu cấp quyền chạy tool của Agent sẽ được tương tác trực tiếp trong khung chat này.');
     
-    // Set initial placeholder with reformulate status
     if (chatInput) {
-        chatInput.placeholder = "Code your creativity here. (Tab: Reformulate ON)";
+        // Chỉ để placeholder ngắn gọn, không hiển thị hướng dẫn Tab nữa
+        chatInput.placeholder = "Code your creativity here..."; 
     }
 }
 
@@ -902,19 +909,16 @@ chatInput.addEventListener('input', function () {
 });
 
 chatInput.addEventListener('keydown', function (e) {
+    // Phím Tab hoạt động bình thường như trình soạn thảo code (Thụt dòng 4 khoảng trắng)
     if (e.key === 'Tab') {
         e.preventDefault();
-        isReformulateEnabled = !isReformulateEnabled;
-        
-        // Visual feedback in placeholder or status
-        const placeholderText = isReformulateEnabled 
-            ? "Code your creativity here. (Tab: Reformulate ON)" 
-            : "Code your creativity here. (Tab: Reformulate OFF)";
-        chatInput.placeholder = placeholderText;
-        
-        // Optional: Show a brief toast/indicator
-        console.log(`[Chat] ReformulateQuery: ${isReformulateEnabled ? 'ON' : 'OFF'}`);
+        const start = this.selectionStart;
+        const end = this.selectionEnd;
+        this.value = this.value.substring(0, start) + "    " + this.value.substring(end);
+        this.selectionStart = this.selectionEnd = start + 4;
     }
+    
+    // Nhấn Enter không kèm Shift để gửi tin nhắn
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         if (this.value.trim() !== '' && !isGenerating) sendChat();
@@ -1339,10 +1343,46 @@ function appendLogEntry(text, type = 'default') {
 
     const entry = document.createElement('div');
     entry.className = `log-entry ${type}`;
-    entry.innerHTML = `
-        <div class="log-timestamp">[${getCurrentTimestamp()}]</div>
-        <div class="log-content">${escHtml(text)}</div>
-    `;
+
+    // Kiểm tra xem dòng log nhận được có chứa gói tin JSON phê duyệt hay không
+    let isStructured = false;
+    let cleanJSONText = text;
+
+    // Loại bỏ tiền tố log hệ thống nếu có để tiến hành bóc tách JSON
+    if (text.startsWith('📝 [Tool Output] ')) {
+        cleanJSONText = text.replace('📝 [Tool Output] ', '');
+    }
+
+    if (cleanJSONText.trim().startsWith('{') && cleanJSONText.trim().endsWith('}')) {
+        try {
+            const parsedData = JSON.parse(cleanJSONText.trim());
+            if (parsedData.type === 'APPROVAL_REQUEST') {
+                isStructured = true;
+                entry.className = 'web-approval-card';
+                entry.innerHTML = `
+                    <div class="web-approval-title">
+                        <span>⚠️ ${escHtml(parsedData.title)}</span>
+                    </div>
+                    <div class="web-approval-details">
+                        📁 <b>File:</b> <span class="mono" style="font-size:11.5px; background: rgba(0,0,0,0.03); padding: 1px 4px; border-radius:4px;">${escHtml(parsedData.details.file_path)}</span><br/>
+                        📍 <b>Phạm vi:</b> ${escHtml(parsedData.details.range)}<br/>
+                        🔧 <b>Chức năng:</b> ${escHtml(parsedData.details.functionality)}
+                    </div>
+                `;
+            }
+        } catch (e) {
+            // Thầm lặng bỏ qua nếu không phải JSON của Display.js
+        }
+    }
+
+    // Nếu không phải gói tin phê duyệt đặc biệt, render log văn bản thường có pre-wrap
+    if (!isStructured) {
+        entry.innerHTML = `
+            <span class="log-timestamp">[${getCurrentTimestamp()}]</span>
+            <span class="log-content">${escHtml(text)}</span>
+        `;
+    }
+
     logStream.appendChild(entry);
     logStream.scrollTop = logStream.scrollHeight;
 }

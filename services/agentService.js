@@ -11,7 +11,7 @@ import { SKILL_GROUPS } from '../constants.js'
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
-
+global.originalConsoleLog = console.log;
 // Các biến toàn cục quản lý session web & permission
 export const activeWebSession = { res: null };
 export const pendingPermissions = new Map();
@@ -207,27 +207,27 @@ export function getCompiledSystemPrompt() {
 
 export function classifyIntent(userMessage) {
     const msg = userMessage.toLowerCase();
-    
+
     // Đưa kiểm tra liên kết hoặc yêu cầu đọc trang lên hàng đầu
     if (msg.match(/(đọc trang|đọc link|url:|http:|https:|crawl|scrape)/)) {
         return 'research';
     }
-    
+
     if (msg.match(/(mới nhất|phiên bản|version|lỗi|error|bug|tra cứu|tìm kiếm|search|google|tin tức|ở đâu|ai là|ngày nào)/)) {
         return 'research';
     }
-    
+
     if (msg.match(/^(giải thích|tại sao|là gì|what is|explain|how does|tóm tắt|summarize|dịch|translate|cho tôi biết|kể về)/)) return 'chat';
-    
+
     if (msg.match(/(tạo file|sửa file|viết code|fix|build|deploy|chạy lệnh|npm |pnpm |yarn |cài đặt|install|commit|git |tạo dự án|refactor|debug|compile|lint|test|đăng nhập|login|auth)/)) return 'code';
-    
+
     return 'complex';
 }
 
 // 2. Chỉnh sửa hàm filterSkillsByIntent trong cùng file
 export function filterSkillsByIntent(intent, fullRegistry) {
     if (intent === 'complex' || !SKILL_GROUPS[intent]) return fullRegistry;
-    
+
     if (intent === 'chat') {
         // Cho phép sử dụng google_search trong chế độ chat để trả lời câu hỏi thực tế chuẩn xác
         const filtered = {};
@@ -236,7 +236,7 @@ export function filterSkillsByIntent(intent, fullRegistry) {
         }
         return filtered;
     }
-    
+
     const allowedNames = SKILL_GROUPS[intent];
     const filtered = {};
     for (const key of Object.keys(fullRegistry)) {
@@ -279,11 +279,29 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
     if (isWebSessionActive) {
         logBuffer = [];
         console.log = (...args) => {
-            originalConsoleLog(...args);
+            // In ra Terminal hệ thống bằng hàm nguyên bản
+            if (global.originalConsoleLog) {
+                global.originalConsoleLog(...args);
+            } else {
+                originalConsoleLog(...args);
+            }
+
             const str = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
+            const trimmedStr = str.trim();
+
+            // 🛡️ BỘ LỌC CHỐNG TRÀN KHUNG: 
+            // Bỏ qua các chuỗi là đường viền khung vẽ thô của boxen
+            const isBoxenBorder = /^[┌┐└┘├┤┬┴┼═║─│╘╛╒╕╓╖╙╜╛╞╡╟╢╠╣╦╩╬]/.test(trimmedStr);
+            // Bỏ qua chuỗi JSON thô chứa gói tin phê duyệt trực quan (đã được display.js gửi riêng)
+            const isStructuredApproval = trimmedStr.startsWith('{"type":"APPROVAL_REQUEST"');
+
+            if (isBoxenBorder || isStructuredApproval) {
+                return; // Ngăn không cho đẩy dòng này lên Web UI
+            }
+
             logBuffer.push(str);
             if (logger) {
-                const cleanStr = str.replace(/\x1b\[[0-9;]*m/g, '');
+                const cleanStr = str.replace(/\x1b\[[0-9;]*m/g, ''); // Xóa mã màu ANSI
                 logger(`📝 [Tool Output] ${cleanStr}`);
             }
         };
@@ -358,7 +376,7 @@ Chỉ trả lời cực ngắn gọn (1-2 câu).`;
     try {
         const skills = {};
 
-       const response = await activeProvider.chat({
+        const response = await activeProvider.chat({
             messages: [{ role: 'user', content: criticPrompt }],
             mode: 'thinking', // 🧠 BẬT TƯ DUY SÂU CHO CRITIC
             skillRegistry: skills,
@@ -417,15 +435,15 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
     try {
         const memories = db.prepare('SELECT * FROM memories').all() || [];
         const searchSpace = (lastUserMessage + " " + allMessagesContext).toLowerCase();
-        
+
         // Lọc các node episodic có tag liên quan và độ tin cậy kết nối ổn định
         const relevantEpisodes = memories.filter(m => {
             const memoryType = m.type || 'episodic';
             if (memoryType !== 'episodic') return false;
-            
+
             let tags = [];
             try { tags = JSON.parse(m.tags || '[]'); } catch { }
-            
+
             const matchesTag = tags.some(tag => searchSpace.includes(tag.toLowerCase()));
             const isReliable = (m.trust_score ?? 0.7) > 0.35;
             return matchesTag && isReliable;
@@ -500,7 +518,7 @@ export async function reformulateQuery(userMessage, activeProvider, onLog) {
     const prompt = `Tin nhắn gốc của người dùng: "${userMessage}"`;
 
     try {
-       let optimizedMessage = await resolvedProvider.chat({
+        let optimizedMessage = await resolvedProvider.chat({
             messages: [{ role: 'user', content: prompt }],
             mode: 'fast', // 🚀 TẮT TƯ DUY ĐỂ XỬ LÝ NHANH
             skillRegistry: {},
