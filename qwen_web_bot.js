@@ -29,7 +29,7 @@ class QwenWebBot {
         const profilePath = path.join(__dirname, 'profile', 'Profile_Xon_Pro_All');
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
-            headless: false,
+            headless: true,
             viewport: { width: 1280, height: 720 },
             args: ['--disable-blink-features=AutomationControlled']
         });

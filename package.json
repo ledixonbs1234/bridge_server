@@ -1,18 +1,16 @@
 {
   "name": "bridge_server",
   "version": "1.0.0",
-  "description": "",
+  "description": "Bridge Server Backend Node Engine",
   "main": "server.js",
+  "type": "module",
   "bin": {
     "connector": "./server.js"
   },
   "scripts": {
+    "start": "node server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "module",
   "dependencies": {
     "@inquirer/prompts": "^8.4.3",
     "acorn": "^8.11.0",
@@ -27,10 +25,9 @@
     "gws": "^1.0.17",
     "js-yaml": "^4.1.1",
     "jsonrepair": "^3.14.0",
-    "marked": "^18.0.3",
+    "marked": "^15.0.12",
     "marked-terminal": "^7.3.0",
     "ora": "^9.4.0",
-    "playwright-core": "^1.60.0",
-    "typescript": "^5.3.0"
+    "playwright-core": "^1.60.0"
   }
 }
