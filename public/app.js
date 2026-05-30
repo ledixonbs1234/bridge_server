@@ -564,6 +564,58 @@ window.selectSpan = function(spanId) {
         return null;
     }
 
+    // 🚀 HÀM PHÂN TÍCH ĐỆ QUY & CHUYỂN ĐỔI KÝ TỰ XUỐNG DÒNG (\n) CHO CODE
+    function formatValueText(val) {
+        if (typeof val === 'string') {
+            const trimmed = val.trim();
+            // 1. Kiểm tra nếu giá trị là một chuỗi JSON đã hóa chuỗi (stringified JSON) -> Tiến hành Parse sâu
+            if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+                try {
+                    return JSON.stringify(JSON.parse(val), null, 2);
+                } catch (e) {}
+            }
+            // 2. Chuyển đổi các ký tự escaped \n, \t, \" sang định dạng ký tự hiển thị thực tế
+            return val
+                .replace(/\\n/g, '\n')
+                .replace(/\\r/g, '')
+                .replace(/\\t/g, '    ')
+                .replace(/\\"/g, '"');
+        } else if (typeof val === 'object' && val !== null) {
+            return JSON.stringify(val, null, 2);
+        }
+        return String(val);
+    }
+
+    // 🚀 HÀM KẾT XUẤT TỪNG KHÓA RIÊNG BIỆT (KEY-VALUE BREAKDOWN)
+    function renderParsedJsonBlock(title, parsedObj) {
+        if (!parsedObj || typeof parsedObj !== 'object') return '';
+        
+        let html = `<div class="parsed-json-container" style="margin-top: 16px; display: flex; flex-direction: column; gap: 12px;">`;
+        html += `<div style="font-size: 13px; font-weight: 700; color: var(--accent); display: flex; align-items: center; gap: 6px;">
+                    <span>📥</span> <span>${title} (Bóc tách dữ liệu từng Key)</span>
+                 </div>`;
+        
+        for (const [key, val] of Object.entries(parsedObj)) {
+            const formattedVal = formatValueText(val);
+            const base64Text = btoa(unescape(encodeURIComponent(formattedVal)));
+            
+            html += `
+                <div class="parsed-key-card" style="border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface-solid); box-shadow: var(--shadow-sm);">
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--surface2); border-bottom: 1px solid var(--border);">
+                        <span style="font-family: 'JetBrains Mono', monospace; font-size: 11.5px; font-weight: 700; color: var(--text);">${key}</span>
+                        <button class="trace-copy-btn" onclick="copyTraceData(this, '${base64Text}')" style="background: none; border: none; color: var(--muted); cursor: pointer; font-size: 11px; display: flex; align-items: center; gap: 4px; padding: 4px 8px; border-radius: 4px; transition: var(--transition-smooth);">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            <span>Copy</span>
+                        </button>
+                    </div>
+                    <pre style="margin: 0 !important; border: none !important; border-radius: 0 !important; background: #0d1117 !important; color: #e6edf3 !important; padding: 14px !important; font-family: 'JetBrains Mono', Consolas, monospace !important; font-size: 12px !important; line-height: 1.5 !important; max-height: 350px !important; overflow: auto !important; white-space: pre-wrap !important; word-break: break-word !important; overflow-wrap: break-word !important;">${escHtml(formattedVal)}</pre>
+                </div>
+            `;
+        }
+        html += `</div>`;
+        return html;
+    }
+
     // Tạo khối có cấu trúc Header và nút Copy chuẩn
     function renderCopyableBlock(title, rawText, isError = false) {
         if (!rawText) return '';
@@ -607,25 +659,15 @@ window.selectSpan = function(spanId) {
         let parsedInput = null;
         try {
             parsedInput = JSON.parse(span.input);
-            if (parsedInput && parsedInput.prompt) {
-                inputText = parsedInput.prompt;
-            } else if (parsedInput && typeof parsedInput === 'object') {
-                inputText = JSON.stringify(parsedInput, null, 2);
-            }
         } catch {}
 
-        const inputExtracted = extractThoughts(inputText);
-        if (inputExtracted) {
-            inputContentHtml += renderThoughtBlock('💭 Input Thought Process', inputExtracted.thoughts);
-            if (parsedInput && parsedInput.prompt) {
-                parsedInput.prompt = inputExtracted.cleanText;
-                inputContentHtml += renderCopyableBlock('📥 Input', JSON.stringify(parsedInput, null, 2));
-            } else {
-                inputContentHtml += renderCopyableBlock('📥 Input', inputExtracted.cleanText);
-            }
+        if (parsedInput && typeof parsedInput === 'object') {
+            inputContentHtml += renderParsedJsonBlock('Input', parsedInput);
         } else {
-            if (parsedInput) {
-                inputContentHtml += renderCopyableBlock('📥 Input', JSON.stringify(parsedInput, null, 2));
+            const inputExtracted = extractThoughts(inputText);
+            if (inputExtracted) {
+                inputContentHtml += renderThoughtBlock('💭 Input Thought Process', inputExtracted.thoughts);
+                inputContentHtml += renderCopyableBlock('📥 Input', inputExtracted.cleanText);
             } else {
                 inputContentHtml += renderCopyableBlock('📥 Input', span.input);
             }
@@ -638,28 +680,15 @@ window.selectSpan = function(spanId) {
         let parsedOutput = null;
         try {
             parsedOutput = JSON.parse(span.output);
-            if (parsedOutput && parsedOutput.response) {
-                outputText = parsedOutput.response;
-            } else if (parsedOutput && parsedOutput.text) {
-                outputText = parsedOutput.text;
-            } else if (parsedOutput && typeof parsedOutput === 'object') {
-                outputText = JSON.stringify(parsedOutput, null, 2);
-            }
         } catch {}
 
-        const outputExtracted = extractThoughts(outputText);
-        if (outputExtracted) {
-            outputContentHtml += renderThoughtBlock('💭 Model Thought Process (Tư duy của AI)', outputExtracted.thoughts);
-            if (parsedOutput) {
-                if (parsedOutput.response) parsedOutput.response = outputExtracted.cleanText;
-                else if (parsedOutput.text) parsedOutput.text = outputExtracted.cleanText;
-                outputContentHtml += renderCopyableBlock('📤 Output', JSON.stringify(parsedOutput, null, 2));
-            } else {
-                outputContentHtml += renderCopyableBlock('📤 Output', outputExtracted.cleanText);
-            }
+        if (parsedOutput && typeof parsedOutput === 'object') {
+            outputContentHtml += renderParsedJsonBlock('Output', parsedOutput);
         } else {
-            if (parsedOutput) {
-                outputContentHtml += renderCopyableBlock('📤 Output', JSON.stringify(parsedOutput, null, 2));
+            const outputExtracted = extractThoughts(outputText);
+            if (outputExtracted) {
+                outputContentHtml += renderThoughtBlock('💭 Model Thought Process (Tư duy của AI)', outputExtracted.thoughts);
+                outputContentHtml += renderCopyableBlock('📤 Output', outputExtracted.cleanText);
             } else {
                 outputContentHtml += renderCopyableBlock('📤 Output', span.output);
             }

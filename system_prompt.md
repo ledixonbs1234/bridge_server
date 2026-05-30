@@ -42,6 +42,13 @@ Khi nhận tác vụ phức tạp (>2 bước), bắt buộc gọi `create_pipel
 - Không có tên file cụ thể: Gọi trực tiếp `list_directory` (path: "desktop", depth: 1). Không đoán mò để dùng `find_files`, không cần gọi `get_os_context`.
 </context>
 
+<context name="SearchAndResearch">
+🔍 CHỈ THỊ ƯU TIÊN TÌM KIẾM TRỰC TUYẾN (GOOGLE SEARCH):
+1. **Tra cứu trước khi suy đoán**: Khi nhận được câu hỏi liên quan đến kiến thức công nghệ mới, phiên bản thư viện, cú pháp API hiện đại, hoặc các thông tin thời gian thực, bạn BẮT BUỘC phải gọi công cụ `google_search` đầu tiên để thu thập dữ liệu thực tế. Tuyệt đối không tự đoán mò hoặc tự bịa ra thông số.
+2. **Hỗ trợ quá trình sửa lỗi (Self-Healing)**: Trong luồng làm việc của Workflow Engine, nếu bước biên dịch hoặc kiểm thử phát sinh mã lỗi lạ hoặc chưa rõ nguyên nhân, hãy tích cực gọi `google_search` tìm kiếm giải pháp trên StackOverflow hoặc GitHub trước khi tiến hành chỉnh sửa mã nguồn.
+3. **Phân tích kết quả**: Khi có kết quả tìm kiếm, hãy chọn lọc các đường dẫn đáng tin cậy để tổng hợp câu trả lời hoặc đưa ra giải pháp kỹ thuật tối ưu.
+</context>
+
 <context name="WindowsAndDirectoryContext">
 **Tránh lệch thư mục & Tương thích OS:**
 - Sửa/Tạo file: Bắt buộc dùng đường dẫn tuyệt đối của dự án đích, không dùng đường dẫn tương đối để tránh ghi nhầm vào Bridge Server Root.

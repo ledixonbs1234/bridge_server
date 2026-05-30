@@ -11,7 +11,7 @@
 
 Drop-in Playwright/Puppeteer replacement. Same API, same code — just swap the import. **3 lines of code, 30 seconds to unblock.**
 
-- **48 source-level C++ patches** — canvas, WebGL, audio, fonts, GPU, screen, WebRTC, network timing, automation signals
+- **58 source-level C++ patches** — canvas, WebGL, audio, fonts, GPU, screen, WebRTC, network timing, automation signals
 - **0.9 reCAPTCHA v3 score** — human-level, server-verified
 - **Passes Cloudflare Turnstile**, FingerprintJS, BrowserScan — tested against 30+ detection sites
 - **`npm install cloakbrowser`** — binary auto-downloads, auto-updates, zero config
@@ -39,10 +39,23 @@ import { launch } from 'cloakbrowser';
 
 const browser = await launch();
 const page = await browser.newPage();
-await page.goto('https://protected-site.com');
+await page.goto('https://example.com');
 console.log(await page.title());
 await browser.close();
 ```
+
+**For sites with anti-bot protection**, add a residential proxy and these flags:
+
+```javascript
+const browser = await launch({
+    proxy: 'http://user:pass@residential-proxy:port',
+    geoip: true,       // match timezone + locale to proxy IP
+    headless: false,    // some sites detect headless even with C++ patches
+    humanize: true,     // human-like mouse, keyboard, scroll
+});
+```
+
+See the [main README](https://github.com/CloakHQ/CloakBrowser#troubleshooting) for site-specific troubleshooting (FingerprintJS, Kasada, reCAPTCHA).
 
 ### Puppeteer
 
@@ -53,7 +66,7 @@ import { launch } from 'cloakbrowser/puppeteer';
 
 const browser = await launch();
 const page = await browser.newPage();
-await page.goto('https://protected-site.com');
+await page.goto('https://example.com');
 console.log(await page.title());
 await browser.close();
 ```
@@ -229,6 +242,13 @@ import { launchPersistentContext } from 'cloakbrowser';
 const ctx = await launchPersistentContext({
   userDataDir: './my-profile',
   headless: false,
+});
+
+// Load Chrome extensions
+const ctx = await launchPersistentContext({
+  userDataDir: './my-profile',
+  headless: false,
+  extensionPaths: ['./my-extension'],
 });
 ```
 

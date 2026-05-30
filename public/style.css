@@ -679,19 +679,20 @@ tr:hover td {
 
 .markdown-body ul, 
 .markdown-body ol {
-    margin-top: 0;
+    margin-top: 6px;
     margin-bottom: 14px;
-    padding-left: 22px;
+    padding-left: 24px; /* Tăng lề trái danh sách để tránh bị tràn viền */
 }
 
 .markdown-body li {
-    margin-top: 4px;
-    margin-bottom: 4px;
+    margin-top: 6px;
+    margin-bottom: 6px;
+    line-height: 1.6;
 }
 
 .markdown-body li::marker {
-    color: var(--accent); 
-    font-weight: bold;
+    color: var(--accent); /* Đổi dấu chấm đầu dòng thành màu xanh đậm nhấn */
+    font-weight: 700;
 }
 
 .markdown-body strong {

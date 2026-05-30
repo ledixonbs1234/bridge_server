@@ -47,8 +47,10 @@ function completeTrace(traceId, status = 'completed') {
 function startSpan(traceId, name, type = 'tool', parentSpanId = null, input = null) {
     const id = 'span_' + randomUUID().replace(/-/g, '').substring(0, 16);
     const now = new Date().toISOString();
+    
+    // 🚀 ĐÃ LOẠI BỎ .substring(0, 5000) - Lưu trữ trọn vẹn Input JSON
     db.prepare(`INSERT INTO trace_spans (id, trace_id, parent_span_id, name, type, status, started_at, input) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(id, traceId, parentSpanId, name, type, 'running', now, input ? JSON.stringify(input).substring(0, 5000) : null);
+        .run(id, traceId, parentSpanId, name, type, 'running', now, input ? JSON.stringify(input) : null);
     return id;
 }
 
@@ -64,9 +66,11 @@ function endSpan(spanId, status = 'completed', output = null, error = null) {
     if (!span) return;
     const now = new Date().toISOString();
     const duration = new Date(now) - new Date(span.started_at);
-    const outputStr = output ? JSON.stringify(output).substring(0, 5000) : null;
+    
+    // 🚀 ĐÃ LOẠI BỎ .substring(0, 5000) và .substring(0, 1000) - Lưu trữ trọn vẹn Output & Error
+    const outputStr = output ? JSON.stringify(output) : null;
     db.prepare(`UPDATE trace_spans SET status = ?, completed_at = ?, duration_ms = ?, output = ?, error = ? WHERE id = ?`)
-        .run(status, now, duration, outputStr, error?.substring(0, 1000) || null, spanId);
+        .run(status, now, duration, outputStr, error || null, spanId);
 }
 
 /**
