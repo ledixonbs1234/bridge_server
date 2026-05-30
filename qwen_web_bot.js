@@ -316,35 +316,40 @@ class QwenWebBot {
     /**
      * Tạo Tab Worker con độc lập và liên kết CDP riêng biệt
      */
-    async createWorkerBot() {
+   async getWorkerBot(workerType = 'default') {
         if (!this.context) await this.init();
 
-        console.log("\n[Qwen Web] 🌍 Mở Tab Worker mới để xử lý tác vụ con độc lập...");
+        if (!this.workerBots) this.workerBots = {};
+
+        if (this.workerBots[workerType] && this.workerBots[workerType].page && !this.workerBots[workerType].page.isClosed()) {
+            console.log(`\n[Qwen Web] 🌍 Tái sử dụng Tab Worker [${workerType}] đang hoạt động...`);
+            return this.workerBots[workerType];
+        }
+
+        console.log(`\n[Qwen Web] 🌍 Khởi tạo Tab Worker mới loại [${workerType}] (chạy ngầm)...`);
         const workerPage = await this.context.newPage();
+
+        console.log("[Qwen Web] Thiết lập phiên kết nối CDP cho Worker Bot...");
+        const workerCDPClient = await workerPage.context().newCDPSession(workerPage);
+        await workerCDPClient.send('Network.enable');
 
         const workerBot = new QwenWebBot();
         workerBot.context = this.context;
         workerBot.page = workerPage;
-
-        // Cấu hình CDP cho Worker
-        console.log("[Qwen Web] Thiết lập phiên kết nối CDP cho Worker Bot...");
-        workerBot.client = await workerPage.context().newCDPSession(workerPage);
-        await workerBot.client.send('Network.enable');
+        workerBot.client = workerCDPClient;
         workerBot.setupCDPListeners();
-
         workerBot.isReady = true;
 
         await workerPage.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded' });
-
         await workerPage.waitForFunction(() => {
             return !!(document.querySelector('textarea.message-input-textarea') || document.querySelector('textarea'));
         }, { timeout: 60000 });
 
         workerBot.closeWorker = async () => {
-            console.log("[Qwen Web] 🗑️ Hoàn thành tác vụ con. Đóng Tab Worker...");
-            await workerPage.close();
+            console.log(`[Qwen Web] 🔄 Hoàn thành tác vụ con. Giữ Tab Worker [${workerType}] để dùng lại.`);
         };
 
+        this.workerBots[workerType] = workerBot;
         return workerBot;
     }
 

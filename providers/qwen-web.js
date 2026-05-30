@@ -46,7 +46,7 @@ QUAN TRỌNG:
         
         let bot = qwenBot;
         if (isWorker) {
-            bot = await qwenBot.createWorkerBot(workerType);
+            bot = await qwenBot.getWorkerBot(workerType);
         }
 
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";

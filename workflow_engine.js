@@ -399,7 +399,7 @@ ${errorCtx}
                         return await this.executeSkillFn(fn, args);
                     },
                     systemPrompt: "Bạn là Validator. Nếu đạt -> PASS. Nếu không -> chỉ ra lỗi.",
-                    maxSteps: 10, isWorker: true, workerType: 'task'
+                    maxSteps: 10, isWorker: true, workerType: `validator_${step.step_key}`
                 });
                 
                 const cleanResp = resp.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
@@ -643,7 +643,7 @@ Thư mục dự án đích: ${workspace}
                     systemPrompt: workerSystemPrompt,
                     maxSteps: 12, // Tăng giới hạn số bước để AI đủ tài nguyên kiểm tra tệp
                     isWorker: true,
-                    workerType: 'task'
+                     workerType: `task_${stepKey}` 
                 });
 
                 if (llmSpanId) tracer.endSpan(llmSpanId, 'completed', { response_length: response.length });

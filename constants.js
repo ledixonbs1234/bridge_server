@@ -49,10 +49,14 @@ export const SKILL_GROUPS = {
         'create_pipeline_plan',
         'load_harness_template',
         'find_files',
-        'synthesize_skill'
+        'synthesize_skill',
+        'google_search',
+        'google_search_and_summarize', // Đã đăng ký thêm
+        'parallel_web_summarizer'       // Đã đăng ký thêm
     ],
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
+        'parallel_web_summarizer',       // Đã đăng ký thêm
         'dynamic_browser_controller',
         'create_pipeline_plan',
         'load_harness_template',
@@ -62,7 +66,9 @@ export const SKILL_GROUPS = {
         'list_directory',
         'execute_terminal_command',
         'get_os_context',
-        'stop_terminal_process'
+        'stop_terminal_process',
+        'google_search',
+        'google_search_and_summarize'   // Đã đăng ký thêm
     ],
     [SKILL_CATEGORIES.COMPLEX]: null
 };

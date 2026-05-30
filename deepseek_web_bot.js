@@ -135,30 +135,35 @@ class DeepSeekWebBot {
     // ==========================================
     // TẠO TAB MỚI CHO NHIỆM VỤ CON (WORKER ISOLATION)
     // ==========================================
-    async createWorkerBot() {
+    async getWorkerBot(workerType = 'default') {
         if (!this.context) await this.init();
-        
-        console.log("\n[DeepSeek Web] 🌍 Mở Tab Worker mới để xử lý tác vụ con độc lập...");
+
+        if (!this.workerBots) this.workerBots = {};
+
+        // Nếu Tab Worker cùng loại đã tồn tại và chưa bị đóng -> Tái sử dụng
+        if (this.workerBots[workerType] && this.workerBots[workerType].page && !this.workerBots[workerType].page.isClosed()) {
+            console.log(`\n[DeepSeek Web] 🌍 Tái sử dụng Tab Worker [${workerType}] đang hoạt động...`);
+            return this.workerBots[workerType];
+        }
+
+        console.log(`\n[DeepSeek Web] 🌍 Khởi tạo Tab Worker mới loại [${workerType}] (chạy ngầm)...`);
         const workerPage = await this.context.newPage();
-        
-        // Nhân bản một bot mới điều khiển riêng Tab này
+
         const workerBot = new DeepSeekWebBot();
         workerBot.context = this.context;
         workerBot.page = workerPage;
         workerBot.isReady = true;
-        
+
         await workerPage.goto('https://chat.deepseek.com/', { waitUntil: 'domcontentloaded' });
-        
         await workerPage.waitForFunction(() => {
             return !!(document.querySelector('textarea#chat-input') || document.querySelector('textarea'));
         }, { timeout: 60000 });
-        
-        // Cung cấp hàm tự hủy Tab
+
         workerBot.closeWorker = async () => {
-            console.log("[DeepSeek Web] 🗑️ Hoàn thành tác vụ con. Đóng Tab Worker...");
-            await workerPage.close();
+            console.log(`[DeepSeek Web] 🔄 Hoàn thành tác vụ con. Giữ Tab Worker [${workerType}] để dùng lại.`);
         };
-        
+
+        this.workerBots[workerType] = workerBot;
         return workerBot;
     }
 
