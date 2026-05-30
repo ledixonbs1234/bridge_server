@@ -1,8 +1,17 @@
 import { execSync } from 'child_process';
+import path from 'path';
 
-export function getGitDiffStats() {
+export function getGitDiffStats(targetWorkspace) {
     try {
-        const diffOutput = execSync('git diff HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        // Chỉ chạy nếu có workspace của dự án được chỉ định cụ thể
+        if (!targetWorkspace) return [];
+
+        const cwd = targetWorkspace;
+        const diffOutput = execSync('git diff HEAD', { 
+            cwd: cwd,
+            encoding: 'utf8', 
+            stdio: ['ignore', 'pipe', 'ignore'] 
+        });
         const fileDiffs = diffOutput.split(/^diff --git /m);
         const files = [];
 
@@ -13,6 +22,15 @@ export function getGitDiffStats() {
             const match = headerLine.match(/a\/(.+?)\s+b\/(.+)$/);
             if (!match) continue;
             const filename = match[1];
+
+            // BỎ QUA CÁC TIẾN TRÌNH NỘI BỘ VÀ FILE HỆ THỐNG CỦA BRIDGE_SERVER
+            if (filename.startsWith('.agent_memory') || 
+                filename.startsWith('profile') || 
+                filename.startsWith('ridge_server') || 
+                filename.startsWith('bridge_server') ||
+                filename.includes('agent_state.json')) {
+                continue;
+            }
 
             let additions = 0;
             let deletions = 0;

@@ -176,22 +176,25 @@ class QwenWebBot {
         }
     }
 
-    async clickNewChat() {
-        if (!this.isReady) return;
-        try {
-            await this.page.evaluate(() => {
-                const elements = document.querySelectorAll('div[role="button"]');
-                const newChatBtn = Array.from(elements).find(el => el.innerText && el.innerText.includes('New chat'));
-                if (newChatBtn) {
-                    newChatBtn.click();
-                    console.log("🆕 Đã bấm tạo New Chat mới!");
-                }
-            });
-            await this.page.waitForTimeout(500);
-        } catch (e) {
-            // Bỏ qua nếu không tìm thấy
-        }
+   // Thay thế hàm clickNewChat() trong ridge_server/qwen_web_bot.js
+async clickNewChat() {
+    if (!this.isReady) return;
+    try {
+        console.log("[Qwen Web] 🔄 Đang chuyển hướng trình duyệt về trang chủ để mở phiên New Chat mới...");
+        
+        // Điều hướng trực tiếp về địa chỉ gốc để xóa ID cuộc trò chuyện cũ trên URL
+        await this.page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded' });
+        
+        // Đợi ô nhập liệu xuất hiện để đảm bảo giao diện mới đã sẵn sàng nhận Prompt tiếp theo
+        await this.page.waitForFunction(() => {
+            return !!(document.querySelector('textarea.message-input-textarea') || document.querySelector('textarea'));
+        }, { timeout: 15000 });
+        
+        console.log("[Qwen Web] ✅ Đã tải xong trang trắng New Chat!");
+    } catch (e) {
+        console.error("Lỗi khi chuyển hướng về trang chủ Qwen:", e.message);
     }
+}
 
     async sendPrompt(promptText, useThinking = false) {
         if (!this.isReady) await this.init();

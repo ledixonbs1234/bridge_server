@@ -208,14 +208,19 @@ export function getCompiledSystemPrompt() {
 export function classifyIntent(userMessage) {
     const msg = userMessage.toLowerCase();
     
-    // Cải tiến: Nếu chứa các từ khóa tra cứu thực tế/tin tức/lỗi -> Ưu tiên chuyển sang 'research' thay vì 'chat'
+    // Đưa kiểm tra liên kết hoặc yêu cầu đọc trang lên hàng đầu
+    if (msg.match(/(đọc trang|đọc link|url:|http:|https:|crawl|scrape)/)) {
+        return 'research';
+    }
+    
     if (msg.match(/(mới nhất|phiên bản|version|lỗi|error|bug|tra cứu|tìm kiếm|search|google|tin tức|ở đâu|ai là|ngày nào)/)) {
         return 'research';
     }
     
     if (msg.match(/^(giải thích|tại sao|là gì|what is|explain|how does|tóm tắt|summarize|dịch|translate|cho tôi biết|kể về)/)) return 'chat';
+    
     if (msg.match(/(tạo file|sửa file|viết code|fix|build|deploy|chạy lệnh|npm |pnpm |yarn |cài đặt|install|commit|git |tạo dự án|refactor|debug|compile|lint|test|đăng nhập|login|auth)/)) return 'code';
-    if (msg.match(/(tìm trên|search|đọc trang|đọc link|url:|http:|https:|tra cứu|look up|crawl|scrape)/)) return 'research';
+    
     return 'complex';
 }
 

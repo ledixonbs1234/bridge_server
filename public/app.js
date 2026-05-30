@@ -787,24 +787,55 @@ function appendCompletedCard(summary) {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 
-// Append code tool record for file changes
+// Render "Code Tool Record" hiển thị số lượng thay đổi tệp tin
 function appendCodeToolRecord(fileChanges) {
-    if (!diffContainer || !fileChanges || fileChanges.length === 0) return;
+    currentFileChanges = fileChanges; // Lưu trữ vào biến cục bộ để sử dụng cho so sánh Diff
+    const item = document.createElement('div');
+    item.className = 'code-tool-record';
     
-    let html = '';
-    fileChanges.forEach(change => {
-        html += `
-            <div class="file-change-item" style="background: var(--surface); border-radius: 8px; padding: 12px; margin: 8px 0; border: 1px solid var(--border);">
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-                    <span style="color: var(--accent); font-size: 16px;">📄</span>
-                    <span style="font-weight: 600; color: var(--text);">${change.file || 'Unknown file'}</span>
+    let listHtml = '<div class="file-changes-list">';
+    fileChanges.forEach((fc, index) => {
+        const addBadge = fc.additions > 0 ? `<span class="badge-add">+${fc.additions}</span>` : '';
+        const removeBadge = fc.deletions > 0 ? `<span class="badge-remove">-${fc.deletions}</span>` : '';
+        listHtml += `
+            <div class="file-change-item" onclick="showFileDiff(${index})">
+                <span class="file-name">📄 ${fc.file}</span>
+                <div class="change-badges">
+                    ${addBadge}
+                    ${removeBadge}
                 </div>
-                <div style="font-size: 12px; color: var(--muted); white-space: pre-wrap; font-family: monospace; background: var(--bg); padding: 8px; border-radius: 6px;">${change.diff || change.content || ''}</div>
             </div>
         `;
     });
-    
-    diffContainer.innerHTML = html || diffContainer.innerHTML;
+    listHtml += '</div>';
+
+    item.innerHTML = `
+        <div class="accordion-header" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none;">
+            <span class="record-title" style="font-weight: 600;">🛠️ Code Tool Record</span>
+            <span class="accordion-icon" style="transition: transform 0.2s ease;">▼</span>
+        </div>
+        <div class="accordion-content">
+            ${listHtml}
+        </div>
+    `;
+    insertMessageItem(item);
+
+    // KÍCH HOẠT ĐÓNG/MỞ CHO ACCORDION
+    const header = item.querySelector('.accordion-header');
+    const content = item.querySelector('.accordion-content');
+    const icon = item.querySelector('.accordion-icon');
+
+    header.addEventListener('click', () => {
+        if (content.style.display === 'none') {
+            content.style.display = 'block';
+            icon.textContent = '▼';
+            icon.style.transform = 'rotate(0deg)';
+        } else {
+            content.style.display = 'none';
+            icon.textContent = '▶';
+            icon.style.transform = 'rotate(-90deg)';
+        }
+    });
 }
 
 // Initialize send button state on page load

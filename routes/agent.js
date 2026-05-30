@@ -12,6 +12,19 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
 
 const router = express.Router();
+function detectWorkspace(message) {
+    const pathRegex = /(?:[a-zA-Z]:\/|\/)[^\s"']+/g;
+    if (message) {
+        const matches = message.replace(/\\/g, '/').match(pathRegex);
+        if (matches && matches.length > 0) {
+            const ws = path.extname(matches[0]) ? path.dirname(matches[0]) : matches[0];
+            if (!ws.toLowerCase().includes('bridge_server') && !ws.toLowerCase().includes('ridge_server')) {
+                return ws.replace(/\\/g, '/');
+            }
+        }
+    }
+    return null; // Trả về null để không quét git bừa bãi của server root
+}
 
 router.post('/chat', async (req, res) => {
     const { message, stream, useReformulate } = req.body;
@@ -167,20 +180,20 @@ router.post('/chat', async (req, res) => {
         if (result.type === 'handover') {
             if (stream) {
                 res.write(`data: ${JSON.stringify({ type: 'system', content: "✅ Workflow Engine đã xử lý thành công toàn bộ Pipeline!" })}\n\n`);
-                const fileChanges = getGitDiffStats();
+                const fileChanges = getGitDiffStats(detectWorkspace(message));
                 res.write(`data: ${JSON.stringify({ type: 'done', response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: globalThis.activeWebHistory, fileChanges })}\n\n`);
                 res.end();
             } else {
-                const fileChanges = getGitDiffStats();
+                const fileChanges = getGitDiffStats(detectWorkspace(message));
                 res.json({ success: true, response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: globalThis.activeWebHistory, fileChanges });
             }
         } else {
             if (stream) {
-                const fileChanges = getGitDiffStats();
+                const fileChanges = getGitDiffStats(detectWorkspace(message));
                 res.write(`data: ${JSON.stringify({ type: 'done', response: result.response, history: globalThis.activeWebHistory, fileChanges })}\n\n`);
                 res.end();
             } else {
-                const fileChanges = getGitDiffStats();
+                const fileChanges = getGitDiffStats(detectWorkspace(message));
                 res.json({ success: true, response: result.response, history: globalThis.activeWebHistory, fileChanges });
             }
         }

@@ -46,7 +46,8 @@ Khi nhận tác vụ phức tạp (>2 bước), bắt buộc gọi `create_pipel
 🔍 CHỈ THỊ ƯU TIÊN TÌM KIẾM TRỰC TUYẾN & TỔNG HỢP SONG SONG:
 1. **Ưu tiên Tìm kiếm Tích hợp**: Khi cần cập nhật tri thức công nghệ, tra cứu tài liệu mới hoặc giải quyết câu hỏi thực tế, bạn BẮT BUỘC phải gọi công cụ `google_search_and_summarize` đầu tiên. Công cụ này sẽ tự tìm kiếm và đọc song song nội dung của các trang web hàng đầu dưới nền để trả về báo cáo tổng hợp chất lượng cao, giúp bạn tiết kiệm số lượt gọi (tool call) và tránh làm tràn ngữ cảnh chính.
 2. **Ưu tiên Đọc web Song song**: Nếu bạn đã có sẵn danh sách các liên kết (URLs) cụ thể cần nghiên cứu và đối chiếu, hãy ưu tiên sử dụng `parallel_web_summarizer` để tải và tóm tắt song song toàn bộ các trang này trong một lượt gọi duy nhất.
-3. **Tra cứu đơn lẻ**: Chỉ sử dụng `google_search` khi bạn muốn duyệt nhanh danh sách tiêu đề/liên kết hoặc sử dụng `web_markdown_reader` khi chỉ cần phân tích một địa chỉ duy nhất.
+3. **Tra cứu đơn lẻ**: Chỉ sử dụng `google_search` khi bạn muốn duyệt nhanh danh sách tiêu đề/liên kết hoặc sử dụng `web_markdown_reader` khi chỉ cần phân tích một địa chỉ duy nhất. 
+   - *Đặc biệt:* Nếu người dùng cung cấp một liên kết (URL) cụ thể và chỉ yêu cầu tóm tắt hoặc dịch nội dung liên kết đó, tuyệt đối KHÔNG sử dụng `google_search` hoặc `google_search_and_summarize`. Hãy gọi trực tiếp `web_markdown_reader` để đọc nội dung chính xác từ URL được yêu cầu.
 </context>
 
 <context name="WindowsAndDirectoryContext">

@@ -39,23 +39,25 @@ class DeepSeekWebBot {
         this.isReady = true;
     }
 
-    async clickNewChat() {
-        if (!this.isReady) return;
-        try {
-            // Quét tìm nút có chữ "New chat" trên giao diện DeepSeek
-            await this.page.evaluate(() => {
-                const elements = document.querySelectorAll('div[role="button"]');
-                const newChatBtn = Array.from(elements).find(el => el.innerText && el.innerText.includes('New chat'));
-                if (newChatBtn) {
-                    newChatBtn.click();
-                    console.log("🆕 Đã bấm tạo New Chat mới!");
-                }
-            });
-            await this.page.waitForTimeout(500); // Chờ UI reset
-        } catch (e) {
-            // Bỏ qua nếu không tìm thấy
-        }
+    // Thay thế hàm clickNewChat() trong ridge_server/deepseek_web_bot.js
+async clickNewChat() {
+    if (!this.isReady) return;
+    try {
+        console.log("[DeepSeek Web] 🔄 Đang chuyển hướng trình duyệt về trang chủ để mở phiên New Chat mới...");
+        
+        // Điều hướng trực tiếp về địa chỉ gốc của DeepSeek
+        await this.page.goto('https://chat.deepseek.com/', { waitUntil: 'domcontentloaded' });
+        
+        // Đợi ô nhập liệu xuất hiện để xác nhận trang mới đã sẵn sàng
+        await this.page.waitForFunction(() => {
+            return !!(document.querySelector('textarea#chat-input') || document.querySelector('textarea'));
+        }, { timeout: 15000 });
+        
+        console.log("[DeepSeek Web] ✅ Đã tải xong trang trắng New Chat!");
+    } catch (e) {
+        console.error("Lỗi khi chuyển hướng về trang chủ DeepSeek:", e.message);
     }
+}
 
    // ==========================================
     // 2. GỬI TIN NHẮN (PROMPT INJECTION)
