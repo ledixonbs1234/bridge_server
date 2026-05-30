@@ -39,8 +39,8 @@ QUAN TRỌNG:
         return toolText;
     }
 
-    async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default' } = options;
+   async chat(options) {
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image } = options;
 
         await qwenBot.init();
         
@@ -85,7 +85,8 @@ QUAN TRỌNG:
             finalPrompt = lastUserMessage;
         }
 
-        await bot.sendPrompt(finalPrompt);
+       const isThinkingMode = (mode === 'thinking');
+        await bot.sendPrompt(finalPrompt, isThinkingMode, image);
 
         let stepCount = 0;
 

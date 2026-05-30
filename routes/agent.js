@@ -27,7 +27,7 @@ function detectWorkspace(message) {
 }
 
 router.post('/chat', async (req, res) => {
-    const { message, stream, useReformulate } = req.body;
+    const { message, stream, useReformulate, image } = req.body; // Đón thêm image
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
 
     console.log(chalk.magenta(`\n[Web Terminal] 📥 "${message.substring(0, 80)}"${stream ? ' (Stream)' : ''}`));
@@ -143,7 +143,8 @@ router.post('/chat', async (req, res) => {
             message,
             history: globalThis.activeWebHistory || [],
             sessionFile: globalThis.activeWebSessionFile,
-            useReformulate: useReformulate !== false, // Default to true if not specified
+            useReformulate: useReformulate !== false,
+            image, // Truyền tham số ảnh
             onChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
             } : null,

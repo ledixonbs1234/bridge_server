@@ -29,7 +29,7 @@ class QwenWebBot {
         const profilePath = path.join(__dirname, 'profile', 'Profile_Xon_Pro_All');
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
-            headless: true,
+            headless: false,
             viewport: { width: 1280, height: 720 },
             args: ['--disable-blink-features=AutomationControlled']
         });
@@ -176,27 +176,27 @@ class QwenWebBot {
         }
     }
 
-   // Thay thế hàm clickNewChat() trong ridge_server/qwen_web_bot.js
-async clickNewChat() {
-    if (!this.isReady) return;
-    try {
-        console.log("[Qwen Web] 🔄 Đang chuyển hướng trình duyệt về trang chủ để mở phiên New Chat mới...");
-        
-        // Điều hướng trực tiếp về địa chỉ gốc để xóa ID cuộc trò chuyện cũ trên URL
-        await this.page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded' });
-        
-        // Đợi ô nhập liệu xuất hiện để đảm bảo giao diện mới đã sẵn sàng nhận Prompt tiếp theo
-        await this.page.waitForFunction(() => {
-            return !!(document.querySelector('textarea.message-input-textarea') || document.querySelector('textarea'));
-        }, { timeout: 15000 });
-        
-        console.log("[Qwen Web] ✅ Đã tải xong trang trắng New Chat!");
-    } catch (e) {
-        console.error("Lỗi khi chuyển hướng về trang chủ Qwen:", e.message);
-    }
-}
+    // Thay thế hàm clickNewChat() trong ridge_server/qwen_web_bot.js
+    async clickNewChat() {
+        if (!this.isReady) return;
+        try {
+            console.log("[Qwen Web] 🔄 Đang chuyển hướng trình duyệt về trang chủ để mở phiên New Chat mới...");
 
-    async sendPrompt(promptText, useThinking = false) {
+            // Điều hướng trực tiếp về địa chỉ gốc để xóa ID cuộc trò chuyện cũ trên URL
+            await this.page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded' });
+
+            // Đợi ô nhập liệu xuất hiện để đảm bảo giao diện mới đã sẵn sàng nhận Prompt tiếp theo
+            await this.page.waitForFunction(() => {
+                return !!(document.querySelector('textarea.message-input-textarea') || document.querySelector('textarea'));
+            }, { timeout: 15000 });
+
+            console.log("[Qwen Web] ✅ Đã tải xong trang trắng New Chat!");
+        } catch (e) {
+            console.error("Lỗi khi chuyển hướng về trang chủ Qwen:", e.message);
+        }
+    }
+
+    async sendPrompt(promptText, useThinking = false, image = null) {
         if (!this.isReady) await this.init();
 
         await this.page.evaluate(() => {
@@ -209,22 +209,31 @@ async clickNewChat() {
         this.streamFinished = false;
         this.streamError = null;
 
-        console.log(`[Qwen Web] Đang nhập dữ liệu (${promptText.length} ký tự)... (Reasoning: ${useThinking ? 'ON (Think)' : 'OFF (Fast)'})`);
+        console.log(`[Qwen Web] Đang nhập dữ liệu (${promptText.length} ký tự)... (Reasoning: ${useThinking ? 'ON (Think)' : 'OFF (Fast)'})${image ? ' [KÈM HÌNH ẢNH]' : ''}`);
 
-        const filled = await this.page.evaluate(async ({ text, useDeepThink }) => {
+        const filled = await this.page.evaluate(async ({ text, useDeepThink, imageBase64 }) => {
             const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-            // Hàm mô phỏng click chuột thực tế (Cách 1 đã thành công)
             const simulateClick = (element) => {
                 if (!element) return;
-                element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-                element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+
+                // Khai báo rõ ràng cấu hình click chuột trái (button: 0, buttons: 1)
+                const eventOpts = {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                    button: 0,
+                    buttons: 1
+                };
+
+                // Bắn đầy đủ chuỗi sự kiện Pointer và Mouse
+                element.dispatchEvent(new PointerEvent('pointerdown', eventOpts));
+                element.dispatchEvent(new MouseEvent('mousedown', eventOpts));
+                element.dispatchEvent(new PointerEvent('pointerup', eventOpts));
+                element.dispatchEvent(new MouseEvent('mouseup', eventOpts));
                 element.click();
             };
 
-
-
-            // 3. Nhập văn bản vào ô chat
             const textarea = document.querySelector('textarea.message-input-textarea') ||
                 document.querySelector('.message-input-container textarea') ||
                 document.querySelector('textarea');
@@ -238,41 +247,105 @@ async clickNewChat() {
                 textarea.blur();
                 textarea.focus();
 
+                // 🚀 XỬ LÝ DÁN ẢNH TỰ ĐỘNG LÊN KHUNG CHAT QWEN
+                if (imageBase64) {
+                    try {
+                        const response = await fetch(imageBase64);
+                        const blob = await response.blob();
+                        const file = new File([blob], "pasted-image.png", { type: blob.type });
 
-                // Dựa vào hình ảnh: Tùy chọn là "Think" hoặc "Fast"
+                        const dataTransfer = new DataTransfer();
+                        dataTransfer.items.add(file);
+
+                        const pasteEvent = new ClipboardEvent("paste", {
+                            bubbles: true,
+                            cancelable: true,
+                            clipboardData: dataTransfer
+                        });
+
+                        textarea.dispatchEvent(pasteEvent);
+                        // Đợi 3.5 giây để Qwen hoàn tất tải ảnh lên máy chủ của họ và tạo preview
+                        await sleep(2000);
+                    } catch (err) {
+                        console.error("[Qwen Web Browser Error] Lỗi giả lập paste ảnh:", err);
+                    }
+                }
+
                 const targetModeText = useDeepThink ? 'Think' : 'Fast';
 
-                // 1. Tìm nút Toggle hiện tại (chứa chữ Auto, Fast, hoặc Think)
-                const buttons = Array.from(document.querySelectorAll('div[role="menuitem"], div[role="option"], li, button, span'));
+                const isThinkingText = (txt) => {
+                    const t = txt?.trim().toLowerCase();
+                    return t === 'think' || t === 'thinking';
+                };
+
+                const isFastText = (txt) => {
+                    const t = txt?.trim().toLowerCase();
+                    return t === 'fast' || t === 'auto';
+                };
+
+                // Tìm nút điều hướng chế độ dựa trên danh sách nhãn thuộc hai nhóm trên
+                const buttons = Array.from(document.querySelectorAll('span'));
                 const modelSelectorBtn = buttons.find(btn => {
                     const btnText = btn.innerText?.trim();
-                    return btnText === 'Auto' || btnText === 'Fast' || btnText === 'Think' || btnText === 'Thinking';
+                    return isFastText(btnText) || isThinkingText(btnText);
                 });
-                console.log(`[Qwen Web] Nút chọn chế độ hiện tại: ${modelSelectorBtn ? modelSelectorBtn.innerText.trim() : 'Không tìm thấy'}`);
-               
+
                 if (modelSelectorBtn) {
                     const currentMode = modelSelectorBtn.innerText?.trim();
+                    const currentIsThinking = isThinkingText(currentMode);
+                    const targetIsThinking = !!useDeepThink;
 
-                    // Nếu chế độ hiện tại chưa đúng với yêu cầu thì mới click đổi
-                    if (currentMode !== targetModeText) {
-                        // Click mở menu thả xuống
-                        simulateClick(modelSelectorBtn);
-                        await sleep(500); // Đợi 300ms cho menu xuất hiện hiệu ứng (animation)
- debugger;
-                        // 2. Quét các phần tử trong menu thả xuống
-                        const menuItems = Array.from(document.querySelectorAll('.qwen-select-option-selected-label-container'));
+                    // Chỉ kích hoạt click chuyển đổi nếu chế độ hiện tại khác biệt với yêu cầu thực tế
+                    if (currentIsThinking !== targetIsThinking) {
+                        // Kiểm tra xem danh sách ảo dropdown đã tồn tại sẵn trong DOM chưa
+                        let listHolder = document.querySelector(".rc-virtual-list-holder-inner");
+                        let openedByUs = false;
 
-                        // Tìm đúng item có chữ 'Think' hoặc 'Fast' (Bỏ qua chính nút Toggle ban đầu)
-                        const targetItem = menuItems.find(item =>
-                            item.innerText?.trim() === targetModeText && item !== modelSelectorBtn
-                        );
+                        if (!listHolder) {
+                            // Chỉ click mở dropdown khi phần tử danh sách chưa tồn tại
+                            simulateClick(modelSelectorBtn);
+                            await sleep(600); // Chờ menu dropdown render xong
+                            listHolder = document.querySelector(".rc-virtual-list-holder-inner");
+                            openedByUs = true; // Đánh dấu là do chúng ta chủ động mở
+                        }
 
+                        let targetItem = null;
+
+                        // 1. Dò tìm phần tử mục tiêu bên trong danh sách ảo Ant Design
+                        if (listHolder) {
+                            if (targetIsThinking) {
+                                // Tìm option có thuộc tính title là "Think" hoặc "Thinking"
+                                targetItem = listHolder.querySelector('[title="Think"]') || 
+                                             listHolder.querySelector('[title="Thinking"]');
+                            } else {
+                                // Tìm option có thuộc tính title là "Fast" (hoặc "Auto" nếu muốn dự phòng)
+                                targetItem = listHolder.querySelector('[title="Fast"]') || 
+                                             listHolder.querySelector('[title="Auto"]');
+                            }
+                        }
+
+                        // 2. Dự phòng (Fallback) trong trường hợp cấu trúc ảo chưa kịp render
+                        if (!targetItem) {
+                            const menuItems = Array.from(document.querySelectorAll('.ant-select-item-option, [role="option"]'));
+                            targetItem = menuItems.find(item => {
+                                if (item === modelSelectorBtn) return false;
+                                const title = item.getAttribute('title')?.trim().toLowerCase();
+                                const text = item.innerText?.trim().toLowerCase();
+                                
+                                if (targetIsThinking) {
+                                    return title === 'think' || title === 'thinking' || text === 'think' || text === 'thinking';
+                                } else {
+                                    return title === 'fast' || title === 'auto' || text === 'fast' || text === 'auto';
+                                }
+                            });
+                        }
+
+                        // 3. Kích hoạt click giả lập lên phần tử đích
                         if (targetItem) {
-                            // Click chọn item
                             simulateClick(targetItem);
-                            await sleep(300); // Đợi UI cập nhật
-                        } else {
-                            // Nếu lỗi không tìm thấy menu item, click lại nút gốc để đóng menu
+                            await sleep(300);
+                        } else if (openedByUs) {
+                            // Nếu do chúng ta mở ra nhưng không tìm thấy mục khớp để chọn, click lại nút để đóng menu
                             simulateClick(modelSelectorBtn);
                         }
                     }
@@ -280,7 +353,7 @@ async clickNewChat() {
                 return true;
             }
             return false;
-        }, { text: promptText, useDeepThink: useThinking });
+        }, { text: promptText, useDeepThink: useThinking, imageBase64: image });
 
         if (!filled) {
             console.error("[Qwen Web Error] Không tìm thấy ô nhập liệu (textarea) trong DOM!");
@@ -288,7 +361,6 @@ async clickNewChat() {
 
         await this.page.waitForTimeout(1000);
 
-        // Thực thi bấm nút Gửi (Send)
         const submitResult = await this.page.evaluate(() => {
             const sendButton = document.querySelector('.message-input-right-button-send button') ||
                 document.querySelector('.message-input-right-button button') ||
@@ -319,7 +391,7 @@ async clickNewChat() {
     /**
      * Tạo Tab Worker con độc lập và liên kết CDP riêng biệt
      */
-   async getWorkerBot(workerType = 'default') {
+    async getWorkerBot(workerType = 'default') {
         if (!this.context) await this.init();
 
         if (!this.workerBots) this.workerBots = {};

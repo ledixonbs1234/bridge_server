@@ -40,7 +40,8 @@ export async function executeAgentTurn({
     onSystem = null,
     onAskPermission = null,
     onLog = null,
-    activeProvider = globalThis.activeProvider
+    activeProvider = globalThis.activeProvider,
+    image = null // Tiếp nhận tham số image
 }) {
     const resolvedProvider = activeProvider || globalThis.activeProvider;
     const traceId = tracer.createTrace(message.substring(0, 80));
@@ -82,7 +83,9 @@ export async function executeAgentTurn({
         ]);
 
         const currentHistory = [...history];
-        currentHistory.push({ role: 'user', content: reformulatedText });
+        const userMsg = { role: 'user', content: reformulatedText };
+        if (image) userMsg.image = image; // Lưu trữ hình ảnh Base64
+        currentHistory.push(userMsg);
 
         // Nén ngữ cảnh nếu chat history quá dài
         if (currentHistory.length > 15 && resolvedProvider?.chat) {
@@ -124,11 +127,12 @@ export async function executeAgentTurn({
 
         const result = await chatWithFailover({
             messages: enrichedMessages,
-            mode: runMode, // 🚀 TRUYỀN MODE XUỐNG PROVIDER
+            mode: runMode,
             skillRegistry: filteredSkills,
             systemPrompt,
             maxSteps: 25,
             onStreamChunk: onChunk,
+            image, // Chuyển giao hình ảnh
             executeSkill: async (funcName, args) => {
                 if (onAction) onAction(funcName);
                 const toolSpanId = traceId ? tracer.startSpan(traceId, funcName, 'tool', llmSpanId, args) : null;
