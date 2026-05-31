@@ -7,6 +7,7 @@ import tracer from '../tracer.js';
 import db from '../database.js'; // Import database để truy xuất Memories thực tế
 import { getGitDiffStats } from '../utils/gitStats.js';
 import { consolidateProceduralMemory } from '../services/fluxMemConsolidator.js';
+import { resolveProceduralConflicts } from '../services/fluxMemConflictResolver.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..'); // Sửa thành '..' để trỏ đúng vào bridge_server
@@ -56,6 +57,22 @@ router.get('/sessions', (req, res) => {
     const sessions = listSessions(SESSION_DIR);
     
     res.json({ sessions, currentGoal: globalThis.persistentGoal || null });
+});
+
+router.post('/resolve-conflicts', async (req, res) => {
+    try {
+        if (!globalThis.activeProvider) {
+            return res.status(400).json({ success: false, error: "AI Provider chưa được nạp hoặc chưa hoạt động." });
+        }
+        const result = await resolveProceduralConflicts(globalThis.activeProvider);
+        if (result.success) {
+            res.json(result);
+        } else {
+            res.status(500).json(result);
+        }
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
 });
 
 // Active session endpoint
@@ -324,6 +341,50 @@ router.get('/active-workspace', (req, res) => {
                 description: activeTaskDescription
             }
         });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+// Thêm endpoint này vào file bridge_server/routes/dashboard.js
+
+router.get('/memories/graph', (req, res) => {
+    try {
+        const memories = db.prepare('SELECT * FROM memories').all() || [];
+        const edges = db.prepare('SELECT * FROM memory_edges').all() || [];
+
+        let mermaidCode = "flowchart TD\n";
+        mermaidCode += "  classDef semantic fill:#10b981,stroke:#059669,color:#fff;\n";
+        mermaidCode += "  classDef episodic fill:#3b82f6,stroke:#2563eb,color:#fff;\n";
+        mermaidCode += "  classDef procedural fill:#f59e0b,stroke:#d97706,color:#fff;\n\n";
+
+        const sanitizeId = (id) => `N_${String(id).replace(/[^a-zA-Z0-9]/g, '_')}`;
+
+        if (memories.length === 0) {
+            mermaidCode += "  Empty[\"Chưa có dữ liệu đồ thị bộ nhớ\"]:::episodic\n";
+        } else {
+            // Khởi tạo các Node bộ nhớ
+            memories.forEach(m => {
+                const type = m.type || 'episodic';
+                const rawLabel = m.situation || `Memory ${m.id}`;
+                // Cắt ngắn nhãn để hiển thị vừa vặn trên đồ thị
+                const cleanLabel = rawLabel.replace(/"/g, "'").substring(0, 45) + (rawLabel.length > 45 ? '...' : '');
+
+                mermaidCode += `  ${sanitizeId(m.id)}["${cleanLabel} (${Number(m.trust_score ?? 0.7).toFixed(2)})"]:::${type}\n`;
+            });
+
+            // Vẽ các Cạnh (Liên kết giữa các Node)
+            edges.forEach(e => {
+                // Xác định kiểu đường nối dựa trên trạng thái củng cố hay cắt tỉa
+                const isPruned = e.type === 'feedback_pruned';
+                const connector = isPruned ? " -.-x " : " --> ";
+                const label = e.type === 'feedback_strengthened' ? "củng cố" : (isPruned ? "cắt tỉa" : "");
+                const edgeLabel = label ? `|"${label}"|` : "";
+
+                mermaidCode += `  ${sanitizeId(e.source_id)}${connector}${edgeLabel}${sanitizeId(e.target_id)}\n`;
+            });
+        }
+
+        res.json({ success: true, graph: mermaidCode });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }

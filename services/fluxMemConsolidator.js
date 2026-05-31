@@ -1,4 +1,4 @@
-// ridge_server/services/fluxMemConsolidator.js
+// bridge_server/services/fluxMemConsolidator.js
 import db from '../database.js';
 import chalk from 'chalk';
 import fs from 'fs';
@@ -109,9 +109,16 @@ Chỉ trả về nội dung quy trình dạng Markdown, không viết thêm lờ
             const delta = computeStructuralChangeDistance(oldProcVersion?.solution, distilledSolution); // Tốc độ thay đổi cấu trúc đồ thị
 
             // Công thức: PEMS = eta * log(l + 1) * (1 - delta)
-            const pemsScore = eta * Math.log(l + 1) * (1 - delta);
-
-            console.log(chalk.yellow(`   → Chỉ số PEMS tính toán được: ${pemsScore.toFixed(4)}`));
+            let pemsScore = 0.0;
+            if (oldProcVersion) {
+                const delta = computeStructuralChangeDistance(oldProcVersion.solution, distilledSolution);
+                pemsScore = eta * Math.log(l + 1) * (1 - delta);
+                console.log(chalk.yellow(`   → Chỉ số PEMS tính toán được: ${pemsScore.toFixed(4)} (Delta biến thiên: ${delta.toFixed(3)})`));
+            } else {
+                // Nếu là quy trình chưng cất lần đầu, gán điểm cơ sở (baseline) dựa trên độ phức tạp của chuỗi hành động thành công
+                pemsScore = Math.min(0.90, eta * Math.log(l + 1));
+                console.log(chalk.green(`   → [Khởi tạo quy trình mới] Gán điểm tin cậy cơ sở (Baseline PEMS): ${pemsScore.toFixed(4)}`));
+            }
             console.log(chalk.gray(`     [Eta: ${eta} | Chiều dài chuỗi: ${l} | Delta biến thiên: ${delta.toFixed(3)}]`));
 
             // Chỉ quảng bá quy trình lên LTM khi đạt chỉ số chín muồi (PEMS > 0.12 hoặc quy trình chưa từng tồn tại)
@@ -124,13 +131,12 @@ Chỉ trả về nội dung quy trình dạng Markdown, không viết thêm lờ
                         .run(distilledSolution, pemsScore, new Date().toISOString(), oldProcVersion.id);
                     console.log(chalk.green(`   🎉 [Promote LTM] Cấu trúc quy trình ổn định. Đã tiến hóa quy trình thành công!`));
                 } else {
-                    // Tạo mới quy trình
+                    // Tạo mới quy trình (Đã sửa lỗi lệch tham số vị trí)
                     const date = new Date().toISOString();
                     const situation = pattern.name;
                     const trust_score = pemsScore;
                     const use_count = 1;
 
-                    // Thao tác chèn thô vào SQLite ảo
                     db.prepare(`INSERT INTO memories (id, date, tags, situation, solution, trust_score, use_count, memory_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
                         .run(null, date, tags, situation, distilledSolution, trust_score, use_count, 'procedural');
 
