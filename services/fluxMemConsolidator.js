@@ -15,14 +15,14 @@ function computeStructuralChangeDistance(oldSolution, newSolution) {
     const s1 = oldSolution.length;
     const s2 = newSolution.length;
     const maxLen = Math.max(s1, s2);
-    
+
     let diff = 0;
     const minLen = Math.min(s1, s2);
     for (let i = 0; i < minLen; i++) {
         if (oldSolution[i] !== newSolution[i]) diff++;
     }
     diff += Math.abs(s1 - s2);
-    
+
     return diff / maxLen;
 }
 
@@ -32,10 +32,10 @@ function computeStructuralChangeDistance(oldSolution, newSolution) {
  */
 export async function consolidateProceduralMemory(activeProvider) {
     console.log(chalk.magenta('\n[FluxMem Stage III] 💤 Đang tiến hành hợp nhất và chưng cất quy trình dài hạn...'));
-    
+
     // 1. Quét tìm 15 trace chạy thành công gần đây nhất trong DB
     const recentTraces = db.prepare(`SELECT * FROM traces WHERE status = 'completed' ORDER BY created_at DESC LIMIT 15`).all() || [];
-    
+
     if (recentTraces.length === 0) {
         console.log(chalk.yellow('[FluxMem Stage III] 💤 Chưa thu thập đủ lịch sử thành công để thực hiện chưng cất kỹ năng.'));
         return;
@@ -73,8 +73,8 @@ export async function consolidateProceduralMemory(activeProvider) {
 
         console.log(chalk.cyan(`[FluxMem Stage III] 🧪 Đang chưng cất bộ kịch bản chuẩn cho mục tiêu: "${pattern.name}"...`));
 
-        const stepsPrompt = pattern.stepsExecuted.map((s, i) => `${i+1}. Tool đã dùng: ${s.tool}\n   Đầu vào: ${s.input || ''}\n   Đầu ra: ${s.output || ''}`).join('\n\n');
-        
+        const stepsPrompt = pattern.stepsExecuted.map((s, i) => `${i + 1}. Tool đã dùng: ${s.tool}\n   Đầu vào: ${s.input || ''}\n   Đầu ra: ${s.output || ''}`).join('\n\n');
+
         const distillationPrompt = `Bạn là Chuyên gia chưng cất kỹ năng (FluxMem Distillation Agent).
 Dưới đây là vết lịch sử chạy thực tế thành công của Agent:
 
@@ -90,7 +90,7 @@ Chỉ trả về nội dung quy trình dạng Markdown, không viết thêm lờ
                 messages: [{ role: 'user', content: distillationPrompt }],
                 mode: 'fast',
                 skillRegistry: {},
-                executeSkill: async () => {},
+                executeSkill: async () => { },
                 systemPrompt: "Bạn là trợ lý tổng hợp tài liệu quy trình chuẩn.",
                 maxSteps: 1, isWorker: true, workerType: 'task'
             });
@@ -102,7 +102,7 @@ Chỉ trả về nội dung quy trình dạng Markdown, không viết thêm lờ
             const oldProcVersion = existingMemories.find(
                 m => (m.type === 'procedural' || m.type === 'workflow') && m.situation.toLowerCase() === pattern.name.toLowerCase()
             );
-            
+
             // --- CÔNG THỨC TOÁN HỌC PEMS ĐỒNG BỘ NGUYÊN BẢN THEO FLUXMEM ---
             const eta = 0.95; // Hệ số hiệu quả thực tế (chưng cất từ vết thành công)
             const l = pattern.stepsExecuted.length; // Độ phức tạp của quy trình cũ (số hành động con)
@@ -117,11 +117,11 @@ Chỉ trả về nội dung quy trình dạng Markdown, không viết thêm lờ
             // Chỉ quảng bá quy trình lên LTM khi đạt chỉ số chín muồi (PEMS > 0.12 hoặc quy trình chưa từng tồn tại)
             if (pemsScore > 0.12 || !oldProcVersion) {
                 const tags = JSON.stringify([key.split('_')[0], 'distilled', 'procedural']);
-                
+
                 if (oldProcVersion) {
                     // Cập nhật quy trình hiện tại
                     db.prepare(`UPDATE memories SET solution = ?, trust_score = ?, date = ? WHERE id = ?`)
-                      .run(distilledSolution, pemsScore, new Date().toISOString(), oldProcVersion.id);
+                        .run(distilledSolution, pemsScore, new Date().toISOString(), oldProcVersion.id);
                     console.log(chalk.green(`   🎉 [Promote LTM] Cấu trúc quy trình ổn định. Đã tiến hóa quy trình thành công!`));
                 } else {
                     // Tạo mới quy trình
@@ -129,11 +129,11 @@ Chỉ trả về nội dung quy trình dạng Markdown, không viết thêm lờ
                     const situation = pattern.name;
                     const trust_score = pemsScore;
                     const use_count = 1;
-                    
+
                     // Thao tác chèn thô vào SQLite ảo
-                    db.prepare(`INSERT INTO memories (date, tags, situation, solution, trust_score, use_count, memory_type) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-                      .run(date, tags, situation, distilledSolution, trust_score, use_count, 'procedural');
-                      
+                    db.prepare(`INSERT INTO memories (id, date, tags, situation, solution, trust_score, use_count, memory_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                        .run(null, date, tags, situation, distilledSolution, trust_score, use_count, 'procedural');
+
                     console.log(chalk.green(`   🎉 [Promote LTM] Đã chưng cất thành công 1 kỹ năng quy trình (𝒱_proc) dài hạn mới!`));
                 }
             } else {

@@ -19,9 +19,8 @@ export default {
             const trustScore = 0.8; // Trọng số khởi tạo mặc định cho bài học mới
             const useCount = 1;
 
-            db.prepare(`INSERT INTO memories (date, tags, situation, solution, trust_score, use_count, memory_type) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-              .run(date, tagsStr, args.situation, args.solution, trustScore, useCount, 'episodic');
-
+            db.prepare(`INSERT INTO memories (id, date, tags, situation, solution, trust_score, use_count, memory_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                .run(null, date, tagsStr, args.situation, args.solution, trustScore, useCount, 'episodic');
             return {
                 status: "success",
                 message: "Đã lưu vết Episodic Memory thành công vào cơ sở dữ liệu đồ thị."
@@ -45,8 +44,8 @@ export default {
             const trustScore = 0.95; // Tri thức ngữ nghĩa có trọng số khởi tạo rất cao
             const useCount = 1;
 
-            db.prepare(`INSERT INTO memories (date, tags, situation, solution, trust_score, use_count, memory_type) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-              .run(date, tagsStr, "Quy tắc lập trình", args.rule_description, trustScore, useCount, 'semantic');
+            db.prepare(`INSERT INTO memories (id, date, tags, situation, solution, trust_score, use_count, memory_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                .run(null, date, tagsStr, "Quy tắc lập trình", args.rule_description, trustScore, useCount, 'semantic');
 
             return {
                 status: "success",
@@ -72,8 +71,8 @@ export default {
             const trustScore = 0.85; 
             const useCount = 1;
 
-            db.prepare(`INSERT INTO memories (date, tags, situation, solution, trust_score, use_count, memory_type) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-              .run(date, tagsStr, args.target_task, args.optimized_steps, trustScore, useCount, 'procedural');
+            db.prepare(`INSERT INTO memories (id, date, tags, situation, solution, trust_score, use_count, memory_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                .run(null, date, tagsStr, args.target_task, args.optimized_steps, trustScore, useCount, 'procedural');
 
             return {
                 status: "success",
