@@ -1,6 +1,6 @@
 // ridge_server/diagnose_trace.js
-import db from './database.js';
-import tracer from './tracer.js';
+import db from '../database.js';
+import tracer from '../tracer.js';
 
 console.log("================================================");
 console.log("🔍 CHẨN ĐOÁN TRUY XUẤT CHI TIẾT TRACE (PIPELINE)");

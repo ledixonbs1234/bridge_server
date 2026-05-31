@@ -34,12 +34,28 @@ export const SKILL_CATEGORIES = {
 
 // Skill groups mapping
 export const SKILL_GROUPS = {
-    [SKILL_CATEGORIES.CHAT]: [],
+    [SKILL_CATEGORIES.CHAT]: [
+         'read_file',
+        'read_multiple_files',
+        'write_file',
+        'read_image_asset', 
+        'read_file_lines',
+        'list_directory',
+        'execute_terminal_command',
+        'get_os_context',
+        'memorize_rule',
+        'find_files',
+         'google_search',
+        'google_search_and_summarize', // Đã đăng ký thêm
+        'parallel_web_summarizer' ,
+        'capture_system_screenshot'       // Đã đăng ký thêm
+    ],
     [SKILL_CATEGORIES.CODE]: [
         'read_file',
         'read_multiple_files',
         'write_file',
         'replace_by_lines_safe',
+        'read_image_asset', 
         'read_file_lines',
         'list_directory',
         'execute_terminal_command',
@@ -52,7 +68,8 @@ export const SKILL_GROUPS = {
         'synthesize_skill',
         'google_search',
         'google_search_and_summarize', // Đã đăng ký thêm
-        'parallel_web_summarizer'       // Đã đăng ký thêm
+        'parallel_web_summarizer' ,
+        'capture_system_screenshot'       // Đã đăng ký thêm
     ],
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
@@ -62,8 +79,10 @@ export const SKILL_GROUPS = {
         'load_harness_template',
         'read_file',
         'read_file_lines',
+        'read_image_asset', 
         'find_files',
         'list_directory',
+        'capture_system_screenshot',
         'execute_terminal_command',
         'get_os_context',
         'stop_terminal_process',

@@ -103,7 +103,7 @@ QUAN TRỌNG:
             const toolRegex = /<tool_call>([\s\S]*?)<\/tool_call>/;
             const match = content.match(toolRegex);
 
-            if (match) {
+           if (match) {
                 try {
                     // Cố gắng Parse đoạn JSON mà DeepSeek sinh ra
                     const toolJson = JSON.parse(match[1].trim());
@@ -114,11 +114,41 @@ QUAN TRỌNG:
                     if (funcRes === "__HANDOVER_TO_ENGINE__") {
                         return "__HANDOVER_TO_ENGINE__";
                     }
-                    const resultString = typeof funcRes === 'object' ? JSON.stringify(funcRes) : String(funcRes);
+
+                    // --- SỬA ĐOẠN NÀY ĐỂ BÓC TÁCH CHÍNH XÁC THUỘC TÍNH LỒNG NHAU ---
+                    let feedbackImage = null;
+                    let finalFuncRes = funcRes;
+
+                    if (funcRes) {
+                        let parsed = null;
+                        if (typeof funcRes === 'string' && funcRes.trim().startsWith('{')) {
+                            try { parsed = JSON.parse(funcRes); } catch (e) {}
+                        } else if (typeof funcRes === 'object') {
+                            parsed = funcRes;
+                        }
+
+                        if (parsed) {
+                            // Kiểm tra thuộc tính image_base64 nằm bên trong đối tượng 'data' lồng nhau
+                            if (parsed.data && parsed.data.image_base64) {
+                                feedbackImage = parsed.data.image_base64;
+                                delete parsed.data.image_base64; // Xóa Base64 để tránh gây lag hộp thoại
+                                finalFuncRes = parsed;
+                            } else if (parsed.image_base64) {
+                                feedbackImage = parsed.image_base64;
+                                delete parsed.image_base64;
+                                finalFuncRes = parsed;
+                            }
+                        }
+                    }
+
+                    const resultString = typeof finalFuncRes === 'object' 
+                        ? JSON.stringify(finalFuncRes) 
+                        : String(finalFuncRes);
 
                     // FEEDBACK: Báo cho DeepSeek biết kết quả để nó làm tiếp
-                     const feedbackPrompt = `[KẾT QUẢ TỪ HỆ THỐNG CHO LỆNH ${toolJson.name}]\n${resultString}\n\nDựa vào kết quả này, hãy phân tích và đưa ra câu trả lời cuối cùng, HOẶC tiếp tục gọi <tool_call> nếu cần thêm thông tin.`;
-                    await bot.sendPrompt(feedbackPrompt, isThinkingMode);
+                    const feedbackPrompt = `[KẾT QUẢ TỪ HỆ THỐNG CHO LỆNH ${toolJson.name}]\n${resultString}\n\nDựa vào kết quả này, hãy phân tích và đưa ra câu trả lời cuối cùng, HOẶC tiếp tục gọi <tool_call> nếu cần thêm thông tin.`;
+                    
+                    await bot.sendPrompt(feedbackPrompt, isThinkingMode, feedbackImage);
                     continue; // Chờ vòng lặp tiếp theo
 
                 } catch (e) {

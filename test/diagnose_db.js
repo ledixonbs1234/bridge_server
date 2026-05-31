@@ -1,10 +1,10 @@
 // ridge_server/diagnose_db.js
-import db from './database.js';
+import db from '../database.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import tracer from './tracer.js';
-import telemetry from './telemetry.js';
+import tracer from '../tracer.js';
+import telemetry from '../telemetry.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

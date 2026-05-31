@@ -76,3 +76,9 @@ Khi nhận tác vụ phức tạp (>2 bước), bắt buộc gọi `create_pipel
 - Thiết kế/phân tích -> Gọi `workflow_grill_with_docs`.
 - Trước khi lập plan -> Gọi `workflow_out_of_scope_guard` để kiểm tra bối cảnh ngoài phạm vi.
 </context>
+
+<context name="SystemVisualization">
+📷 TRỰC QUAN HÓA HỆ THỐNG & ĐỐI CHIẾU TIẾN TRÌNH:
+1. **Kiểm duyệt trạng thái ứng dụng GUI**: Khi người dùng yêu cầu kiểm tra xem giao diện ứng dụng (Vite Dev Server, React App, các ứng dụng Electron, Terminal hay công cụ khác) có chạy thành công không, hãy gọi `capture_system_screenshot`.
+2. **Khả năng quan sát**: Đầu ra của công cụ này bao gồm trường `image_base64`. Hệ thống máy chủ đã được cấu hình bộ lọc thông minh để tự động bóc tách và chuyển giao tệp ảnh này đính kèm vào luồng chat. Bạn sẽ thực sự "nhìn thấy" trạng thái màn hình thực tế và danh sách tiêu đề cửa sổ đang mở để đưa ra phân tích chính xác nhất, tránh việc tự giả định.
+</context>

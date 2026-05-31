@@ -7,7 +7,7 @@ import telemetry from '../telemetry.js';
 import { SKILL_REGISTRY } from './skillLoader.js';
 import WorkflowEngine from '../workflow_engine.js';
 import { SKILL_GROUPS } from '../constants.js'
-
+import db from '../database.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
@@ -225,21 +225,13 @@ export function classifyIntent(userMessage) {
 
     if (msg.match(/(tạo file|sửa file|viết code|fix|build|deploy|chạy lệnh|npm |pnpm |yarn |cài đặt|install|commit|git |tạo dự án|refactor|debug|compile|lint|test|đăng nhập|login|auth)/)) return 'code';
 
-    return 'complex';
+    return 'chat';
 }
 
 // 2. Chỉnh sửa hàm filterSkillsByIntent trong cùng file
 export function filterSkillsByIntent(intent, fullRegistry) {
     if (intent === 'complex' || !SKILL_GROUPS[intent]) return fullRegistry;
 
-    if (intent === 'chat') {
-        // Cho phép sử dụng google_search trong chế độ chat để trả lời câu hỏi thực tế chuẩn xác
-        const filtered = {};
-        if (fullRegistry['google_search']) {
-            filtered['google_search'] = fullRegistry['google_search'];
-        }
-        return filtered;
-    }
 
     const allowedNames = SKILL_GROUPS[intent];
     const filtered = {};
@@ -305,7 +297,13 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
 
             logBuffer.push(str);
             if (logger) {
-                const cleanStr = str.replace(/\x1b\[[0-9;]*m/g, ''); // Xóa mã màu ANSI
+                let cleanStr = str.replace(/\x1b\[[0-9;]*m/g, ''); // Xóa mã màu ANSI
+
+                // 🛡️ BỘ LỌC CHỐNG TRÀN CHUỖI BASE64 RA LOGS HIỂN THỊ
+                if (cleanStr.includes('data:image/') && cleanStr.includes('base64,')) {
+                    cleanStr = cleanStr.replace(/data:image\/[a-zA-Z]+;base64,[a-zA-Z0-9+/=]+/g, '[Dữ liệu hình ảnh Base64 - Đã ẩn để tối ưu hiệu năng]');
+                }
+
                 logger(`📝 [Tool Output] ${cleanStr}`);
             }
         };

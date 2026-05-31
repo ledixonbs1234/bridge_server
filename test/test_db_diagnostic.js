@@ -1,7 +1,7 @@
 // ridge_server/test_db_diagnostic.js
-import db from './database.js';
-import tracer from './tracer.js';
-import telemetry from './telemetry.js';
+import db from '../database.js';
+import tracer from '../tracer.js';
+import telemetry from '../telemetry.js';
 
 async function runDiagnostic() {
     console.log("================================================");

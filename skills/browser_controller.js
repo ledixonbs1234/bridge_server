@@ -14,14 +14,14 @@ let activePage = null;
 
 export default {
     "dynamic_browser_controller": {
-        description: "[TRÌNH ĐIỀU KHIỂN DOM] Dùng để thao tác web. QUAN TRỌNG: KHÔNG DÙNG CLASS VÀ ID ĐỘNG ĐỂ TRÁNH LỖI KHI REFRESH. Hãy dùng Attribute (placeholder, aria-label, role). Nếu bị lỗi 'Không tìm thấy target', hãy tự động gọi lại inspect_dom để tìm Selector mới.",
+        description: "[TRÌNH ĐIỀU KHIỂN DOM] Dùng để thao tác web và chụp ảnh màn hình giao diện. QUAN TRỌNG: KHÔNG DÙNG CLASS VÀ ID ĐỘNG ĐỂ TRÁNH LỖI KHI REFRESH. Hãy dùng Attribute (placeholder, aria-label, role). Nếu bị lỗi 'Không tìm thấy target', hãy tự động gọi lại inspect_dom để tìm Selector mới.",
         parameters: {
             type: "object",
             properties: {
                 action: { 
                     type: "string", 
-                    enum: ["goto", "inspect_dom", "click", "fill", "run_js", "close"],
-                    description: "Hành động cần làm."
+                    enum: ["goto", "inspect_dom", "click", "fill", "run_js", "close", "screenshot"],
+                    description: "Hành động cần làm. Chọn 'screenshot' để chụp ảnh màn hình giao diện hiện tại."
                 },
                 target: { type: "string", description: "URL (nếu goto), hoặc CSS Selector/Text (nếu click, fill). VD: [placeholder='Tìm kiếm'] hoặc text='Suy Nghĩ Sâu'." },
                 value: { type: "string", description: "Nội dung chữ cần nhập (nếu fill)" },
@@ -120,6 +120,29 @@ export default {
                             return await asyncFn();
                         }, js_code);
                         return { status: "success", result: jsResult };
+
+                    case "screenshot":
+                        try {
+                            const screenshotDir = path.join(process.cwd(), '.agent_memory', 'state', 'artifacts');
+                            if (!fs.existsSync(screenshotDir)) {
+                                fs.mkdirSync(screenshotDir, { recursive: true });
+                            }
+                            const screenshotPath = path.join(screenshotDir, `screenshot_${Date.now()}.png`);
+                            
+                            // Thực hiện chụp ảnh màn hình bằng Playwright
+                            await activePage.screenshot({ path: screenshotPath, type: 'png' });
+                            
+                            // Đọc ảnh và chuyển đổi sang dạng Base64 để trả về cho mô hình AI phân tích
+                            const base64Img = fs.readFileSync(screenshotPath, 'base64');
+                            return {
+                                status: "success",
+                                message: `Đã chụp ảnh màn hình giao diện thành công và lưu tại: ${screenshotPath.replace(/\\/g, '/')}`,
+                                file_path: screenshotPath.replace(/\\/g, '/'),
+                                image_base64: `data:image/png;base64,${base64Img}`
+                            };
+                        } catch (err) {
+                            return { status: "error", error_message: `Không thể chụp màn hình: ${err.message}` };
+                        }
 
                     case "close":
                         if (activeContext) await activeContext.close();
