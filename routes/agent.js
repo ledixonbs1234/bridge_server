@@ -3,10 +3,9 @@ import chalk from 'chalk';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { executeAgentTurn, activeWebSession } from '../services/agentService.js';
 import { getGitDiffStats } from '../utils/gitStats.js';
 import { switchProvider, getProviderConfig } from '../services/providerService.js';
-
+import { executeAgentTurn, activeWebSession, pendingPermissions } from '../services/agentService.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
@@ -97,7 +96,7 @@ router.post('/chat', async (req, res) => {
             }
         }
         // Xử lý lệnh đặc biệt /clear và /new
-        if(message.trim() === '/clear' || message.trim() === '/new') {
+        if (message.trim() === '/clear' || message.trim() === '/new') {
             globalThis.activeWebSessionFile = null;
             globalThis.activeWebHistory = [];
             if (typeof globalThis.activeProvider?.resetSession === 'function') {
@@ -166,8 +165,47 @@ router.post('/chat', async (req, res) => {
 
                 res.write(`data: ${JSON.stringify({ type: 'ask_permission', id: permId, query: query.replace(/\x1b\[[0-9;]*m/g, ''), details: cleanDetails })}\n\n`);
 
-                const pendingPermissions = await import('../services/agentService.js').then(m => m.pendingPermissions);
-                return new Promise((resolve) => pendingPermissions.set(permId, resolve));
+                const pendingPermissions = agentService.pendingPermissions;
+
+                return new Promise((resolve) => {
+                    // Đăng ký quyền phê duyệt trong Map TRƯỚC khi gửi tin nhắn để tránh race condition
+                    pendingPermissions.set(permId, resolve);
+
+                    // --- TÍCH HỢP GỬI NÚT TƯƠNG TÁC LÊN TELEGRAM ---
+                    (async () => {
+                        try {
+                            const configPath = path.join(projectRoot, 'config.json');
+                            if (fs.existsSync(configPath)) {
+                                const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                                if (config.telegram?.enabled && config.telegram?.notifyOnPermission) {
+                                    const { sendTelegramMessage, escapeHtml } = await import('../services/telegramService.js');
+                                    const cleanQuery = query.replace(/\x1b\[[0-9;]*m/g, '');
+
+                                    // Định hình giao diện nút bấm inline của Telegram
+                                    const inlineKeyboard = {
+                                        inline_keyboard: [
+                                            [
+                                                { text: "Đồng ý (Yes)", callback_data: `perm:${permId}:y` },
+                                                { text: "Từ chối (No)", callback_data: `perm:${permId}:n` }
+                                            ],
+                                            [
+                                                { text: "Đồng ý tất cả (All)", callback_data: `perm:${permId}:a` }
+                                            ]
+                                        ]
+                                    };
+
+                                    // Lọc HTML sạch cho nội dung câu hỏi phê duyệt trước khi dán vào thẻ <i>
+                                    await sendTelegramMessage(
+                                        `⚠️ <b>YÊU CẦU PHÊ DUYỆT WORKFLOW:</b>\n\n<i>${escapeHtml(cleanQuery)}</i>\n\nBạn có thể nhấn các nút bấm dưới đây để phản hồi trực tiếp:`,
+                                        inlineKeyboard
+                                    );
+                                }
+                            }
+                        } catch (tgErr) {
+                            console.error("Lỗi gửi thông báo phê duyệt qua Telegram:", tgErr.message);
+                        }
+                    })();
+                });
             },
             onLog: stream ? (text) => {
                 res.write(`data: ${JSON.stringify({ type: 'log', content: text })}\n\n`);

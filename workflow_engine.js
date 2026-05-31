@@ -311,7 +311,7 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
     async validateStep(step, executorOutput) {
         const val = step.validation || { type: 'bypass', value: 'auto-pass' };
         if (val.type === 'bypass') return { passed: true, reason: '' };
-        
+
         const workspace = this.pipelineWorkspace;
 
         // 1. Xác thực: Kiểm tra sự tồn tại của file
@@ -320,9 +320,9 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
                 ? val.value.trim()
                 : path.join(workspace, val.value.trim());
             const exists = fs.existsSync(targetPath);
-            return { 
-                passed: exists, 
-                reason: exists ? '' : `[FILE_NOT_FOUND] Tệp tin mục tiêu không tồn tại tại đường dẫn: "${targetPath}". Vui lòng kiểm tra lại xem đã tạo đúng thư mục chưa.` 
+            return {
+                passed: exists,
+                reason: exists ? '' : `[FILE_NOT_FOUND] Tệp tin mục tiêu không tồn tại tại đường dẫn: "${targetPath}". Vui lòng kiểm tra lại xem đã tạo đúng thư mục chưa.`
             };
         }
 
@@ -330,9 +330,9 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
         if (val.type === 'command') {
             try {
                 // Sử dụng 'pipe' để hứng toàn bộ luồng xuất bản của Console
-                const stdoutBuffer = execSync(val.value, { 
-                    cwd: workspace, 
-                    stdio: ['ignore', 'pipe', 'pipe'], 
+                const stdoutBuffer = execSync(val.value, {
+                    cwd: workspace,
+                    stdio: ['ignore', 'pipe', 'pipe'],
                     env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
                     timeout: 30000 // Giới hạn 30 giây tránh đơ luồng
                 });
@@ -342,10 +342,10 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
                 const stdout = execErr.stdout ? execErr.stdout.toString('utf8') : '';
                 const stderr = execErr.stderr ? execErr.stderr.toString('utf8') : '';
                 const fullConsoleOutput = `${stdout}\n${stderr}`.trim();
-                
-                return { 
-                    passed: false, 
-                    reason: `[COMPILATION_ERROR] Lệnh kiểm duyệt "${val.value}" thất bại tại thư mục "${workspace}".\n\nCHI TIẾT LỖI TỪ CONSOLE:\n${fullConsoleOutput || execErr.message}` 
+
+                return {
+                    passed: false,
+                    reason: `[COMPILATION_ERROR] Lệnh kiểm duyệt "${val.value}" thất bại tại thư mục "${workspace}".\n\nCHI TIẾT LỖI TỪ CONSOLE:\n${fullConsoleOutput || execErr.message}`
                 };
             }
         }
@@ -385,7 +385,7 @@ ${errorCtx}
                 const workerSkills = { ...this.skillRegistry };
                 delete workerSkills['create_pipeline_plan'];
                 delete workerSkills['update_pipeline_status'];
-                
+
                 const resp = await this.provider.chat({
                     messages: [{ role: 'user', content: validationPrompt }],
                     mode: 'fast', // Validator chạy chế độ nhanh để tiết kiệm token
@@ -401,7 +401,7 @@ ${errorCtx}
                     systemPrompt: "Bạn là Validator. Nếu đạt -> PASS. Nếu không -> chỉ ra lỗi.",
                     maxSteps: 10, isWorker: true, workerType: `validator_${step.step_key}`
                 });
-                
+
                 const cleanResp = resp.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
                 return cleanResp.toUpperCase().includes('PASS')
                     ? { passed: true, reason: '' }
@@ -410,7 +410,7 @@ ${errorCtx}
                 return { passed: false, reason: `[VALIDATOR_SYSTEM_ERROR] Lỗi hệ thống kiểm duyệt: ${e.message}` };
             }
         }
-        
+
         return { passed: true, reason: '' };
     }
 
@@ -436,8 +436,8 @@ ${error ? `Lỗi: ${error.message}` : ''}
         try {
             const skills = {};
             if (this.skillRegistry['synthesize_skill']) skills['synthesize_skill'] = this.skillRegistry['synthesize_skill'];
-           const resp = await this.provider.chat({
-                messages: [{ role: 'user', content: prompt }], 
+            const resp = await this.provider.chat({
+                messages: [{ role: 'user', content: prompt }],
                 mode: 'thinking', // 🧠 REFLECTION CẦN TƯ DUY SÂU
                 skillRegistry: skills,
                 executeSkill: async (fn, args) => { logMessage(chalk.magenta(`💡 Reflection gọi: ${fn}`)); return await this.executeSkillFn(fn, args); },
@@ -497,9 +497,9 @@ ${error ? `Lỗi: ${error.message}` : ''}
         return choice;
     }
 
-   /**
-     * Thực thi một Step trong không gian cát (Sandbox) với vòng lặp tự sửa lỗi cục bộ
-     */
+    /**
+      * Thực thi một Step trong không gian cát (Sandbox) với vòng lặp tự sửa lỗi cục bộ
+      */
     async executeStep(step, pipeline) {
         const stepKey = step.step_key;
         const maxRetries = (step.validation?.max_retries) || 3;
@@ -529,7 +529,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
         // Sao lưu trạng thái Git an toàn tại thời điểm ĐẦU TIÊN của Step (để rollback khi cạn kiệt số lần thử)
         const preStepStatus = this.getGitStatus();
-        
+
         let localAttempt = 0;
         const maxLocalAttempts = 3; // AI tự chữa lỗi tối đa 3 lần cục bộ cho 1 step trước khi báo lỗi lên Manager
         let lastValidationError = null;
@@ -537,7 +537,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
         while (localAttempt < maxLocalAttempts) {
             localAttempt++;
-            
+
             const currentGlobalRetry = (this.getStepState('CURRENT', stepKey)?.retry_count || 0);
             logMessage(chalk.yellow(`\n⏳ Step: "${step.task}"`));
             logMessage(chalk.cyan(`   [Vòng lặp Cục bộ]: Lần ${localAttempt}/${maxLocalAttempts} | [Vòng lặp Toàn cục]: Lần ${currentGlobalRetry + 1}/${maxRetries}`));
@@ -550,11 +550,11 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
             // Xây dựng prompt kỷ luật
             let promptContext = this.buildDisciplinedPrompt(
-                step, 
-                journalContext, 
-                localAttempt - 1, 
-                JSON.stringify(lastValidationError ? [lastValidationError] : []), 
-                workspace, 
+                step,
+                journalContext,
+                localAttempt - 1,
+                JSON.stringify(lastValidationError ? [lastValidationError] : []),
+                workspace,
                 progressOverview
             );
 
@@ -627,7 +627,7 @@ Thư mục dự án đích: ${workspace}
                         logMessage(chalk.yellow(`\n⚙️ Worker gọi Tool: ${fn}...`));
                         logAgentEvent('TOOL_CALL', { step_key: stepKey, tool_name: fn, arguments: args });
                         const toolSpanId = stepSpanId ? tracer.startSpan(this.currentTraceId, fn, 'tool', stepSpanId, args) : null;
-                        
+
                         try {
                             const result = await this.executeSkillFn(fn, args);
                             if (toolSpanId) tracer.endSpan(toolSpanId, 'completed', typeof result === 'string' ? { text: result.substring(0, 500) } : result);
@@ -643,14 +643,14 @@ Thư mục dự án đích: ${workspace}
                     systemPrompt: workerSystemPrompt,
                     maxSteps: 12, // Tăng giới hạn số bước để AI đủ tài nguyên kiểm tra tệp
                     isWorker: true,
-                     workerType: `task_${stepKey}` 
+                    workerType: `task_${stepKey}`
                 });
 
                 if (llmSpanId) tracer.endSpan(llmSpanId, 'completed', { response_length: response.length });
-                
+
                 const cleanResponse = response.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
                 spinner.succeed(chalk.green(`Worker kết thúc lượt xử lý cục bộ.`));
-                
+
                 db.prepare(`UPDATE agent_states SET last_executor_output = ?, updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
                     .run(cleanResponse.substring(0, 2000), new Date().toISOString(), stepKey);
             } catch (err) {
@@ -664,7 +664,7 @@ Thư mục dự án đích: ${workspace}
                 this.transitionState('CURRENT', stepKey, 'VALIDATING');
                 const valSpinner = ora(`Đang kiểm duyệt kết quả (Validator)...`).start();
                 const valResult = await this.validateStep(step, response);
-                
+
                 logAgentEvent('VALIDATION_RESULT', {
                     step_key: stepKey,
                     task: step.task,
@@ -672,7 +672,7 @@ Thư mục dự án đích: ${workspace}
                     reason: valResult.reason || 'Thành công'
                 });
 
- if (valResult.passed) {
+                if (valResult.passed) {
                     valSpinner.succeed(chalk.green(`Kiểm duyệt thành công!`));
                     const summary = await this.generateStepSummary(step, response);
 
@@ -682,7 +682,7 @@ Thư mục dự án đích: ${workspace}
                     try {
                         const memories = db.prepare('SELECT * FROM memories').all() || [];
                         const taskKeyword = step.task.toLowerCase();
-                        
+
                         memories.forEach(m => {
                             let tags = [];
                             try { tags = JSON.parse(m.tags || '[]'); } catch { }
@@ -691,13 +691,13 @@ Thư mục dự án đích: ${workspace}
                                 const currentScore = m.trust_score ?? 0.7;
                                 const newScore = Math.min(1.0, currentScore + 0.05);
                                 const newUseCount = (m.use_count || 0) + 1;
-                                
+
                                 db.prepare(`UPDATE memories SET trust_score = ?, use_count = ? WHERE id = ?`)
-                                  .run(newScore, newUseCount, m.id);
-                                
+                                    .run(newScore, newUseCount, m.id);
+
                                 // Ghi nhận cạnh liên kết tích cực lên đồ thị
                                 db.prepare(`INSERT INTO memory_edges (source_id, target_id, type, weight) VALUES (?, ?, ?, ?)`)
-                                  .run(stepKey, m.id, 'feedback_strengthened', newScore);
+                                    .run(stepKey, m.id, 'feedback_strengthened', newScore);
                             }
                         });
                     } catch (e) {
@@ -739,13 +739,13 @@ Thư mục dự án đích: ${workspace}
                                 // Giảm mạnh 0.15 điểm để cô lập node nhiễu khỏi các lần truy xuất sau
                                 const currentScore = m.trust_score ?? 0.7;
                                 const newScore = Math.max(0.1, currentScore - 0.15);
-                                
+
                                 db.prepare(`UPDATE memories SET trust_score = ? WHERE id = ?`)
-                                  .run(newScore, m.id);
+                                    .run(newScore, m.id);
 
                                 // Ghi nhận cạnh cắt tỉa hỏng lên đồ thị
                                 db.prepare(`INSERT INTO memory_edges (source_id, target_id, type, weight) VALUES (?, ?, ?, ?)`)
-                                  .run(stepKey, m.id, 'feedback_pruned', newScore);
+                                    .run(stepKey, m.id, 'feedback_pruned', newScore);
                             }
                         });
                     } catch (e) {
@@ -759,7 +759,7 @@ Thư mục dự án đích: ${workspace}
 
         // ❌ CHỈ TIẾN HÀNH ROLLBACK KHI CHẠY HẾT 3 LẦN TỰ SỬA CỤC BỘ VẪN THẤT BẠI
         logMessage(chalk.red(`\n❌ Step thất bại sau ${maxLocalAttempts} lần tự sửa cục bộ. Đang tiến hành rollback về trạng thái an toàn gần nhất...`));
-        
+
         const formattedError = lastValidationError.startsWith('[SYSTEM_ERROR]') ? lastValidationError : `[COMPILATION_FAILED] ${lastValidationError}`;
         this.appendError('CURRENT', stepKey, formattedError);
         this.rollbackChanges(preStepStatus);
@@ -789,6 +789,18 @@ Thư mục dự án đích: ${workspace}
         }
         return true;
     }
+    async sendTelegramPipelineFailure(pipeline, errorDetail = "") {
+        try {
+            const configPath = path.join(process.cwd(), 'config.json');
+            if (fs.existsSync(configPath)) {
+                const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                if (config.telegram?.enabled && config.telegram?.notifyOnPipelineFailure) {
+                    const { sendTelegramMessage } = await import('./services/telegramService.js');
+                    await sendTelegramMessage(`❌ <b>Pipeline thất bại hoặc bị dừng!</b>\n\n🎯 <i>${pipeline.pipeline_name}</i>\n\n${errorDetail ? `Chi tiết: <code>${errorDetail}</code>` : 'Bị hủy bỏ hoặc gặp lỗi nghiêm trọng.'}`);
+                }
+            }
+        } catch { }
+    }
 
     // === MAIN RUN LOOP ===
     async run() {
@@ -802,6 +814,18 @@ Thư mục dự án đích: ${workspace}
             pipeline_name: pipeline.pipeline_name,
             stages_count: pipeline.stages.length
         });
+
+        // GỬI TELEGRAM THÔNG BÁO KHỞI CHẠY PIPELINE
+        try {
+            const configPath = path.join(process.cwd(), 'config.json');
+            if (fs.existsSync(configPath)) {
+                const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                if (config.telegram?.enabled && config.telegram?.notifyOnPipelineStart) {
+                    const { sendTelegramMessage } = await import('./services/telegramService.js');
+                    await sendTelegramMessage(`🚀 <b>Khởi chạy Pipeline mới:</b>\n\n🎯 <code>${pipeline.pipeline_name}</code>\n📂 Thư mục: <i>${this.pipelineWorkspace}</i>`);
+                }
+            }
+        } catch (tgErr) { }
 
         logMessage(boxen(chalk.bold.cyan(`🚀 PIPELINE: ${pipeline.pipeline_name}`), { padding: 1, borderColor: 'cyan' }));
 
@@ -846,6 +870,9 @@ Thư mục dự án đích: ${workspace}
                         stage.status = 'FAILED';
                         this.updatePipelineStatus(pipeline, 'FAILED');
                         await this.triggerReflection(pipeline, 'FAILED', new Error("Hủy bởi User"));
+
+                        // BÁO CÁO THẤT BẠI TELEGRAM
+                        await this.sendTelegramPipelineFailure(pipeline, `Dừng khẩn cấp tại bước: ${readySteps[0].task}`);
                         return;
                     }
                 } else {
@@ -885,6 +912,18 @@ Thư mục dự án đích: ${workspace}
         this.updatePipelineStatus(pipeline, 'DONE');
         if (this.currentTraceId) tracer.completeTrace(this.currentTraceId, 'completed');
         await this.triggerReflection(pipeline, 'SUCCESS');
+
+        // --- GỬI TELEGRAM KHI PIPELINE THÀNH CÔNG ---
+        try {
+            const configPath = path.join(process.cwd(), 'config.json');
+            if (fs.existsSync(configPath)) {
+                const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                if (config.telegram?.enabled && config.telegram?.notifyOnPipelineSuccess) {
+                    const { sendTelegramMessage } = await import('./services/telegramService.js');
+                    await sendTelegramMessage(`✅ <b>Pipeline hoàn tất thành công!</b>\n\n🎯 <i>${pipeline.pipeline_name}</i>\n\nToàn bộ các giai đoạn đã được xác thực tự động.`);
+                }
+            }
+        } catch (tgErr) { }
         logMessage(boxen(chalk.bold.green(`🎉 PIPELINE HOÀN TẤT!`), { padding: 1, borderColor: 'green' }));
     }
 }

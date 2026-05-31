@@ -128,17 +128,38 @@ export default {
                                 fs.mkdirSync(screenshotDir, { recursive: true });
                             }
                             const screenshotPath = path.join(screenshotDir, `screenshot_${Date.now()}.png`);
-                            
+
                             // Thực hiện chụp ảnh màn hình bằng Playwright
                             await activePage.screenshot({ path: screenshotPath, type: 'png' });
-                            
-                            // Đọc ảnh và chuyển đổi sang dạng Base64 để trả về cho mô hình AI phân tích
+
+                            // Đọc ảnh và chuyển đổi sang dạng Base64
                             const base64Img = fs.readFileSync(screenshotPath, 'base64');
+                            const imageBase64 = `data:image/png;base64,${base64Img}`;
+
+                            // --- GỬI ẢNH CHỤP TRÌNH DUYỆT SANG TELEGRAM ---
+                            try {
+                                const configPath = path.join(process.cwd(), 'config.json');
+                                if (fs.existsSync(configPath)) {
+                                    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                                    if (config.telegram?.enabled) {
+                                        const { sendTelegramPhoto, escapeHtml } = await import('../services/telegramService.js');
+                                        const currentUrl = activePage.url();
+                                        await sendTelegramPhoto(
+                                            imageBase64,
+                                            `🌐 <b>Ảnh chụp màn hình từ CloakBrowser:</b>\nURL hiện hành: <i>${escapeHtml(currentUrl)}</i>`
+                                        );
+                                    }
+                                }
+                            } catch (tgErr) {
+                                console.error("Không thể gửi ảnh chụp trình duyệt qua Telegram:", tgErr.message);
+                            }
+                            // ---------------------------------------------
+
                             return {
                                 status: "success",
                                 message: `Đã chụp ảnh màn hình giao diện thành công và lưu tại: ${screenshotPath.replace(/\\/g, '/')}`,
                                 file_path: screenshotPath.replace(/\\/g, '/'),
-                                image_base64: `data:image/png;base64,${base64Img}`
+                                image_base64: imageBase64
                             };
                         } catch (err) {
                             return { status: "error", error_message: `Không thể chụp màn hình: ${err.message}` };

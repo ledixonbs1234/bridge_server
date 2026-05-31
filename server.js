@@ -64,6 +64,7 @@ app.get('/api/system-prompt', (req, res) => {
     }
 });
 
+
 // Register routes
 app.use('/api/agent', agentRoutes);
 app.use('/api/dashboard', dashboardRoutes);
@@ -71,21 +72,31 @@ app.use('/api/provider', providerRoutes);
 
 const PORT = 54321;
 
+
 async function bootstrap() {
     try {
         // 1. Load provider config
         await loadProviderConfig();
-        
+
         // 2. Load skills
         await loadSkills();
         setupHotReload();
 
         // 3. Start server
-        app.listen(PORT, () => {
+        app.listen(PORT, async () => {
             console.log(chalk.green(`\n🚀 Bridge Server Agent đang chạy tại http://localhost:${PORT}`));
             console.log(`=================================================`);
             console.log(`🌐 Mở http://localhost:${PORT}/dashboard để dùng Web Chat!`);
             console.log(`=================================================\n`);
+
+            // --- KÍCH HOẠT LONG POLLING ---
+            try {
+                const { startTelegramPolling } = await import('./services/telegramService.js');
+                await startTelegramPolling();
+            } catch (tgErr) {
+                console.error("Lỗi khởi chạy Telegram Polling:", tgErr.message);
+            }
+            // -------------------------------
 
             // 4. Launch CLI if --cli flag is present
             if (process.argv.includes('--cli')) {

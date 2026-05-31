@@ -37,14 +37,14 @@ router.get('/memories', (req, res) => {
         const total = memories.length;
         const avg_trust = total > 0 ? memories.reduce((sum, m) => sum + (m.trust_score || 0.7), 0) / total : 0;
         const embedded_count = memories.filter(m => m.has_embedding).length;
-        
-        res.json({ 
-            memories, 
-            stats: { 
-                total, 
-                avg_trust, 
-                embedded_count 
-            } 
+
+        res.json({
+            memories,
+            stats: {
+                total,
+                avg_trust,
+                embedded_count
+            }
         });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
@@ -55,8 +55,84 @@ router.get('/memories', (req, res) => {
 router.get('/sessions', (req, res) => {
     const SESSION_DIR = path.join(projectRoot, '.agent_memory', 'sessions');
     const sessions = listSessions(SESSION_DIR);
-    
+
     res.json({ sessions, currentGoal: globalThis.persistentGoal || null });
+});
+
+// GET Telegram Config (với bộ ẩn Token để bảo mật thông tin)
+router.get('/telegram', (req, res) => {
+    try {
+        const configPath = path.join(projectRoot, 'config.json');
+        let config = {};
+        if (fs.existsSync(configPath)) {
+            config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        }
+
+        const tg = config.telegram || {
+            enabled: false,
+            botToken: '',
+            chatId: '',
+            notifyOnPermission: true,
+            notifyOnPipelineSuccess: true,
+            notifyOnPipelineFailure: true,
+            notifyOnPipelineStart: true
+        };
+
+        // Tạo bản sao và ẩn một phần Token khi trả về Frontend
+        const maskedTg = { ...tg };
+        if (maskedTg.botToken && maskedTg.botToken.length > 8) {
+            maskedTg.botToken = maskedTg.botToken.substring(0, 4) + '...' + maskedTg.botToken.slice(-4);
+        }
+
+        res.json({ success: true, config: maskedTg });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// POST Update Telegram Config
+router.post('/telegram', (req, res) => {
+    try {
+        const configPath = path.join(projectRoot, 'config.json');
+        let config = {};
+        if (fs.existsSync(configPath)) {
+            config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        }
+
+        const existingTg = config.telegram || {};
+        const newTg = req.body;
+
+        // Nếu nhận token có chứa '...' nghĩa là user không chỉnh sửa ô này, khôi phục lại token cũ
+        if (newTg.botToken && newTg.botToken.includes('...')) {
+            newTg.botToken = existingTg.botToken || '';
+        }
+
+        config.telegram = {
+            enabled: !!newTg.enabled,
+            botToken: newTg.botToken || '',
+            chatId: newTg.chatId || '',
+            notifyOnPermission: newTg.notifyOnPermission !== false,
+            notifyOnPipelineSuccess: newTg.notifyOnPipelineSuccess !== false,
+            notifyOnPipelineFailure: newTg.notifyOnPipelineFailure !== false,
+            notifyOnPipelineStart: newTg.notifyOnPipelineStart !== false
+        };
+
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+        res.json({ success: true, message: "Cấu hình Telegram đã được lưu thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// POST Test Telegram Connection
+router.post('/telegram/test', async (req, res) => {
+    try {
+        const { sendTelegramMessage } = await import('../services/telegramService.js');
+        await sendTelegramMessage(`🔔 <b>Bridge Server Test Notification</b>\n\nNếu bạn nhìn thấy tin nhắn này, cấu hình Bot Telegram của bạn đã hoạt động hoàn toàn chính xác! 🎉`);
+        res.json({ success: true, message: "Tin nhắn thử nghiệm đã được gửi đi! Vui lòng kiểm tra Telegram." });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
 });
 
 router.post('/resolve-conflicts', async (req, res) => {
@@ -78,7 +154,7 @@ router.post('/resolve-conflicts', async (req, res) => {
 // Active session endpoint
 router.get('/sessions/active', async (req, res) => {
     const SESSION_DIR = path.join(projectRoot, '.agent_memory', 'sessions');
-    
+
     if (!globalThis.activeWebSessionFile) {
         const latest = getLatestSession(SESSION_DIR);
         if (latest) {
@@ -96,18 +172,18 @@ router.get('/sessions/active', async (req, res) => {
 router.post('/sessions/active', async (req, res) => {
     const { filename } = req.body;
     const SESSION_DIR = path.join(projectRoot, '.agent_memory', 'sessions');
-    
+
     if (!filename) {
         globalThis.activeWebSessionFile = null;
         globalThis.activeWebHistory = [];
         return res.json({ success: true, filename: null, messages: [] });
     }
-    
+
     const filePath = path.join(SESSION_DIR, filename);
     if (!fs.existsSync(filePath)) {
         return res.status(404).json({ success: false, error: 'Không tìm thấy tệp session yêu cầu.' });
     }
-    
+
     try {
         const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n');
         let meta = null;
@@ -133,11 +209,11 @@ router.get('/sessions/:filename', (req, res) => {
     const { filename } = req.params;
     const SESSION_DIR = path.join(projectRoot, '.agent_memory', 'sessions');
     const filePath = path.join(SESSION_DIR, filename);
-    
+
     if (!fs.existsSync(filePath)) {
         return res.status(404).json({ success: false, error: 'Không tìm thấy tệp session yêu cầu.' });
     }
-    
+
     try {
         const lines = fs.readFileSync(filePath, 'utf8').trim().split('\n');
         let meta = null;
@@ -168,7 +244,7 @@ router.post('/permission/respond', async (req, res) => {
     if (!id || !response) {
         return res.status(400).json({ error: 'Thiếu tham số id hoặc response' });
     }
-    
+
     const agentService = await import('../services/agentService.js');
     if (agentService.pendingPermissions.has(id)) {
         const resolve = agentService.pendingPermissions.get(id);
@@ -183,14 +259,14 @@ router.delete('/pipeline-state', (req, res) => {
     try {
         db.prepare("DELETE FROM pipelines WHERE id = 'CURRENT'").run();
         db.prepare("DELETE FROM agent_states WHERE pipeline_id = 'CURRENT'").run();
-        
+
         // Xóa file charter tĩnh trong .agent_memory/state
         const stateDir = path.join(projectRoot, '.agent_memory', 'state');
         const charterPath = path.join(stateDir, 'runtime_charter.json');
         if (fs.existsSync(charterPath)) {
             fs.unlinkSync(charterPath);
         }
-        
+
         res.json({ success: true, message: "Đã xóa sạch pipeline hiện tại khỏi cơ sở dữ liệu." });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
@@ -204,11 +280,11 @@ router.get('/pipeline-state', (req, res) => {
         if (pipelineRow && pipelineRow.data) {
             const pipeline = JSON.parse(pipelineRow.data);
             const states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
-            
-            res.json({ 
-                active: pipeline.status === 'IN_PROGRESS', 
-                pipeline, 
-                states 
+
+            res.json({
+                active: pipeline.status === 'IN_PROGRESS',
+                pipeline,
+                states
             });
         } else {
             res.json({ active: false, pipeline: null, states: [] });

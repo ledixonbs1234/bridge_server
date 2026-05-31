@@ -242,6 +242,24 @@ async function executeScreenshot(args) {
         // 4. Lấy danh sách các ứng dụng đang chạy
         const runningApps = await getRunningApps();
 
+        // --- TỰ ĐỘNG GỬI ẢNH QUA TELEGRAM NẾU BẬT CẤU HÌNH ---
+        try {
+            const configPath = path.join(process.cwd(), 'config.json');
+            if (fs.existsSync(configPath)) {
+                const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                if (config.telegram?.enabled) {
+                    const { sendTelegramPhoto } = await import('../services/telegramService.js');
+                    await sendTelegramPhoto(
+                        imageBase64,
+                        `📸 <b>Ảnh chụp màn hình hệ thống:</b>\nChế độ: <i>${captureMode}</i>\nỨng dụng đích: <i>${args.target_app || 'N/A'}</i>`
+                    );
+                }
+            }
+        } catch (tgErr) {
+            console.error("Không thể tự động gửi ảnh lên Telegram:", tgErr.message);
+        }
+        // ----------------------------------------------------
+
         return {
             status: "success",
             message: `Đã chụp ảnh màn hình (${captureMode}) thành công tại: ${safeOutputPath}.`,

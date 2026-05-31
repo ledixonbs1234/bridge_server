@@ -56,6 +56,24 @@
       "baseUrl": "https://api.deepseek.com/v1",
       "maxTokens": 4096,
       "temperature": 0.7
+    },
+    "telegram": {
+      "enabled": false,
+      "botToken": "",
+      "chatId": "",
+      "notifyOnPermission": true,
+      "notifyOnPipelineSuccess": true,
+      "notifyOnPipelineFailure": true,
+      "notifyOnPipelineStart": true
     }
+  },
+  "telegram": {
+    "enabled": true,
+    "botToken": "8797925608:AAFrPzWxJmTcXsJuu34eWkr_ZLjbTF4dWWI",
+    "chatId": "5426966814",
+    "notifyOnPermission": true,
+    "notifyOnPipelineSuccess": true,
+    "notifyOnPipelineFailure": true,
+    "notifyOnPipelineStart": true
   }
 }
