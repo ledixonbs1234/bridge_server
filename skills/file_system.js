@@ -210,14 +210,14 @@ export default {
     },
 
     "replace_by_lines_safe": {
-        description: "[SAFE MODE] Thay thế code theo số dòng với các lớp bảo vệ. Tool chỉ sửa đúng phạm vi dòng được chỉ định, phần còn lại của file tự động được bảo toàn ",
+        description: "[SAFE MODE] Thay thế code theo số dòng với các lớp bảo vệ. Tool chỉ sửa đúng phạm vi dòng được chỉ định, phần còn lại của file tự động được bảo toàn.",
         parameters: {
             type: "object",
             properties: {
-                file_path: { type: "string", description: "Đường dẫn tuyệt đối đến file." },
+                file_path: { type: "string", description: "Đường dẫn đến file." },
                 start_line: { type: "number", description: "Dòng bắt đầu cần xóa/thay thế (tính từ 1)." },
                 end_line: { type: "number", description: "Dòng kết thúc cần xóa/thay thế (tính từ 1)." },
-                replace_string: { type: "string", description: "Mã nguồn MỚI dạng chuỗi thường.tuyệt đối không copy-paste tiêu đề/dòng kế tiếp của file gốc." },
+                replace_string: { type: "string", description: "Mã nguồn MỚI dạng chuỗi thường." },
                 replace_string_base64: { type: "string", description: "Mã nguồn MỚI dạng mã hóa Base64." },
                 task_description: { type: "string", description: "Mô tả ngắn gọn bạn đang cố làm gì." },
                 skip_logic_review: { type: "boolean", description: "Bỏ qua bước AI review (mặc định: false)." }
@@ -232,7 +232,6 @@ export default {
 
             cleanupOldShadows(24);
 
-            // Giải mã Base64 nếu có dữ liệu truyền vào
             let currentReplaceString = "";
             if (args.replace_string_base64) {
                 currentReplaceString = Buffer.from(args.replace_string_base64, 'base64').toString('utf8');
@@ -343,15 +342,15 @@ export default {
 
                 if (!global.isAutoApproveAll) {
                     presentApprovalRequest(
-                        '⚠️ YÊU CẦU TẠO / GHI ĐÈ FILE',
+                        '⚠️ YÊU CẦU SỬA CODE',
                         {
                             file_path: args.file_path,
-                            range: 'Toàn bộ file',
-                            functionality: 'Ghi mới/ghi đè nội dung tệp tin'
+                            range: `${args.start_line} đến ${args.end_line}`,
+                            functionality: 'Thay thế/Sửa đổi cấu trúc tệp tin'
                         },
-                        { content: fileContent } // Truyền dữ liệu thô
+                        { content: currentReplaceString }
                     );
-                    const answer = await global.askPermission(`👉 Cho phép tạo/ghi đè file này? [y/a/n] : `);
+                    const answer = await global.askPermission(`👉 Cho phép thay thế vùng code này? [y/a/n] : `);
                     if (answer === 'a') global.isAutoApproveAll = true;
                     else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
                 }
@@ -363,6 +362,8 @@ export default {
                     status: "success",
                     message: `Đã thay thế an toàn từ dòng ${args.start_line} đến ${args.end_line} (sau ${attempt} lần thử)`,
                     file: aiSafePath(filePath),
+                    absolute_path: filePath.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN TUYỆT ĐỐI FILE
+                    directory: path.dirname(filePath).replace(/\\/g, '/'), // TRẢ VỀ THƯ MỤC CHỨA FILE
                     validations_passed: {
                         syntax: true,
                         logic_review: !args.skip_logic_review,
@@ -535,7 +536,7 @@ export default {
         parameters: {
             type: "object",
             properties: {
-                file_path: { type: "string", description: "Đường dẫn tuyệt đối nơi sẽ lưu file." },
+                file_path: { type: "string", description: "Đường dẫn hoặc tên tệp tin muốn ghi." },
                 content: { type: "string", description: "Nội dung thường cần ghi (bỏ qua nếu dùng content_base64)." },
                 content_base64: { type: "string", description: "Nội dung mã hóa Base64 (khuyên dùng cho code dài hoặc có ký tự tiếng Việt)." }
             },
@@ -544,7 +545,6 @@ export default {
         handler: async (args) => {
             const filePath = resolveUserPath(args.file_path);
 
-            // Tự động giải mã nếu nhận được dữ liệu mã hóa Base64
             let fileContent = "";
             if (args.content_base64) {
                 fileContent = Buffer.from(args.content_base64, 'base64').toString('utf8');
@@ -578,7 +578,9 @@ export default {
             fs.writeFileSync(filePath, fileContent, 'utf8');
             return {
                 message: `Đã ghi file thành công`,
-                file: aiSafePath(filePath)
+                file: aiSafePath(filePath),
+                absolute_path: filePath.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN TUYỆT ĐỐI FILE
+                directory: parentDir.replace(/\\/g, '/')      // TRẢ VỀ THƯ MỤC CHỨA FILE
             };
         }
     },
@@ -594,7 +596,9 @@ export default {
             required: ["query"]
         },
         handler: async (args) => {
-            const basePath = args.base_path ? resolveUserPath(args.base_path) : process.cwd();
+            // CHỈNH SỬA: Đổi thư mục bắt đầu tìm kiếm mặc định về Desktop
+            const desktopPath = path.join(os.homedir(), 'Desktop');
+            const basePath = args.base_path ? resolveUserPath(args.base_path) : desktopPath;
             const query = args.query;
 
             if (!fs.existsSync(basePath)) {
@@ -604,6 +608,7 @@ export default {
             const matchedFiles = searchFilesRecursive(basePath, query);
             return {
                 base_path: aiSafePath(basePath),
+                absolute_base_path: basePath.replace(/\\/g, '/'),
                 query: query,
                 matches_found: matchedFiles.length,
                 files: matchedFiles

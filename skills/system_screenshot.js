@@ -17,27 +17,49 @@ function runPowerShell(script) {
 async function focusApplication(targetApp) {
     const platform = os.platform();
     if (!targetApp) return false;
-    
-    console.log(`[Screenshot Skill] Đang tìm kiếm và đưa ứng dụng lên hàng đầu: "${targetApp}"`);
+
+    // Loại bỏ dấu nháy kép và nháy đơn để tránh lỗi cú pháp lệnh/script
+    const safeApp = targetApp.replace(/["']/g, '');
+
+    console.log(`[Screenshot Skill] Đang tìm kiếm và đưa ứng dụng lên hàng đầu: "${safeApp}"`);
     try {
         if (platform === 'win32') {
+            // Sử dụng PowerShell để tìm Process có ProcessName hoặc MainWindowTitle chứa chuỗi tìm kiếm (không phân biệt hoa thường với toán tử -like)
             const psFocusScript = `
-            $wshell = New-Object -ComObject Wscript.Shell;
-            $activated = $wshell.AppActivate("${targetApp}");
-            if ($activated) {
-                Write-Output "SUCCESS"
+            $proc = Get-Process | Where-Object { $_.ProcessName -like "*${safeApp}*" -or $_.MainWindowTitle -like "*${safeApp}*" } | Select-Object -First 1
+            if ($proc) {
+                $wshell = New-Object -ComObject Wscript.Shell;
+                $activated = $wshell.AppActivate($proc.Id)
+                if ($activated) {
+                    Write-Output "SUCCESS"
+                } else {
+                    $activatedTitle = $wshell.AppActivate($proc.MainWindowTitle)
+                    if ($activatedTitle) {
+                        Write-Output "SUCCESS"
+                    } else {
+                        Write-Output "FAILED"
+                    }
+                }
             } else {
-                Write-Output "FAILED"
+                $wshell = New-Object -ComObject Wscript.Shell;
+                $activated = $wshell.AppActivate("${safeApp}");
+                if ($activated) {
+                    Write-Output "SUCCESS"
+                } else {
+                    Write-Output "FAILED"
+                }
             }
             `;
             const result = runPowerShell(psFocusScript).toString('utf8').trim();
             return result.includes("SUCCESS");
+
         } else if (platform === 'darwin') {
+            // AppleScript mặc định không phân biệt chữ hoa chữ thường khi so sánh chuỗi bằng toán tử 'contains'
             const appleScript = `
             tell application "System Events"
                 set processList to name of every process whose background only is false
                 repeat with procName in processList
-                    if procName contains "${targetApp}" then
+                    if (procName as string) contains "${safeApp}" then
                         set frontmost of process procName to true
                         return "SUCCESS"
                     end if
@@ -47,12 +69,33 @@ async function focusApplication(targetApp) {
             `;
             const output = execSync(`osascript -e '${appleScript}'`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
             return output.trim().includes("SUCCESS");
+
         } else if (platform === 'linux') {
             try {
-                execSync(`wmctrl -R "${targetApp}"`, { stdio: 'ignore' });
-                return true;
+                // Lấy danh sách tất cả các cửa sổ thông qua wmctrl và lọc trong JS (chuyển sang chữ thường để so sánh substring)
+                const list = execSync('wmctrl -l', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+                const lines = list.split('\n');
+                const query = safeApp.toLowerCase();
+
+                for (const line of lines) {
+                    const parts = line.trim().split(/\s+/);
+                    if (parts.length >= 4) {
+                        const windowId = parts[0];
+                        const title = parts.slice(3).join(' ').toLowerCase();
+                        if (title.includes(query)) {
+                            execSync(`wmctrl -i -a "${windowId}"`, { stdio: 'ignore' });
+                            return true;
+                        }
+                    }
+                }
             } catch {
-                return false;
+                // Phương án dự phòng nếu danh sách không phân tích được
+                try {
+                    execSync(`wmctrl -R "${safeApp}"`, { stdio: 'ignore' });
+                    return true;
+                } catch {
+                    return false;
+                }
             }
         }
     } catch (e) {
@@ -104,13 +147,13 @@ async function executeScreenshot(args) {
     const platform = os.platform();
     const screenshotDir = path.join(process.cwd(), '.agent_memory', 'state', 'artifacts');
     const captureMode = args.capture_mode || "fullscreen";
-    
+
     if (!fs.existsSync(screenshotDir)) {
         fs.mkdirSync(screenshotDir, { recursive: true });
     }
 
-    const filename = args.output_name 
-        ? `${args.output_name.replace(/[^a-zA-Z0-9_-]/g, '_')}.png` 
+    const filename = args.output_name
+        ? `${args.output_name.replace(/[^a-zA-Z0-9_-]/g, '_')}.png`
         : `system_screenshot_${Date.now()}.png`;
 
     const outputPath = path.join(screenshotDir, filename);
@@ -136,7 +179,7 @@ async function executeScreenshot(args) {
         // 2. Chụp ảnh màn hình theo từng hệ điều hành và chế độ
         if (platform === 'win32') {
             const winPath = safeOutputPath.replace(/\//g, '\\\\');
-            
+
             let psScreenshotScript = "";
             if (captureMode === "active_window") {
                 // Khai báo code C# hoàn chỉnh thông qua -TypeDefinition để tránh lỗi lồng Struct
@@ -208,7 +251,7 @@ async function executeScreenshot(args) {
 
         } else if (platform === 'linux') {
             let success = false;
-            const linuxCommands = captureMode === "active_window" 
+            const linuxCommands = captureMode === "active_window"
                 ? [
                     `scrot -u "${safeOutputPath}"`,
                     `gnome-screenshot -w -f "${safeOutputPath}"`,
@@ -225,7 +268,7 @@ async function executeScreenshot(args) {
                     execSync(cmd, { stdio: 'ignore' });
                     success = true;
                     break;
-                } catch {}
+                } catch { }
             }
             if (!success) {
                 throw new Error("Không tìm thấy các công cụ chụp tương thích trên Linux.");
@@ -285,7 +328,7 @@ async function executeScreenshot(args) {
 
 export default {
     "capture_system_screenshot": {
-        description: "Chụp ảnh màn hình hệ thống. Hỗ trợ tùy chọn chụp toàn màn hình hoặc chỉ chụp riêng cửa sổ ứng dụng đang hoạt động.",
+        description: "Chụp ảnh màn hình hệ thống. Hỗ trợ tùy chọn chụp toàn màn hình hoặc chỉ chụp riêng cửa sổ ứng dụng đang hoạt động (hãy lấy danh sách ứng dụng đang chạy).",
         parameters: {
             type: "object",
             properties: {

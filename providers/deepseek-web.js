@@ -1,22 +1,20 @@
 import BaseProvider from './base-provider.js';
 import deepseekBot from '../deepseek_web_bot.js';
-import { jsonrepair } from 'jsonrepair';
 
 class DeepseekWebProvider extends BaseProvider {
     constructor(config) {
         super(config);
         this.name = config.name || 'DeepSeek Web (CloakBrowser)';
         this.isExtensionBased = false;
-        this.hasInitializedChat = false; // THÊM DÒNG NÀY
+        this.hasInitializedChat = false;
     }
 
-    // THÊM HÀM NÀY ĐỂ XỬ LÝ LỆNH /clear
     resetSession() {
         this.hasInitializedChat = false;
         console.log(`\n[DeepSeek Web] 🧹 Đã xóa trạng thái. Tin nhắn tiếp theo sẽ bắt đầu một phiên New Chat!`);
     }
 
-    // Biến các JSON Schema của Tools thành một đoạn Text hướng dẫn
+    // Thiết lập hướng dẫn gọi Tool bằng định dạng XML kèm khối CDATA
     _buildToolInstructions(skillRegistry) {
         let toolText = "Bạn CÓ THỂ SỬ DỤNG CÁC CÔNG CỤ (TOOLS) sau đây để trợ giúp người dùng:\n";
         for (const [key, skill] of Object.entries(skillRegistry)) {
@@ -24,114 +22,139 @@ class DeepseekWebProvider extends BaseProvider {
         }
 
         toolText += `\n[HƯỚNG DẪN GỌI TOOL BẮT BUỘC]
-Nếu bạn cần chạy một công cụ để lấy thông tin, BẠN PHẢI TRẢ LỜI ĐÚNG ĐỊNH DẠNG SAU, KHÔNG GIẢI THÍCH GÌ THÊM:
+Nếu bạn cần chạy một công cụ để lấy thông tin hoặc thực hiện thay đổi, BẠN PHẢI TRẢ LỜI ĐÚNG ĐỊNH DẠNG XML SAU, KHÔNG GIẢI THÍCH GÌ THÊM:
 <tool_call>
-{
-  "name": "tên_lệnh_ở_trên",
-  "args": { "tên_tham_số": "giá_trị" }
-}
+  <name>tên_lệnh_ở_trên</name>
+  <tên_tham_số_1>giá_trị_1</tên_tham_số_1>
+  <tên_tham_số_2><![CDATA[giá_trị_mã_nguồn_hoặc_chuỗi_nhiều_dòng]]></tên_tham_số_2>
 </tool_call>
 Hệ thống sẽ chạy và trả kết quả lại cho bạn để bạn suy nghĩ tiếp.
+
 QUAN TRỌNG:
-- Mọi ký tự xuống dòng trong JSON phải escape bằng \n
-- Mọi dấu " bên trong string phải escape bằng \"
-- Khi ghi source code dài, ưu tiên dùng content_base64`;
+- BẮT BUỘC sử dụng cấu trúc XML trên. KHÔNG dùng định dạng JSON hay Markdown khác cho lệnh gọi.
+- Với các tham số là mã nguồn hoặc văn bản nhiều dòng (như 'content', 'replace_string', 'command'), bạn BẮT BUỘC phải bọc toàn bộ giá trị trong thẻ <![CDATA[ ... ]]> để tránh lỗi cú pháp XML và bảo toàn định dạng thụt lề thụt dòng.
+- Khi ghi và cập nhật file nguồn dài, ưu tiên dùng content_base64.`;
 
         return toolText;
     }
 
     async chat(options) {
-       const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default' } = options;
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default' } = options;
 
         await deepseekBot.init();
-        
+
         let bot = deepseekBot;
         if (isWorker) {
             bot = await deepseekBot.getWorkerBot(workerType);
         }
 
-        const isThinkingMode = (mode === 'thinking'); // Xác định cờ
+        const isThinkingMode = (mode === 'thinking');
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
 
-        // ---------------------------------------------------------
-        // 🚀 THUẬT TOÁN NHẬN DIỆN LẦN CHAT ĐẦU TIÊN
-        // Đếm xem trong lịch sử có bao nhiêu tin nhắn của user
-        // ---------------------------------------------------------
         const userMessagesCount = messages.filter(m => m.role === 'user').length;
         const isFirstTurn = userMessagesCount <= 1 && !this.hasInitializedChat;
 
         let finalPrompt = "";
 
         if (isFirstTurn && !isWorker) {
-            // Mở khung chat trắng mới trên trình duyệt
             await bot.clickNewChat();
-
-            // LẦN CHAT ĐẦU TIÊN: Nhồi toàn bộ System Prompt và Hướng dẫn Tool
             console.log(`[DeepSeek Web] 🆕 Bắt đầu phiên chat mới, đang thiết lập System Prompt & Tools...`);
             const toolInstructions = this._buildToolInstructions(skillRegistry);
             finalPrompt = `[SYSTEM INSTRUCTION]\n${systemPrompt}\n\n`;
             finalPrompt += `[SYSTEM TOOLS]\n${toolInstructions}\n\n`;
             finalPrompt += `[USER REQUEST]\n${lastUserMessage}`;
-
-            // Đánh dấu là đã tạo chat để các tin nhắn sau dù mảng có bị ngắn lại cũng không bị reset
             this.hasInitializedChat = true;
         } else if (isWorker) {
-            // Worker luôn bắt đầu một context trắng hoàn toàn
             const toolInstructions = this._buildToolInstructions(skillRegistry);
             finalPrompt = `[SYSTEM INSTRUCTION]\n${systemPrompt}\n\n`;
             finalPrompt += `[SYSTEM TOOLS]\n${toolInstructions}\n\n`;
             finalPrompt += `[USER REQUEST]\n${lastUserMessage}`;
         } else {
-            // TỪ LẦN CHAT THỨ 2: Chỉ gửi duy nhất câu hỏi của user 
-            // (Vì AI đã đọc và nhớ System/Tools ở các tin nhắn phía trên trình duyệt rồi)
             finalPrompt = lastUserMessage;
         }
 
-       await bot.sendPrompt(finalPrompt, isThinkingMode);
+        await bot.sendPrompt(finalPrompt, isThinkingMode);
 
         let stepCount = 0;
 
         while (stepCount <= maxSteps) {
             stepCount++;
 
-            // Đợi DeepSeek gõ xong
             const response = await bot.waitForResponse(onStreamChunk);
             const content = response.text;
 
-            // Dùng Regex để tìm xem DeepSeek có đang gọi tool không
-            // Tìm block nằm giữa <tool_call> và </tool_call>
+            // Tìm kiếm khối lệnh gọi công cụ dạng XML
             const toolRegex = /<tool_call>([\s\S]*?)<\/tool_call>/;
             const match = content.match(toolRegex);
 
-           if (match) {
+            if (match) {
                 try {
-                    // Cố gắng Parse đoạn JSON mà DeepSeek sinh ra
-                    const toolJson = JSON.parse(match[1].trim());
-                    console.log(`[DeepSeek Web] ⚙️ AI muốn gọi hàm: [${toolJson.name}]`);
+                    const xmlContent = match[1].trim();
 
-                    // Thực thi kỹ năng nội bộ
-                    const funcRes = await executeSkill(toolJson.name, toolJson.args);
+                    // 1. Trích xuất tên công cụ
+                    const nameMatch = xmlContent.match(/<name>([\s\S]*?)<\/name>/);
+                    if (!nameMatch) {
+                        throw new Error("Không tìm thấy thẻ <name> trong khối gọi lệnh <tool_call>.");
+                    }
+                    const toolName = nameMatch[1].trim();
+
+                    // 2. Phân tích các đối số động và tự động nhận diện kiểu dữ liệu gốc
+                    const toolArgs = {};
+                    const tagRegex = /<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/g;
+                    let tagMatch;
+                    while ((tagMatch = tagRegex.exec(xmlContent)) !== null) {
+                        const tagName = tagMatch[1];
+                        let tagValue = tagMatch[2];
+
+                        if (tagName === 'name' || tagName === 'tool_call') continue;
+
+                        let isCdata = false;
+                        const cdataMatch = tagValue.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i);
+                        if (cdataMatch) {
+                            tagValue = cdataMatch[1];
+                            isCdata = true;
+                        }
+
+                        if (!isCdata) {
+                            const trimmedVal = tagValue.trim();
+                            if (/^-?\d+$/.test(trimmedVal)) {
+                                toolArgs[tagName] = parseInt(trimmedVal, 10);
+                            } else if (/^-?\d+\.\d+$/.test(trimmedVal)) {
+                                toolArgs[tagName] = parseFloat(trimmedVal);
+                            } else if (trimmedVal === 'true') {
+                                toolArgs[tagName] = true;
+                            } else if (trimmedVal === 'false') {
+                                toolArgs[tagName] = false;
+                            } else {
+                                toolArgs[tagName] = tagValue;
+                            }
+                        } else {
+                            toolArgs[tagName] = tagValue;
+                        }
+                    }
+
+                    console.log(`[DeepSeek Web] ⚙️ AI muốn gọi hàm: [${toolName}]`);
+
+                    const funcRes = await executeSkill(toolName, toolArgs);
                     if (funcRes === "__HANDOVER_TO_ENGINE__") {
                         return "__HANDOVER_TO_ENGINE__";
                     }
 
-                    // --- SỬA ĐOẠN NÀY ĐỂ BÓC TÁCH CHÍNH XÁC THUỘC TÍNH LỒNG NHAU ---
                     let feedbackImage = null;
                     let finalFuncRes = funcRes;
 
                     if (funcRes) {
                         let parsed = null;
                         if (typeof funcRes === 'string' && funcRes.trim().startsWith('{')) {
-                            try { parsed = JSON.parse(funcRes); } catch (e) {}
+                            try { parsed = JSON.parse(funcRes); } catch (e) { }
                         } else if (typeof funcRes === 'object') {
                             parsed = funcRes;
                         }
 
                         if (parsed) {
-                            // Kiểm tra thuộc tính image_base64 nằm bên trong đối tượng 'data' lồng nhau
                             if (parsed.data && parsed.data.image_base64) {
                                 feedbackImage = parsed.data.image_base64;
-                                delete parsed.data.image_base64; // Xóa Base64 để tránh gây lag hộp thoại
+                                delete parsed.data.image_base64;
                                 finalFuncRes = parsed;
                             } else if (parsed.image_base64) {
                                 feedbackImage = parsed.image_base64;
@@ -141,33 +164,30 @@ QUAN TRỌNG:
                         }
                     }
 
-                    const resultString = typeof finalFuncRes === 'object' 
-                        ? JSON.stringify(finalFuncRes) 
+                    const resultString = typeof finalFuncRes === 'object'
+                        ? JSON.stringify(finalFuncRes)
                         : String(finalFuncRes);
 
-                    // FEEDBACK: Báo cho DeepSeek biết kết quả để nó làm tiếp
-                    const feedbackPrompt = `[KẾT QUẢ TỪ HỆ THỐNG CHO LỆNH ${toolJson.name}]\n${resultString}\n\nDựa vào kết quả này, hãy phân tích và đưa ra câu trả lời cuối cùng, HOẶC tiếp tục gọi <tool_call> nếu cần thêm thông tin.`;
-                    
+                    const feedbackPrompt = `[KẾT QUẢ TỪ HỆ THỐNG CHO LỆNH ${toolName}]\n${resultString}\n\nDựa vào kết quả này, hãy phân tích và đưa ra câu trả lời cuối cùng, HOẶC tiếp tục gọi <tool_call> nếu cần thêm thông tin.`;
+
                     await bot.sendPrompt(feedbackPrompt, isThinkingMode, feedbackImage);
-                    continue; // Chờ vòng lặp tiếp theo
+                    continue;
 
                 } catch (e) {
-                    // Nếu DeepSeek xuất JSON sai cú pháp
-                    console.error(`[DeepSeek Web] ❌ DeepSeek sinh sai cú pháp JSON: ${e.message}`);
-                    await bot.sendPrompt(`Hệ thống lỗi: Cú pháp JSON trong <tool_call> bị sai. Lỗi: ${e.message}. Hãy viết lại <tool_call> cho đúng chuẩn JSON.`);
+                    console.error(`[DeepSeek Web] ❌ Cú pháp XML không hợp lệ hoặc lỗi phân tích: ${e.message}`);
+                    await bot.sendPrompt(`Hệ thống báo lỗi: Thao tác XML của bạn không chính xác hoặc thiếu các thẻ đóng/mở hoặc CDATA cần thiết. Chi tiết lỗi: ${e.message}. Vui lòng viết lại toàn bộ cấu trúc <tool_call> theo đúng chuẩn XML.`);
                     continue;
                 }
             }
 
-            // Nếu không có <tool_call>, nghĩa là DeepSeek đã trả lời xong
             console.log(`[DeepSeek Web] ✅ Hoàn thành sau ${stepCount} bước.`);
-            
+
             if (isWorker && typeof bot.closeWorker === 'function') {
                 await bot.closeWorker();
             }
             return content;
         }
-        
+
         if (isWorker && typeof bot.closeWorker === 'function') {
             await bot.closeWorker();
         }
@@ -176,7 +196,7 @@ QUAN TRỌNG:
     }
 
     async healthCheck() {
-        return { ready: true, message: 'DeepSeek Web Bot đã tích hợp!' };
+        return { ready: true, message: 'DeepSeek Web Bot đã tích hợp định dạng gọi XML!' };
     }
 }
 

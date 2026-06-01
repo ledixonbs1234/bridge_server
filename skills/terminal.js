@@ -79,14 +79,14 @@ export default {
         }
     },
 
-    // KỸ NĂNG CŨ (ĐÃ ĐƯỢC NÂNG CẤP ĐỂ LƯU PROCESS_ID)
+    // KỸ NĂNG CŨ (Đã thống nhất thư mục mặc định về process.cwd() và trả về đường dẫn thực tế)
     "execute_terminal_command": {
-        description: "Thực thi lệnh Terminal/CMD. Đây là lệnh quyền lực nhất.",
+        description: "Thực thi lệnh Terminal/CMD. Đây là lệnh quyền lực nhất. Nếu không truyền working_directory, mặc định lệnh sẽ chạy tại thư mục Desktop của người dùng.",
         parameters: {
             type: "object",
             properties: {
                 command: { type: "string", description: "Câu lệnh Terminal/CMD cần chạy." },
-                working_directory: { type: "string", description: "Đường dẫn thư mục để chạy lệnh (Mặc định là Home Directory)." },
+                working_directory: { type: "string", description: "Đường dẫn thư mục để chạy lệnh (Mặc định là thư mục Desktop của người dùng)." },
                 is_background: {
                     type: "boolean",
                     description: "BẮT BUỘC ĐẶT LÀ TRUE nếu lệnh là chạy server (VD: npm run dev, npm start, node server.js)."
@@ -104,7 +104,9 @@ export default {
         },
         handler: async (args) => {
             const command = args.command;
-            const cwd = args.working_directory || os.homedir();
+            // CHỈNH SỬA: Chuyển thư mục hoạt động mặc định về Desktop
+            const desktopPath = path.join(os.homedir(), 'Desktop');
+            const cwd = args.working_directory || desktopPath;
             const isBackground = args.is_background || false;
             const analysis = analyzeCommand(command);
 
@@ -120,7 +122,6 @@ export default {
 
             if (analysis.level === 'warn' && !global.isAutoApproveAll) {
                 printCommandWarning(analysis, command);
-                // Nếu đang ở web session, askPermission sẽ tự xử lý qua SSE
                 const answer = await global.askPermission(
                     chalk.bold.yellow(`⚠️ Command này cần xác nhận. Cho phép chạy? [y/n] : `)
                 );
@@ -134,16 +135,15 @@ export default {
 
             const functionality = args.functionality;
             const purpose = args.purpose;
-            
-            // AUTO-APPROVE cho commands an toàn (không cần hỏi user)
+
             const isSafeCommand = analysis.level === 'safe';
-            
+
             if (!global.isAutoApproveAll && !isSafeCommand) {
                 presentApprovalRequest(
                     '⚠️ YÊU CẦU THỰC THI TERMINAL',
                     {
-                        file_path: cwd, // Thư mục làm việc
-                        range: command, // Câu lệnh chạy
+                        file_path: cwd,
+                        range: command,
                         functionality: `Chức năng: ${functionality} | Mục đích: ${purpose}`
                     },
                     { command }
@@ -156,17 +156,16 @@ export default {
                 console.log(`\n⚡ ${chalk.gray('Auto-running:')} ${chalk.yellow(command)}`);
             }
 
-            // XỬ LÝ CHẠY NGẦM VÀ AUTO-PING (Đã nâng cấp)
+            // XỬ LÝ CHẠY NGẦM VÀ AUTO-PING
             if (isBackground) {
                 return new Promise((resolve, reject) => {
                     const child = spawn(command, {
                         cwd,
                         shell: true,
                         timeout: getCommandTimeout(command, true),
-                         env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
+                        env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
                     });
 
-                    // 2. LƯU LẠI TIẾN TRÌNH VÀO BỘ NHỚ ĐỂ CÓ THỂ TẮT SAU NÀY
                     const procId = `process_${processCounter++}`;
                     activeProcesses.set(procId, { child, command });
 
@@ -175,11 +174,10 @@ export default {
                     let processExited = false;
 
                     child.stdout.on('data', (data) => { outputLog += data.toString(); process.stdout.write(data); });
-                    child.stderr.on('data', (data) => { 
-                        outputLog += data.toString(); 
+                    child.stderr.on('data', (data) => {
+                        outputLog += data.toString();
                         process.stderr.write(data);
-                        // Đánh dấu nếu có lỗi trong stderr
-                        if (data.toString().toLowerCase().includes('error') || 
+                        if (data.toString().toLowerCase().includes('error') ||
                             data.toString().toLowerCase().includes('failed')) {
                             hasError = true;
                         }
@@ -194,20 +192,18 @@ export default {
                     child.on('close', (code) => {
                         console.log(chalk.yellow(`[Terminal] Process exited with code ${code}`));
                         processExited = true;
-                        // Nếu process đóng quá sớm với mã lỗi, báo ngay
                         if (code !== 0 && code !== null) {
-                            resolve({ 
-                                status: "error", 
-                                error_message: `Tiến trình thoát với mã lỗi: ${code}`, 
-                                startup_logs: outputLog.substring(0, 3000) 
+                            resolve({
+                                status: "error",
+                                error_message: `Tiến trình thoát with mã lỗi: ${code}`,
+                                startup_logs: outputLog.substring(0, 3000)
                             });
                         }
                     });
 
-                    // Timeout an toàn: Luôn resolve sau 5 giây dù có chuyện gì xảy ra
                     const backgroundTimeout = setTimeout(() => {
-                        if (processExited) return; // Đã được xử lý bởi close/error event
-                        
+                        if (processExited) return;
+
                         try {
                             const urlMatch = outputLog.match(/http:\/\/(localhost|127\.0\.0\.1):\d+/);
 
@@ -219,9 +215,10 @@ export default {
                                 setTimeout(() => {
                                     resolve({
                                         command,
-                                        process_id: procId, // Báo ID cho AI
+                                        process_id: procId,
+                                        working_directory: cwd.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN THỰC TẾ
                                         status: hasError ? "warning" : "running_in_background",
-                                        message: `Tiến trình chạy ngầm đã khởi động (ID: ${procId}). ${hasError ? 'CÓ LỖI TRONG LOG - KIỂM TRA KỸ!' : 'Đã tự động test ping tới ' + localUrl + '.'} KIỂM TRA LỖI BIÊN DỊCH TRONG LOG. NẾU KHÔNG LỖI, BẠN HOÀN TOÀN CÓ QUYỀN GỌI LỆNH 'stop_terminal_process' ĐỂ TẮT NÓ NẾU MUỐN HOÀN THÀNH NHIỆM VỤ!`,
+                                        message: `Tiến trình chạy ngầm đã khởi động tại: ${cwd.replace(/\\/g, '/')} (ID: ${procId}). ${hasError ? 'CÓ LỖI TRONG LOG - KIỂM TRA KỸ!' : 'Đã tự động test ping tới ' + localUrl + '.'} KIỂM TRA LỖI BIÊN DỊCH TRONG LOG. NẾU KHÔNG LỖI, BẠN HOÀN TOÀN CÓ QUYỀN GỌI LỆNH 'stop_terminal_process' ĐỂ TẮT NÓ NẾU MUỐN HOÀN THÀNH NHIỆM VỤ!`,
                                         startup_logs: outputLog.substring(0, 3000)
                                     });
                                 }, 1000);
@@ -229,9 +226,10 @@ export default {
                             } else {
                                 resolve({
                                     command,
-                                    process_id: procId, // Báo ID cho AI
+                                    process_id: procId,
+                                    working_directory: cwd.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN THỰC TẾ
                                     status: hasError ? "warning" : "running_in_background",
-                                    message: `Tiến trình đã được khởi chạy ngầm với ID: ${procId}. ${hasError ? 'CÓ LỖI TRONG LOG - KIỂM TRA KỸ!' : ''} Nếu bạn đã thực hiện xong mục đích của mình, bạn CÓ THỂ gọi lệnh 'stop_terminal_process' truyền ID '${procId}' để tắt tiến trình này đi nhằm giải phóng tài nguyên.`,
+                                    message: `Tiến trình đã được khởi chạy ngầm tại: ${cwd.replace(/\\/g, '/')} với ID: ${procId}. ${hasError ? 'CÓ LỖI TRONG LOG - KIỂM TRA KỸ!' : ''} Nếu bạn đã thực hiện xong mục đích của mình, bạn CÓ THỂ gọi lệnh 'stop_terminal_process' truyền ID '${procId}' để tắt tiến trình này đi nhằm giải phóng tài nguyên.`,
                                     startup_logs: outputLog.substring(0, 1500)
                                 });
                             }
@@ -240,8 +238,9 @@ export default {
                             resolve({
                                 command,
                                 process_id: procId,
+                                working_directory: cwd.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN THỰC TẾ
                                 status: "running_in_background",
-                                message: `Tiến trình đã được khởi chạy ngầm với ID: ${procId} (có thể có lỗi nhỏ).`,
+                                message: `Tiến trình đã được khởi chạy ngầm tại: ${cwd.replace(/\\/g, '/')} với ID: ${procId} (có thể có lỗi nhỏ).`,
                                 startup_logs: outputLog.substring(0, 1500)
                             });
                         }
@@ -257,12 +256,13 @@ export default {
                 const childProcess = exec(command, {
                     cwd,
                     timeout,
-                    maxBuffer: 10 * 1024 * 1024  ,
+                    maxBuffer: 10 * 1024 * 1024,
                     env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
                 }, (error, stdout, stderr) => {
                     const duration = Date.now() - startTime;
                     const result = {
                         command,
+                        working_directory: cwd.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN CHẠY THỰC TẾ TRÁNH ĐOÁN MÒ
                         stdout: stdout || "",
                         stderr: stderr || "",
                         error: error ? error.message : null,
@@ -270,10 +270,8 @@ export default {
                         duration_ms: duration
                     };
 
-                    // Audit log
                     auditLog(command, cwd, result, duration);
 
-                    // Timeout warning
                     if (error?.killed) {
                         result.error = `Command bị timeout sau ${timeout / 1000}s. Hãy thử chia nhỏ task hoặc dùng is_background=true cho long-running tasks.`;
                     }
@@ -281,7 +279,6 @@ export default {
                     resolve(result);
                 });
 
-                // Safety: Ensure process is killed on timeout
                 childProcess.on('error', (err) => {
                     console.error(chalk.red(`[Terminal] Process error: ${err.message}`));
                 });
