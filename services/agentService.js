@@ -191,6 +191,41 @@ export async function executeAgentTurn({
     }
 }
 
+// Helper gọi API sinh vector embedding từ Ollama cục bộ
+async function getOllamaEmbedding(text) {
+    try {
+        const response = await fetch('http://localhost:11434/api/embed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: 'qwen3-embedding:0.6b', // Thay bằng 'qwen3-embedding:0.6b' nếu dùng bản nhẹ
+                input: text
+            })
+        });
+        if (!response.ok) return null;
+        const data = await response.json();
+        // Lấy vector đầu tiên trong danh sách embeddings trả về
+        return data.embeddings?.[0] || null;
+    } catch (err) {
+        console.warn('[Ollama Embedding] Lỗi kết nối tới Ollama:', err.message);
+        return null;
+    }
+}
+
+// Thuật toán tính độ tương đồng Cosine giữa hai vector
+function cosineSimilarity(vecA, vecB) {
+    if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < vecA.length; i++) {
+        dotProduct += vecA[i] * vecB[i];
+        normA += vecA[i] * vecA[i];
+        normB += vecB[i] * vecB[i];
+    }
+    return normA === 0 || normB === 0 ? 0 : dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
 // Helper functions
 export function getCompiledSystemPrompt() {
     let systemPrompt = "";
@@ -421,7 +456,7 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
         return "";
     }
 
-    if (logger) logger(`📖 [FluxMem Stage I] Đang truy xuất đồ thị bộ nhớ đa lớp (Semantic, Episodic, Procedural)...`);
+    if (logger) logger(`📖 [FluxMem Stage I] Đang truy xuất đồ thị bộ nhớ đa lớp bằng Semantic Search...`);
 
     let injectedContext = "\n\n[FLUXMEM - HỆ THỐNG TRÍ NHỚ ĐỒ THỊ TỰ TIẾN HÓA]:\n";
     let hasMemory = false;
@@ -433,63 +468,98 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
         hasMemory = true;
     }
 
-    // 2. LỚP TRẢI NGHIỆM SỰ KIỆN (𝒱_epi) - Tìm các vết sửa lỗi hoặc thành công trùng khớp ngữ cảnh
     try {
         const memories = db.prepare('SELECT * FROM memories').all() || [];
-        const searchSpace = (lastUserMessage + " " + allMessagesContext).toLowerCase();
 
-        // Lọc các node episodic có tag liên quan và độ tin cậy kết nối ổn định
-        const relevantEpisodes = memories.filter(m => {
-            const memoryType = m.type || 'episodic';
-            if (memoryType !== 'episodic') return false;
+        // 🧬 BƯỚC A: Lazy-Caching - Tự động sinh và lưu vector cho các bản ghi chưa có
+        for (const m of memories) {
+            if (!m.embedding && m.situation) {
+                if (logger) logger(`🧬 [FluxMem] Đang khởi tạo vector offline cho Memory ID: ${m.id}...`);
+                const vector = await getOllamaEmbedding(m.situation);
+                if (vector) {
+                    m.embedding = JSON.stringify(vector);
+                    // Lưu lại cấu trúc vector vào tệp SQLite-mock của bạn
+                    db.prepare(`UPDATE memories SET embedding = ? WHERE id = ?`).run(m.embedding, m.id);
+                }
+            }
+        }
 
-            let tags = [];
-            try { tags = JSON.parse(m.tags || '[]'); } catch { }
+        // Sinh vector đại diện cho câu hỏi hiện hành của người dùng
+        const searchSpace = lastUserMessage + " " + allMessagesContext;
+        const queryVector = await getOllamaEmbedding(searchSpace);
 
-            const matchesTag = tags.some(tag => searchSpace.includes(tag.toLowerCase()));
-            const isReliable = (m.trust_score ?? 0.7) > 0.35;
-            return matchesTag && isReliable;
-        });
+        if (queryVector) {
+            // Chuyển đổi và chấm điểm tương đồng ngữ nghĩa
+            const scoredMemories = memories.map(m => {
+                let vector = null;
+                try {
+                    if (m.embedding) vector = JSON.parse(m.embedding);
+                } catch (e) { }
 
-        if (relevantEpisodes.length > 0) {
-            injectedContext += `\n--- KINH NGHIỆM CHẠY THỰC TẾ TRONG QUÁ KHỨ (𝒱_epi) ---\n`;
-            relevantEpisodes.slice(0, 3).forEach((ep, idx) => {
-                injectedContext += `Trải nghiệm #${idx + 1} [Trọng số kết nối: ${(ep.trust_score ?? 0.7).toFixed(2)}]:\n- Bối cảnh: ${ep.situation}\n- Giải pháp: ${ep.solution}\n\n`;
+                const similarity = vector ? cosineSimilarity(queryVector, vector) : 0;
+                return { ...m, similarity };
             });
-            hasMemory = true;
-            if (logger) logger(`📖 [FluxMem I] Đã thiết lập liên kết thành công tới ${relevantEpisodes.length} node Episodic.`);
+
+            // 2. LỚP TRẢI NGHIỆM SỰ KIỆN (𝒱_epi) - Ngưỡng tương đồng >= 0.55
+            const relevantEpisodes = scoredMemories.filter(m => {
+                const memoryType = m.type || 'episodic';
+                if (memoryType !== 'episodic') return false;
+                const isReliable = (m.trust_score ?? 0.7) > 0.35;
+                const isSimilar = m.similarity >= 0.55;
+                return isReliable && isSimilar;
+            }).sort((a, b) => b.similarity - a.similarity);
+
+            if (relevantEpisodes.length > 0) {
+                injectedContext += `\n--- KINH NGHIỆM CHẠY THỰC TẾ TRONG QUÁ KHỨ (𝒱_epi) ---\n`;
+                relevantEpisodes.slice(0, 3).forEach((ep, idx) => {
+                    injectedContext += `Trải nghiệm #${idx + 1} [Độ tương đồng: ${ep.similarity.toFixed(2)} | Trọng số: ${(ep.trust_score ?? 0.7).toFixed(2)}]:\n- Bối cảnh: ${ep.situation}\n- Giải pháp: ${ep.solution}\n\n`;
+                });
+                hasMemory = true;
+                if (logger) logger(`📖 [FluxMem I] Tìm thấy ${relevantEpisodes.length} node Episodic phù hợp bằng Vector Search.`);
+            }
+
+            // 3. LỚP KỸ NĂNG QUY TRÌNH (𝒱_proc) - Ngưỡng tương đồng >= 0.55
+            const relevantProcedures = scoredMemories.filter(m => {
+                const memoryType = m.type || 'episodic';
+                if (memoryType !== 'procedural') return false;
+                const isMature = (m.trust_score ?? 0.7) > 0.45;
+                const isSimilar = m.similarity >= 0.55;
+                return isMature && isSimilar;
+            }).sort((a, b) => b.similarity - a.similarity);
+
+            if (relevantProcedures.length > 0) {
+                injectedContext += `\n--- QUY TRÌNH THỰC THI MẪU CHUẨN ĐÃ CHƯNG CẤT (𝒱_proc) ---\n`;
+                relevantProcedures.slice(0, 2).forEach((proc, idx) => {
+                    injectedContext += `Quy trình #${idx + 1} [Độ tương đồng: ${proc.similarity.toFixed(2)} | Maturity: ${(proc.trust_score ?? 0.7).toFixed(2)}]:\n- Mục tiêu: ${proc.situation}\n- Kịch bản các bước: ${proc.solution}\n\n`;
+                });
+                hasMemory = true;
+                if (logger) logger(`📖 [FluxMem I] Đã kế thừa quy trình từ ${relevantProcedures.length} node Procedural bằng Vector Search.`);
+            }
+
+        } else {
+            // BƯỚC DỰ PHÒNG (FALLBACK): Nếu Ollama tắt hoặc quá tải, chuyển về cơ chế so khớp từ khóa cũ
+            if (logger) logger(`⚠️ [FluxMem I] Không thể trích xuất vector, đang tự động chuyển sang cơ chế so khớp từ khóa tĩnh...`);
+
+            const searchSpaceLower = searchSpace.toLowerCase();
+            const fallbackEpisodes = memories.filter(m => {
+                const memoryType = m.type || 'episodic';
+                if (memoryType !== 'episodic') return false;
+                let tags = [];
+                try { tags = JSON.parse(m.tags || '[]'); } catch { }
+                const matchesTag = tags.some(tag => searchSpaceLower.includes(tag.toLowerCase()));
+                return matchesTag && (m.trust_score ?? 0.7) > 0.35;
+            });
+
+            if (fallbackEpisodes.length > 0) {
+                injectedContext += `\n--- KINH NGHIỆM CHẠY THỰC TẾ TRONG QUÁ KHỨ (𝒱_epi) (Keyword Fallback) ---\n`;
+                fallbackEpisodes.slice(0, 3).forEach((ep, idx) => {
+                    injectedContext += `Trải nghiệm #${idx + 1}:\n- Bối cảnh: ${ep.situation}\n- Giải pháp: ${ep.solution}\n\n`;
+                });
+                hasMemory = true;
+            }
         }
     } catch (e) {
-        console.warn("[FluxMem] Lỗi tải episodic memory:", e.message);
-    }
-
-    // 3. LỚP KỸ NĂNG QUY TRÌNH (𝒱_proc) - Tải các kịch bản chuẩn được chưng cất tự động
-    try {
-        const memories = db.prepare('SELECT * FROM memories').all() || [];
-        const searchSpace = (lastUserMessage + " " + allMessagesContext).toLowerCase();
-
-        const relevantProcedures = memories.filter(m => {
-            const memoryType = m.type || 'episodic';
-            if (memoryType !== 'procedural') return false;
-
-            let tags = [];
-            try { tags = JSON.parse(m.tags || '[]'); } catch { }
-
-            const matchesTag = tags.some(tag => searchSpace.includes(tag.toLowerCase()));
-            const isMature = (m.trust_score ?? 0.7) > 0.45; // Ngưỡng điểm PEMS để kích hoạt
-            return matchesTag && isMature;
-        });
-
-        if (relevantProcedures.length > 0) {
-            injectedContext += `\n--- QUY TRÌNH THỰC THI MẪU CHUẨN ĐÃ CHƯNG CẤT (𝒱_proc) ---\n`;
-            relevantProcedures.slice(0, 2).forEach((proc, idx) => {
-                injectedContext += `Quy trình #${idx + 1} [Maturity Score: ${(proc.trust_score ?? 0.7).toFixed(2)}]:\n- Mục tiêu: ${proc.situation}\n- Kịch bản các bước: ${proc.solution}\n\n`;
-            });
-            hasMemory = true;
-            if (logger) logger(`📖 [FluxMem I] Đã kế thừa kịch bản quy trình từ ${relevantProcedures.length} node Procedural.`);
-        }
-    } catch (e) {
-        console.warn("[FluxMem] Lỗi tải procedural memory:", e.message);
+        console.warn("[FluxMem] Gặp sự cố trong quá trình truy xuất Vector:", e.message);
     }
 
     return hasMemory ? injectedContext : "";

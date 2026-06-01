@@ -114,3 +114,5 @@ async function bootstrap() {
 }
 
 bootstrap();
+import { recallMemory } from './services/agentService.js';
+recallMemory("khởi động hệ thống").catch(() => { });
