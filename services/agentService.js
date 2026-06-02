@@ -34,19 +34,40 @@ export async function executeAgentTurn({
     message,
     history = [],
     sessionFile = null,
-    useReformulate = true,
+    useReformulate = false,
     onChunk = null,
     onAction = null,
+    onToolOutput = null,
     onSystem = null,
     onAskPermission = null,
     onLog = null,
     activeProvider = globalThis.activeProvider,
-    image = null // Tiếp nhận tham số image
+    image = null,
+    headless = true
 }) {
     const resolvedProvider = activeProvider || globalThis.activeProvider;
     const traceId = tracer.createTrace(message.substring(0, 80));
 
     if (onLog) global.logToWebChat = onLog;
+
+    // =================================================================
+    // 🧠 SERVER-SIDE LOGS & STEPS TRACKER (FluxMem State Recovery)
+    // =================================================================
+    const serverSteps = [];
+    const wrappedOnLog = (text) => {
+        if (onLog) onLog(text);
+        const last = serverSteps[serverSteps.length - 1];
+        if (last && last.type === 'thinking') {
+            last.input = (last.input || '') + '\n' + text;
+        } else {
+            serverSteps.push({
+                id: Math.random().toString(36).substring(2, 9),
+                type: 'thinking',
+                title: 'Thinking process',
+                input: text
+            });
+        }
+    };
 
     // KHẮC PHỤC LỖI: Liên kết chặt chẽ askPermission lên phạm vi toàn cục ngay khi nhận lượt chat
     const originalAskPermission = global.askPermission;
@@ -78,8 +99,8 @@ export async function executeAgentTurn({
         if (onLog) onLog("🔍 Đang chuẩn bị bối cảnh và trích xuất bộ nhớ...");
 
         const [reformulatedText, injectedMemory] = await Promise.all([
-            useReformulate ? reformulateQuery(message, resolvedProvider, onLog) : Promise.resolve(message),
-            recallMemory(message, history.map(m => m.content).join(' '), onLog)
+            useReformulate ? reformulateQuery(message, resolvedProvider, wrappedOnLog) : Promise.resolve(message),
+            recallMemory(message, history.map(m => m.content).join(' '), wrappedOnLog)
         ]);
 
         const currentHistory = [...history];
@@ -132,13 +153,48 @@ export async function executeAgentTurn({
             systemPrompt,
             maxSteps: 25,
             onStreamChunk: onChunk,
-            image, // Chuyển giao hình ảnh
+            image,
+            headless, // THÊM DÒNG NÀY: Đưa vào failover option để nạp sang provider
             executeSkill: async (funcName, args) => {
-                if (onAction) onAction(funcName);
+                const stepId = 'step_' + Math.random().toString(36).substring(2, 9); // Tạo ID định danh duy nhất cho step này
+
+                if (onAction) onAction(funcName, args, stepId); // Truyền kèm stepId
+
+                // Tự động phân loại và ghi nhận Step kỹ thuật tương ứng trên Server
+                let stepType = 'generic';
+                let cleanTitle = `Execute ${funcName}`;
+                const tool = funcName;
+                if (tool.includes('bash') || tool.includes('command') || tool.includes('run') || tool.includes('terminal')) {
+                    stepType = 'terminal';
+                    cleanTitle = `Terminal ${args?.command || 'Command'}`;
+                } else if (tool.includes('read') || tool.includes('view') || tool.includes('file') || tool.includes('list_directory') || tool.includes('dir')) {
+                    stepType = 'read_file';
+                    cleanTitle = `List Directory ${args?.path || 'folder'}`;
+                } else if (tool.includes('search') || tool.includes('grep') || tool.includes('find')) {
+                    stepType = 'search';
+                    cleanTitle = `Search ${args?.query || args?.pattern || 'query'}`;
+                }
+
+                const currentStep = {
+                    id: stepId, // Sử dụng stepId thống nhất
+                    type: stepType,
+                    title: cleanTitle,
+                    input: args ? (args.command || args.file_path || args.query || args.url || args.pattern || JSON.stringify(args)) : ''
+                };
+                serverSteps.push(currentStep);
+
                 const toolSpanId = traceId ? tracer.startSpan(traceId, funcName, 'tool', llmSpanId, args) : null;
 
                 try {
-                    const toolResult = await executeSkillForProvider(funcName, args, resolvedProvider, onLog);
+                    const toolResult = await executeSkillForProvider(funcName, args, resolvedProvider, wrappedOnLog);
+
+                    // Ghi nhận Output vào Step
+                    currentStep.output = toolResult;
+
+                    if (onToolOutput) {
+                        onToolOutput(toolResult, stepId); // Truyền kèm stepId khi trả kết quả về
+                    }
+
                     if (toolSpanId) {
                         try {
                             const parsed = JSON.parse(toolResult);
@@ -172,12 +228,13 @@ export async function executeAgentTurn({
         }
 
         const cleanResponse = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-        currentHistory.push({ role: 'assistant', content: cleanResponse });
+        // Đồng bộ đính kèm toàn bộ mảng steps đã thu thập trên Server vào lịch sử
+        currentHistory.push({ role: 'assistant', content: cleanResponse, steps: serverSteps });
 
         const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
 
         if (currentSessionLog.some(entry => !entry.success)) {
-            runCriticAgent([...currentSessionLog], onLog).catch(() => { });
+            runCriticAgent([...currentSessionLog], wrappedOnLog).catch(() => { });
         }
         return { type: 'text', response: cleanResponse, history: currentHistory, sessionFile: savedFile };
 

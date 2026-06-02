@@ -10,6 +10,7 @@ class AIStudioBot {
         this.context = null;
         this.page = null
         this.isReady = false
+        this.currentHeadless = null; // THÊM DÒNG NÀY
         // Các cờ đánh dấu để không setup lại nhiều lần gây mất thời gian
         this.setupFlags = { system: false, functions: false, thinking: false };
         this.workerBots = {};
@@ -24,14 +25,21 @@ class AIStudioBot {
         this.setupFlags = { system: false, functions: false, thinking: false };
     }
 
-    async init() {
-        if (this.isReady) return;
-
-        console.log("[Browser] Đang khởi động CloakBrowser...");
+    async init(headless = false) { // SỬA: Nhận tham số headless
+        if (this.isReady) {
+            if (this.currentHeadless === headless) return;
+            console.log(`[Browser] 🔄 Đổi chế độ headless sang: ${headless}. Khởi động lại trình duyệt...`);
+            if (this.context) {
+                try { await this.context.close(); } catch (e) { }
+            }
+            this.isReady = false;
+        }
+        this.currentHeadless = headless;
+        console.log(`[Browser] Đang khởi động CloakBrowser (headless: ${headless})...`);
         const profilePath = path.join(__dirname, 'profile', 'Profile_DATA2');
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
-            headless: false,
+            headless: headless, // SỬA: Gán biến động
             viewport: { width: 1280, height: 720 },
             args: ['--disable-blink-features=AutomationControlled']
         });
@@ -238,7 +246,7 @@ class AIStudioBot {
     // TẠO TAB MỚI CHO NHIỆM VỤ CON (WORKER ISOLATION)
     // ==========================================
     async getWorkerBot(workerType = 'default') {
-        if (!this.context) await this.init();
+        if (!this.context) await this.init(this.currentHeadless);
 
         if (!this.workerBots) this.workerBots = {};
 

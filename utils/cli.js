@@ -9,18 +9,18 @@ import db from '../database.js';
 export async function startTerminalChatLoop() {
     console.log(chalk.bold.cyan('\n💬 CHẾ ĐỘ TERMINAL INTERACTIVE CHAT\n'));
     console.log(chalk.gray('Các lệnh hỗ trợ: /model (chọn provider), /skill (danh sách skill), /memory, /reformulate (bật/tắt tối ưu), /clear, /exit\n'));
-    
+
     // Khai báo biến lưu trạng thái Reformulate cho phiên chạy Terminal (Mặc định: Bật)
-    let cliUseReformulate = true;
+    let cliUseReformulate = false;
 
     while (true) {
         let userText;
         try {
             // Hiển thị tiền tố kèm theo chỉ báo trạng thái Reformulate hiện hành để người dùng dễ quan sát
-            const statusIndicator = cliUseReformulate 
-                ? chalk.green('[Ref: ON] ') 
+            const statusIndicator = cliUseReformulate
+                ? chalk.green('[Ref: ON] ')
                 : chalk.yellow('[Ref: OFF] ');
-            
+
             userText = await input({ message: statusIndicator + chalk.blue('▌ ') });
         } catch {
             process.exit(0);
@@ -103,7 +103,7 @@ export async function startTerminalChatLoop() {
                     const memories = db.prepare('SELECT * FROM memories').all() || [];
                     console.log(chalk.cyan(`\n🧠 BỘ NHỚ TÍCH LŨY HIỆN TẠI (${memories.length} bài học):`));
                     memories.forEach((m, i) => {
-                        console.log(`${i+1}. Tình huống: ${chalk.yellow(m.situation)}`);
+                        console.log(`${i + 1}. Tình huống: ${chalk.yellow(m.situation)}`);
                         console.log(`   Giải pháp: ${chalk.gray(m.solution)} (Trust: ${m.trust_score || 0.7})`);
                     });
                     console.log('');

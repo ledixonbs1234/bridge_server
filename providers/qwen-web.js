@@ -37,9 +37,9 @@ QUAN TRỌNG:
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image } = options;
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image, headless = false } = options; // THÊM headless
 
-        await qwenBot.init();
+        await qwenBot.init(headless); 
 
         let bot = qwenBot;
         if (isWorker) {

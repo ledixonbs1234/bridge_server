@@ -39,9 +39,8 @@ QUAN TRỌNG:
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default' } = options;
-
-        await deepseekBot.init();
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', headless = false } = options;
+        await deepseekBot.init(headless);
 
         let bot = deepseekBot;
         if (isWorker) {

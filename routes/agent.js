@@ -22,14 +22,40 @@ function detectWorkspace(message) {
             }
         }
     }
-    return null; // Trả về null để không quét git bừa bãi của server root
+    return null;
 }
 
 router.post('/chat', async (req, res) => {
-    const { message, stream, useReformulate, image } = req.body; // Đón thêm image
+    // SỬA ĐỔI: Tiếp nhận thêm tham số 'agent' và 'model' từ giao diện Web Client
+    const { message, stream, useReformulate, image, agent, model, headless } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
 
     console.log(chalk.magenta(`\n[Web Terminal] 📥 "${message.substring(0, 80)}"${stream ? ' (Stream)' : ''}`));
+
+    // SỬA ĐỔI: Tự động ánh xạ model từ frontend sang provider tương ứng trên server
+    if (model) {
+        const modelMap = {
+            'MiniMax-M3': 'gemini-studio',
+            'GPT-4o': 'openai',
+            'Claude-3.5-Sonnet': 'claude',
+            'DeepSeek-V4-Pro': 'deepseek-web',
+            'Qwen-2.5': 'qwen-web',
+            'Qwen-2.5-Web': 'qwen-web'
+        };
+        const targetProvider = modelMap[model];
+        const currentProvider = globalThis.providerConfig?.activeProvider;
+
+        if (targetProvider && currentProvider !== targetProvider) {
+            console.log(chalk.cyan(`\n[Auto-Switch] Tự động chuyển đổi AI Provider sang: ${targetProvider} (Model yêu cầu: ${model})`));
+            const switchConfig = getProviderConfig();
+            const available = Object.keys(switchConfig.providers || {});
+
+            // Chỉ thực hiện chuyển đổi nếu provider tồn tại trong config.json
+            if (available.includes(targetProvider)) {
+                await switchProvider(targetProvider);
+            }
+        }
+    }
 
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
@@ -95,7 +121,7 @@ router.post('/chat', async (req, res) => {
                 return;
             }
         }
-        // Xử lý lệnh đặc biệt /clear và /new
+
         if (message.trim() === '/clear' || message.trim() === '/new') {
             globalThis.activeWebSessionFile = null;
             globalThis.activeWebHistory = [];
@@ -104,14 +130,12 @@ router.post('/chat', async (req, res) => {
             }
             globalThis.persistentGoal = null;
 
-            // Xóa thực tế Pipeline và States trong SQLite database
             try {
                 const dbModule = await import('../database.js');
                 const db = dbModule.default;
                 db.prepare("DELETE FROM pipelines WHERE id = 'CURRENT'").run();
                 db.prepare("DELETE FROM agent_states WHERE pipeline_id = 'CURRENT'").run();
 
-                // Xóa file charter tĩnh nếu có
                 const stateDir = path.join(projectRoot, '.agent_memory', 'state');
                 const charterPath = path.join(stateDir, 'runtime_charter.json');
                 if (fs.existsSync(charterPath)) {
@@ -143,12 +167,21 @@ router.post('/chat', async (req, res) => {
             history: globalThis.activeWebHistory || [],
             sessionFile: globalThis.activeWebSessionFile,
             useReformulate: useReformulate !== false,
-            image, // Truyền tham số ảnh
+            headless: !!headless,
+            image,
             onChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
             } : null,
-            onAction: stream ? (tool) => {
-                res.write(`data: ${JSON.stringify({ type: 'action', tool })}\n\n`);
+            onAction: stream ? (tool, args, stepId) => {
+                const inputVal = args ? (args.command || args.file_path || args.query || args.url || args.pattern || JSON.stringify(args)) : '';
+                res.write(`data: ${JSON.stringify({ type: 'action', tool, input: inputVal, step_id: stepId })}\n\n`);
+            } : null,
+            onToolOutput: stream ? (output, stepId) => {
+                let parsedOutput = output;
+                try {
+                    parsedOutput = JSON.parse(output);
+                } catch (e) { }
+                res.write(`data: ${JSON.stringify({ type: 'tool_output', output: parsedOutput, step_id: stepId })}\n\n`);
             } : null,
             onSystem: stream ? (content) => {
                 res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
@@ -156,11 +189,9 @@ router.post('/chat', async (req, res) => {
             onAskPermission: async (query) => {
                 const { randomUUID } = await import('crypto');
                 const permId = 'perm_' + randomUUID();
-                // Import logBuffer từ service
                 const agentService = await import('../services/agentService.js');
                 const cleanDetails = agentService.logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
 
-                // SỬA LỖI: Gọi hàm clearLogBuffer() thay vì gán trực tiếp vào thuộc tính chỉ đọc
                 agentService.clearLogBuffer();
 
                 res.write(`data: ${JSON.stringify({ type: 'ask_permission', id: permId, query: query.replace(/\x1b\[[0-9;]*m/g, ''), details: cleanDetails })}\n\n`);
@@ -168,10 +199,8 @@ router.post('/chat', async (req, res) => {
                 const pendingPermissions = agentService.pendingPermissions;
 
                 return new Promise((resolve) => {
-                    // Đăng ký quyền phê duyệt trong Map TRƯỚC khi gửi tin nhắn để tránh race condition
                     pendingPermissions.set(permId, resolve);
 
-                    // --- TÍCH HỢP GỬI NÚT TƯƠNG TÁC LÊN TELEGRAM ---
                     (async () => {
                         try {
                             const configPath = path.join(projectRoot, 'config.json');
@@ -181,7 +210,6 @@ router.post('/chat', async (req, res) => {
                                     const { sendTelegramMessage, escapeHtml } = await import('../services/telegramService.js');
                                     const cleanQuery = query.replace(/\x1b\[[0-9;]*m/g, '');
 
-                                    // Định hình giao diện nút bấm inline của Telegram
                                     const inlineKeyboard = {
                                         inline_keyboard: [
                                             [
@@ -194,7 +222,6 @@ router.post('/chat', async (req, res) => {
                                         ]
                                     };
 
-                                    // Lọc HTML sạch cho nội dung câu hỏi phê duyệt trước khi dán vào thẻ <i>
                                     await sendTelegramMessage(
                                         `⚠️ <b>YÊU CẦU PHÊ DUYỆT WORKFLOW:</b>\n\n<i>${escapeHtml(cleanQuery)}</i>\n\nBạn có thể nhấn các nút bấm dưới đây để phản hồi trực tiếp:`,
                                         inlineKeyboard
@@ -215,7 +242,6 @@ router.post('/chat', async (req, res) => {
         globalThis.activeWebHistory = result.history;
         globalThis.activeWebSessionFile = result.sessionFile;
 
-        // Phản hồi kết quả cuối cùng
         if (result.type === 'handover') {
             if (stream) {
                 res.write(`data: ${JSON.stringify({ type: 'system', content: "✅ Workflow Engine đã xử lý thành công toàn bộ Pipeline!" })}\n\n`);
@@ -256,7 +282,6 @@ router.post('/v1/chat/completions', async (req, res) => {
     const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
     const taskId = Date.now().toString();
 
-    // Xử lý phím tắt /clear hoặc /new
     if (lastUserMessage.trim() === '/clear' || lastUserMessage.trim() === '/new') {
         if (typeof globalThis.activeProvider?.resetSession === 'function') {
             globalThis.activeProvider.resetSession();
@@ -285,7 +310,7 @@ router.post('/v1/chat/completions', async (req, res) => {
         const result = await executeAgentTurn({
             message: lastUserMessage,
             history: messages.slice(0, -1),
-            useReformulate: true, // Always use reformulate for v1 API
+            useReformulate: false,
             onChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({
                     id: "chatcmpl-" + taskId,

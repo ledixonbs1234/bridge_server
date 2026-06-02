@@ -14,9 +14,9 @@ class GeminiStudioProvider extends BaseProvider {
         console.log(`\n[Gemini Studio] 🧹 Đã xóa trạng thái. Tin nhắn tiếp theo sẽ bắt đầu một phiên New Chat!`);
     }
 
-   async chat(options) {
-       const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default' } = options;
-        await aiStudioBot.init();
+    async chat(options) {
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', headless = false } = options; // THÊM headless
+        await aiStudioBot.init(headless);
 
         // 1. Phân lập Tab (Cô lập Context theo ý tưởng của bạn)
         let bot = aiStudioBot;

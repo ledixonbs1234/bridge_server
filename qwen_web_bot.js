@@ -10,7 +10,7 @@ class QwenWebBot {
         this.context = null;
         this.page = null;
         this.isReady = false;
-
+        this.currentHeadless = null;
         // Trạng thái lưu trữ luồng dữ liệu trích xuất từ Network
         this.accumulatedAnswer = '';
         this.streamFinished = false;
@@ -22,14 +22,26 @@ class QwenWebBot {
         this.activeRequestId = null;
     }
 
-    async init() {
-        if (this.isReady) return;
-        console.log("[Qwen Web] Đang khởi động CloakBrowser...");
+    async init(headless = false) { // SỬA: Nhận tham số headless
+        // Nếu đã khởi tạo nhưng người dùng đổi chế độ headless, tắt đi khởi động lại
+        if (this.isReady) {
+            if (this.currentHeadless === headless) return;
+            console.log(`[Qwen Web] 🔄 Đổi chế độ headless sang: ${headless}. Khởi động lại trình duyệt...`);
+            if (this.client) {
+                try { await this.client.detach(); } catch (e) { }
+            }
+            if (this.context) {
+                try { await this.context.close(); } catch (e) { }
+            }
+            this.isReady = false;
+        }
+        this.currentHeadless = headless;
+        console.log(`[Qwen Web] Đang khởi động CloakBrowser (headless: ${headless})...`);
 
         const profilePath = path.join(__dirname, 'profile', 'Profile_Xon_Pro_All');
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
-            headless: false,
+            headless: headless, // SỬA: Gán biến động
             viewport: { width: 1280, height: 720 },
             args: ['--disable-blink-features=AutomationControlled']
         });
@@ -392,7 +404,7 @@ class QwenWebBot {
      * Tạo Tab Worker con độc lập và liên kết CDP riêng biệt
      */
     async getWorkerBot(workerType = 'default') {
-        if (!this.context) await this.init();
+        if (!this.context) await this.init(this.currentHeadless);
 
         if (!this.workerBots) this.workerBots = {};
 

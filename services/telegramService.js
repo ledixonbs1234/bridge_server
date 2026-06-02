@@ -11,7 +11,7 @@ const projectRoot = path.join(__dirname, '..');
 
 let pollingActive = false;
 let lastUpdateId = 0;
-let telegramUseReformulate = true;
+let telegramUseReformulate = false;
 const pendingImages = new Map();
 
 export function escapeHtml(text) {
