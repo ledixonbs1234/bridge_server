@@ -89,6 +89,7 @@ export function validatePath(inputPath) {
   }
 
   const desktopPath = path.join(os.homedir(), 'Desktop');
+  const defaultBase = globalThis.activeWorkspace || process.cwd();
 
   // Xử lý shortcut "desktop"
   if (inputPath.toLowerCase() === 'desktop') {
@@ -98,10 +99,10 @@ export function validatePath(inputPath) {
   // Resolve về absolute path
   let resolved;
   try {
-    // CHỈNH SỬA: Nếu là relative path, tự động resolve từ thư mục Desktop thay vì process.cwd()
+    // SỬA ĐỔI: Sử dụng defaultBase (ngữ cảnh hiện hành) thay vì cứng Desktop
     resolved = path.isAbsolute(inputPath)
       ? path.resolve(inputPath)
-      : path.resolve(desktopPath, inputPath);
+      : path.resolve(defaultBase, inputPath);
   } catch (e) {
     return {
       allowed: false,
@@ -138,6 +139,12 @@ export function validatePath(inputPath) {
         resolved: normalizedResolved
       };
     }
+  }
+
+  // Tự động thêm defaultBase vào Whitelist để không bị chặn bởi Path Guard
+  const normalizedDefaultBase = normalizePath(defaultBase);
+  if (!ALLOWED_ROOTS.map(normalizePath).includes(normalizedDefaultBase)) {
+    ALLOWED_ROOTS.push(normalizedDefaultBase);
   }
 
   // 3. Check WHITELIST - path phải nằm trong một allowed root

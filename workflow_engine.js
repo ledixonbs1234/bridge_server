@@ -88,6 +88,11 @@ export default class WorkflowEngine {
      * Xác định một thư mục làm việc duy nhất cho cả quá trình chạy của Pipeline
      */
     resolveGlobalWorkspace() {
+        // Ưu tiên cao nhất cho Workspace làm việc được thiết lập động
+        if (globalThis.activeWorkspace) {
+            return globalThis.activeWorkspace;
+        }
+
         const pathRegex = /(?:[a-zA-Z]:\/|\/)[^\s"']+/g;
 
         // 1. Kiểm tra trong yêu cầu gốc của người dùng (globalContext)
@@ -124,7 +129,7 @@ export default class WorkflowEngine {
         }
 
         // 3. Fallback cuối cùng
-        return process.cwd().replace(/\\/g, '/');
+        return (globalThis.activeWorkspace || process.cwd()).replace(/\\/g, '/');
     }
 
     // === DB STATE HELPERS ===

@@ -81,12 +81,12 @@ export default {
 
     // KỸ NĂNG CŨ (Đã thống nhất thư mục mặc định về process.cwd() và trả về đường dẫn thực tế)
     "execute_terminal_command": {
-        description: "Thực thi lệnh Terminal/CMD. Đây là lệnh quyền lực nhất. Nếu không truyền working_directory, mặc định lệnh sẽ chạy tại thư mục Desktop của người dùng.",
+        description: "Thực thi lệnh Terminal/CMD. Đây là lệnh quyền lực nhất. Nếu không truyền working_directory, mặc định lệnh sẽ chạy tại thư mục làm việc của dự án hiện hành.",
         parameters: {
             type: "object",
             properties: {
                 command: { type: "string", description: "Câu lệnh Terminal/CMD cần chạy." },
-                working_directory: { type: "string", description: "Đường dẫn thư mục để chạy lệnh (Mặc định là thư mục Desktop của người dùng)." },
+                working_directory: { type: "string", description: "Đường dẫn thư mục để chạy lệnh (Mặc định là thư mục của dự án hiện hành)." },
                 is_background: {
                     type: "boolean",
                     description: "BẮT BUỘC ĐẶT LÀ TRUE nếu lệnh là chạy server (VD: npm run dev, npm start, node server.js)."
@@ -104,9 +104,9 @@ export default {
         },
         handler: async (args) => {
             const command = args.command;
-            // CHỈNH SỬA: Chuyển thư mục hoạt động mặc định về Desktop
-            const desktopPath = path.join(os.homedir(), 'Desktop');
-            const cwd = args.working_directory || desktopPath;
+            // SỬA ĐỔI: Chuyển thư mục hoạt động mặc định về activeWorkspace hoặc process.cwd()
+            const defaultBase = globalThis.activeWorkspace || process.cwd();
+            const cwd = args.working_directory || defaultBase;
             const isBackground = args.is_background || false;
             const analysis = analyzeCommand(command);
 

@@ -38,8 +38,10 @@ Khi nhận tác vụ phức tạp (>2 bước), bắt buộc gọi `create_pipel
 </context>
 
 <context name="FileSearch">
-**Tìm file Desktop:**
-- Không có tên file cụ thể: Gọi trực tiếp `list_directory` (path: "desktop", depth: 1). Không đoán mò để dùng `find_files`, không cần gọi `get_os_context`.
+**Tìm file trong Workspace:**
+- Mặc định, mọi thao tác tìm kiếm, đọc, và chạy lệnh đều thực hiện trong thư mục làm việc của dự án hiện tại (process.cwd() hoặc globalThis.activeWorkspace).
+- Nếu không có tên file cụ thể và muốn xem thư mục gốc dự án: Gọi `list_directory` với đường dẫn là "." hoặc đường dẫn tuyệt đối của Workspace hiện hành.
+- Chỉ dùng "desktop" làm đường dẫn khi người dùng yêu cầu rõ ràng hoặc khi muốn thao tác trên màn hình Desktop.
 </context>
 
 <context name="SearchAndResearch">

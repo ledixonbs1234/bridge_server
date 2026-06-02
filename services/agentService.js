@@ -1,5 +1,6 @@
 import path from 'path';
 import fs from 'fs';
+import os from 'os'; // Đã import thêm os
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import tracer from '../tracer.js';
@@ -8,10 +9,15 @@ import { SKILL_REGISTRY } from './skillLoader.js';
 import WorkflowEngine from '../workflow_engine.js';
 import { SKILL_GROUPS } from '../constants.js'
 import db from '../database.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
 global.originalConsoleLog = console.log;
+
+// Khởi tạo ngữ cảnh làm việc mặc định từ thư mục chạy ứng dụng hiện tại
+globalThis.activeWorkspace = globalThis.activeWorkspace || process.cwd().replace(/\\/g, '/');
+
 // Các biến toàn cục quản lý session web & permission
 export const activeWebSession = { res: null };
 export const pendingPermissions = new Map();
@@ -26,6 +32,51 @@ export function setActiveWebSessionFile(file) { activeWebSessionFile = file; }
 export function setActiveWebHistory(history) { activeWebHistory = history; }
 export function clearLogBuffer() { logBuffer = []; }
 export function appendToLogBuffer(str) { logBuffer.push(str); }
+
+/**
+ * Tự động phân tích và chuyển đổi ngữ cảnh thư mục làm việc mặc định dựa trên tin nhắn người dùng
+ */
+export function updateActiveWorkspaceFromContext(message) {
+    if (!message || typeof message !== 'string') return;
+    const msg = message.toLowerCase().trim();
+
+    // 1. Kiểm tra nếu đề cập rõ ràng đến Desktop hoặc màn hình chính
+    if (msg.includes('desktop') || msg.includes('màn hình chính')) {
+        const target = path.join(os.homedir(), 'Desktop').replace(/\\/g, '/');
+        globalThis.activeWorkspace = target;
+        console.log(chalk.cyan(`[Context-Switch] 📂 Đã chuyển Workspace mặc định sang Desktop: ${globalThis.activeWorkspace}`));
+        return;
+    }
+
+    // 2. Tìm đường dẫn tuyệt đối trong tin nhắn
+    const pathRegex = /(?:[a-zA-Z]:\/|\/)[^\s"']+/g;
+    const matches = message.replace(/\\/g, '/').match(pathRegex);
+    if (matches && matches.length > 0) {
+        const matchedPath = matches[0];
+        const resolved = path.extname(matchedPath) ? path.dirname(matchedPath) : matchedPath;
+        if (!resolved.toLowerCase().includes('bridge_server') && !resolved.toLowerCase().includes('ridge_server')) {
+            globalThis.activeWorkspace = resolved.replace(/\\/g, '/');
+            console.log(chalk.cyan(`[Context-Switch] 📂 Phát hiện đường dẫn tuyệt đối. Chuyển Workspace mặc định sang: ${globalThis.activeWorkspace}`));
+            return;
+        }
+    }
+
+    // 3. Hỗ trợ các cụm từ chỉ thư mục/folder (VD: "trong thư mục backend", "folder app")
+    const folderMatch = message.match(/(?:thư mục|folder|thư mục dự án|dự án)\s+([a-zA-Z0-9_\-\/\\:\.]+)/i);
+    if (folderMatch) {
+        const folderName = folderMatch[1].trim();
+        if (path.isAbsolute(folderName)) {
+            globalThis.activeWorkspace = folderName.replace(/\\/g, '/');
+            console.log(chalk.cyan(`[Context-Switch] 📂 Chuyển Workspace mặc định sang thư mục: ${globalThis.activeWorkspace}`));
+            return;
+        }
+
+        const candidatePath = path.resolve(process.cwd(), folderName).replace(/\\/g, '/');
+        globalThis.activeWorkspace = candidatePath;
+        console.log(chalk.cyan(`[Context-Switch] 📂 Chuyển Workspace mặc định sang thư mục chỉ định: ${globalThis.activeWorkspace}`));
+    }
+}
+
 
 /**
  * Hàm điều phối trung tâm thực hiện một lượt xử lý (turn) của Agent.
@@ -49,6 +100,9 @@ export async function executeAgentTurn({
     const traceId = tracer.createTrace(message.substring(0, 80));
 
     if (onLog) global.logToWebChat = onLog;
+
+    // Cập nhật Workspace dựa trên phân tích ngữ cảnh tin nhắn
+    updateActiveWorkspaceFromContext(message);
 
     // =================================================================
     // 🧠 SERVER-SIDE LOGS & STEPS TRACKER (FluxMem State Recovery)
@@ -105,7 +159,7 @@ export async function executeAgentTurn({
 
         const currentHistory = [...history];
         const userMsg = { role: 'user', content: reformulatedText };
-        if (image) userMsg.image = image; // Lưu trữ hình ảnh Base64
+        if (image) userMsg.image = image;
         currentHistory.push(userMsg);
 
         // Nén ngữ cảnh nếu chat history quá dài

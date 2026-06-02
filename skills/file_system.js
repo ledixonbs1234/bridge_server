@@ -596,9 +596,9 @@ export default {
             required: ["query"]
         },
         handler: async (args) => {
-            // CHỈNH SỬA: Đổi thư mục bắt đầu tìm kiếm mặc định về Desktop
-            const desktopPath = path.join(os.homedir(), 'Desktop');
-            const basePath = args.base_path ? resolveUserPath(args.base_path) : desktopPath;
+            // SỬA ĐỔI: Sử dụng activeWorkspace hoặc process.cwd() làm thư mục mặc định tìm kiếm
+            const defaultBase = globalThis.activeWorkspace || process.cwd();
+            const basePath = args.base_path ? resolveUserPath(args.base_path) : defaultBase;
             const query = args.query;
 
             if (!fs.existsSync(basePath)) {

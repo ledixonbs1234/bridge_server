@@ -75,12 +75,19 @@ const PORT = 54321;
 
 async function bootstrap() {
     try {
+        // Khởi tạo ngữ cảnh thư mục làm việc mặc định từ process.cwd() của dự án hiện hành
+        globalThis.activeWorkspace = process.cwd().replace(/\\/g, '/');
+
         // 1. Load provider config
         await loadProviderConfig();
 
         // 2. Load skills
         await loadSkills();
         setupHotReload();
+
+        // 🚀 KÍCH HOẠT PHƯƠNG ÁN 1: Tiến hành nạp Vector Cache cho danh sách kỹ năng chuyên dụng
+        const { cacheSkillEmbeddings } = await import('./services/agentService.js');
+        cacheSkillEmbeddings(SKILL_REGISTRY).catch(() => { });
 
         // 3. Start server
         app.listen(PORT, async () => {
