@@ -249,7 +249,13 @@ router.post('/permission/respond', async (req, res) => {
     if (agentService.pendingPermissions.has(id)) {
         const resolve = agentService.pendingPermissions.get(id);
         agentService.pendingPermissions.delete(id);
-        resolve(response.toLowerCase().trim());
+
+        // SỬA ĐỔI: Giữ nguyên chữ hoa/thường nếu nhận được phản hồi dạng JSON
+        const finalResponse = (typeof response === 'string' && response.trim().startsWith('{'))
+            ? response.trim()
+            : response.toLowerCase().trim();
+
+        resolve(finalResponse);
         res.json({ success: true });
     } else {
         res.status(404).json({ error: 'Phiên yêu cầu cấp quyền không tồn tại hoặc đã hết hạn.' });

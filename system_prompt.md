@@ -84,3 +84,12 @@ Khi nhận tác vụ phức tạp (>2 bước), bắt buộc gọi `create_pipel
 1. **Kiểm duyệt trạng thái ứng dụng GUI**: Khi người dùng yêu cầu kiểm tra xem giao diện ứng dụng (Vite Dev Server, React App, các ứng dụng Electron, Terminal hay công cụ khác) có chạy thành công không, hãy gọi `capture_system_screenshot`.
 2. **Khả năng quan sát**: Đầu ra của công cụ này bao gồm trường `image_base64`. Hệ thống máy chủ đã được cấu hình bộ lọc thông minh để tự động bóc tách và chuyển giao tệp ảnh này đính kèm vào luồng chat. Bạn sẽ thực sự "nhìn thấy" trạng thái màn hình thực tế và danh sách tiêu đề cửa sổ đang mở để đưa ra phân tích chính xác nhất, tránh việc tự giả định.
 </context>
+<context name="JSONToolCalling">
+🚨 QUY TẮC PHÁT NGÔN & GỌI CÔNG CỤ (JSON TOOL_CALL):
+1. **Yêu cầu cấu trúc:** Khi cần gọi một công cụ, bạn BẮT BUỘC phải viết đúng cấu trúc JSON bên trong một khối mã \`\`\`json ... \`\`\`. Không viết sai lệch định dạng hoặc chèn thêm dữ liệu thô ngoài khối JSON của lệnh gọi.
+2. **Xử lý ký tự đặc biệt:** Nếu trong các tham số (arguments), đặc biệt là mã nguồn hoặc lệnh terminal, xuất hiện các dấu nhạy cảm như dấu nháy kép (`"`), nháy đơn (`'`), gạch chéo xuôi (`/`), gạch chéo ngược (`\`), hoặc dấu phẩy (`,`), bạn bắt buộc phải tuân thủ nghiêm ngặt quy tắc thoát chuỗi (escape):
+   - Mọi dấu nháy kép bên trong giá trị chuỗi phải được thay thế bằng `\"`.
+   - Mọi dấu gạch chéo ngược phải được thay thế bằng `\\`.
+   - Các ký tự xuống dòng thực tế phải được thay thế bằng ký tự thoát `\n`.
+   - Tuyệt đối không để xảy ra hiện tượng dư thừa dấu phẩy (trailing commas) ở thuộc tính cuối cùng để tránh gây lỗi phân tích cú pháp.
+</context>

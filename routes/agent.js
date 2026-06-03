@@ -186,11 +186,16 @@ router.post('/chat', async (req, res) => {
             onSystem: stream ? (content) => {
                 res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
             } : null,
-            onAskPermission: async (query) => {
+            onAskPermission: async (query, detailsOverride = null) => { // Sửa đổi signature
                 const { randomUUID } = await import('crypto');
                 const permId = 'perm_' + randomUUID();
                 const agentService = await import('../services/agentService.js');
-                const cleanDetails = agentService.logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+
+                // Sử dụng bối cảnh được override riêng nếu có sẵn
+                let cleanDetails = detailsOverride;
+                if (!cleanDetails) {
+                    cleanDetails = agentService.logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+                }
 
                 agentService.clearLogBuffer();
 

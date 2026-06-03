@@ -1,5 +1,6 @@
 import BaseProvider from './base-provider.js';
 import qwenBot from '../qwen_web_bot.js';
+import { jsonrepair } from 'jsonrepair';
 
 class QwenWebProvider extends BaseProvider {
     constructor(config) {
@@ -14,7 +15,7 @@ class QwenWebProvider extends BaseProvider {
         console.log(`\n[Qwen Web] 🧹 Đã xóa trạng thái. Tin nhắn tiếp theo sẽ bắt đầu một phiên New Chat!`);
     }
 
-    // Thiết lập hướng dẫn gọi Tool bằng định dạng XML kèm khối CDATA
+    // Thiết lập hướng dẫn gọi Tool bằng định dạng JSON
     _buildToolInstructions(skillRegistry) {
         let toolText = "Bạn CÓ THỂ SỬ DỤNG CÁC CÔNG CỤ (TOOLS) sau đây để trợ giúp người dùng:\n";
         for (const [key, skill] of Object.entries(skillRegistry)) {
@@ -22,24 +23,29 @@ class QwenWebProvider extends BaseProvider {
         }
 
         toolText += `\n[HƯỚNG DẪN GỌI TOOL BẮT BUỘC]
-Nếu bạn cần chạy một công cụ để lấy thông tin, BẠN PHẢI TRẢ LỜI ĐÚNG ĐỊNH DẠNG XML SAU, KHÔNG GIẢI THÍCH GÌ THÊM:
-<tool_call>
-  <name>tên_lệnh_ở_trên</name>
-  <tên_tham_số_1>giá_trị_1</tên_tham_số_1>
-  <tên_tham_số_2><![CDATA[giá_trị_mã_nguồn_hoặc_chuỗi_nhiều_dòng]]></tên_tham_số_2>
-</tool_call>
+Nếu bạn cần chạy một công cụ để lấy thông tin, BẠN PHẢI TRẢ LỜI ĐÚNG ĐỊNH DẠNG JSON sau trong một khối mã \`\`\`json ... \`\`\`, KHÔNG GIẢI THÍCH GÌ THÊM:
+\`\`\`json
+{
+  "type": "tool_call",
+  "name": "tên_lệnh_ở_trên",
+  "arguments": {
+    "tên_tham_số_1": "giá_trị_1",
+    "tên_tham_số_2": "giá_trị_2"
+  }
+}
+\`\`\`
 QUAN TRỌNG:
-- BẮT BUỘC sử dụng cấu trúc XML trên. KHÔNG dùng định dạng JSON hay Markdown khác cho lệnh gọi.
-- Với các tham số là mã nguồn hoặc văn bản nhiều dòng (như 'content', 'replace_string', 'command'), bạn BẮT BUỘC phải bọc toàn bộ giá trị trong thẻ <![CDATA[ ... ]]> để tránh lỗi cú pháp XML và bảo toàn định dạng thụt lề thụt dòng.
+- BẮT BUỘC sử dụng cấu trúc JSON trên. KHÔNG dùng định dạng XML hay Markdown khác cho lệnh gọi.
+- Đảm bảo tất cả các chuỗi có chứa ký tự đặc biệt như dấu nháy kép ("), nháy đơn ('), gạch chéo (/), gạch chéo ngược (\\), dấu phẩy (,), hoặc các ký tự xuống dòng (\\n) đều được escape (thoát chuỗi) chuẩn xác theo định dạng JSON (ví dụ sử dụng \\" cho dấu nháy kép bên trong chuỗi, \\\\ cho dấu gạch chéo ngược, \\n cho xuống dòng).
 - TUYỆT ĐỐI KHÔNG sử dụng các tham số Base64 như 'content_base64' hoặc 'replace_string_base64' vì mô hình của bạn rất dễ sinh mã hóa Base64 bị lỗi gây hỏng file nguồn. Hãy luôn sử dụng tham số chuỗi thường ('content' hoặc 'replace_string').`;
 
         return toolText;
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image, headless = false } = options; // THÊM headless
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image, headless = false } = options;
 
-        await qwenBot.init(headless); 
+        await qwenBot.init(headless);
 
         let bot = qwenBot;
         if (isWorker) {
@@ -80,54 +86,59 @@ QUAN TRỌNG:
             const response = await bot.waitForResponse(onStreamChunk);
             const content = response.text;
 
-            // Tìm kiếm khối lệnh gọi công cụ dạng XML
-            const toolRegex = /<tool_call>([\s\S]*?)<\/tool_call>/;
-            const match = content.match(toolRegex);
+            // Tìm kiếm khối lệnh gọi công cụ dạng JSON
+            const jsonBlockRegex = /```json\s*([\s\S]*?)\s*```/i;
+            const jsonMatch = content.match(jsonBlockRegex);
+            let parsedTool = null;
+            let isToolCall = false;
 
-            if (match) {
+            if (jsonMatch) {
                 try {
-                    const xmlContent = match[1].trim();
-
-                    // 1. Trích xuất tên công cụ
-                    const nameMatch = xmlContent.match(/<name>([\s\S]*?)<\/name>/);
-                    if (!nameMatch) {
-                        throw new Error("Không tìm thấy thẻ <name> trong khối gọi lệnh <tool_call>.");
+                    const repaired = jsonrepair(jsonMatch[1].trim());
+                    const parsed = JSON.parse(repaired);
+                    if (parsed && (parsed.type === 'tool_call' || parsed.tool_call || parsed.name)) {
+                        parsedTool = parsed;
+                        isToolCall = true;
                     }
-                    const toolName = nameMatch[1].trim();
+                } catch (e) {
+                    console.warn(`[Qwen Web] Thử parse block JSON bị lỗi: ${e.message}`);
+                }
+            }
 
-                    // 2. Phân tích các đối số động và tự động nhận diện kiểu dữ liệu gốc
-                    const toolArgs = {};
-                    const tagRegex = /<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/g;
-                    let tagMatch;
-                    while ((tagMatch = tagRegex.exec(xmlContent)) !== null) {
-                        const tagName = tagMatch[1];
-                        let tagValue = tagMatch[2];
-
-                        if (tagName === 'name' || tagName === 'tool_call') continue;
-
-                        let isCdata = false;
-                        const cdataMatch = tagValue.match(/<!\[CDATA\[([\s\S]*?)\]\]>/i);
-                        if (cdataMatch) {
-                            tagValue = cdataMatch[1];
-                            isCdata = true;
+            // Fallback: Tìm ngoặc nhọn đầu tiên và cuối cùng nếu không tìm thấy block markdown ```json
+            if (!isToolCall) {
+                const firstBrace = content.indexOf('{');
+                const lastBrace = content.lastIndexOf('}');
+                if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                    try {
+                        const rawJson = content.substring(firstBrace, lastBrace + 1);
+                        const repaired = jsonrepair(rawJson.trim());
+                        const parsed = JSON.parse(repaired);
+                        if (parsed && (parsed.type === 'tool_call' || parsed.tool_call || parsed.name)) {
+                            parsedTool = parsed;
+                            isToolCall = true;
                         }
+                    } catch (e) {
+                        // Bỏ qua lỗi fallback
+                    }
+                }
+            }
 
-                        if (!isCdata) {
-                            const trimmedVal = tagValue.trim();
-                            if (/^-?\d+$/.test(trimmedVal)) {
-                                toolArgs[tagName] = parseInt(trimmedVal, 10);
-                            } else if (/^-?\d+\.\d+$/.test(trimmedVal)) {
-                                toolArgs[tagName] = parseFloat(trimmedVal);
-                            } else if (trimmedVal === 'true') {
-                                toolArgs[tagName] = true;
-                            } else if (trimmedVal === 'false') {
-                                toolArgs[tagName] = false;
-                            } else {
-                                toolArgs[tagName] = tagValue;
-                            }
-                        } else {
-                            toolArgs[tagName] = tagValue;
-                        }
+            if (isToolCall && parsedTool) {
+                try {
+                    let toolName = "";
+                    let toolArgs = {};
+
+                    if (parsedTool.tool_call) {
+                        toolName = parsedTool.tool_call.name || "";
+                        toolArgs = parsedTool.tool_call.arguments || parsedTool.tool_call.args || {};
+                    } else {
+                        toolName = parsedTool.name || parsedTool.tool || "";
+                        toolArgs = parsedTool.arguments || parsedTool.args || {};
+                    }
+
+                    if (!toolName) {
+                        throw new Error("Không tìm thấy tên công cụ ('name') trong cấu trúc JSON.");
                     }
 
                     console.log(`[Qwen Web] ⚙️ AI muốn gọi hàm: [${toolName}]`);
@@ -165,14 +176,14 @@ QUAN TRỌNG:
                         ? JSON.stringify(finalFuncRes)
                         : String(finalFuncRes);
 
-                    const feedbackPrompt = `[KẾT QUẢ TỪ HỆ THỐNG CHO LỆNH ${toolName}]\n${resultString}\n\nDựa vào kết quả này, hãy phân tích và đưa ra câu trả lời cuối cùng, HOẶC tiếp tục gọi <tool_call> nếu cần thêm thông tin.`;
+                    const feedbackPrompt = `[KẾT QUẢ TỪ HỆ THỐNG CHO LỆNH ${toolName}]\n${resultString}\n\nDựa vào kết quả này, hãy phân tích và đưa ra câu trả lời cuối cùng, HOẶC tiếp tục gọi công cụ (JSON tool_call) nếu cần thêm thông tin.`;
 
                     await bot.sendPrompt(feedbackPrompt, isThinkingMode, feedbackImage);
                     continue;
 
                 } catch (e) {
-                    console.error(`[Qwen Web] ❌ Cú pháp XML không hợp lệ hoặc lỗi phân tích: ${e.message}`);
-                    await bot.sendPrompt(`Hệ thống báo lỗi: Thao tác XML của bạn không chính xác hoặc thiếu các thẻ đóng/mở hoặc CDATA cần thiết. Chi tiết lỗi: ${e.message}. Vui lòng viết lại toàn bộ cấu trúc <tool_call> theo đúng chuẩn XML.`);
+                    console.error(`[Qwen Web] ❌ Cú pháp JSON không hợp lệ hoặc lỗi phân tích: ${e.message}`);
+                    await bot.sendPrompt(`Hệ thống báo lỗi: Thao tác JSON của bạn không chính xác hoặc thiếu các cặp ngoặc hoặc thuộc tính cần thiết. Chi tiết lỗi: ${e.message}. Vui lòng viết lại toàn bộ cấu trúc JSON theo đúng chuẩn.`);
                     continue;
                 }
             }
@@ -193,7 +204,7 @@ QUAN TRỌNG:
     }
 
     async healthCheck() {
-        return { ready: true, message: 'Qwen Web Bot đã tích hợp định dạng gọi XML!' };
+        return { ready: true, message: 'Qwen Web Bot đã tích hợp định dạng gọi JSON kèm sửa lỗi tự động!' };
     }
 }
 

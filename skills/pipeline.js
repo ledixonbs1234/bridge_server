@@ -2,20 +2,22 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import db from '../database.js';
+
 // Fix lỗi __dirname trong ES Module
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export default {
-   "create_pipeline_plan": {
+    "create_pipeline_plan": {
         description: "[QUAN TRỌNG] Lập kế hoạch Pipeline theo mô hình Architect - Editor. BẮT BUỘC dùng công cụ này ĐẦU TIÊN khi người dùng giao một tác vụ lớn hoặc phức tạp. Các Stage lập kế hoạch phải tuân thủ nghiêm ngặt nguyên tắc chia nhỏ nhiệm vụ thành 2 bước nối tiếp:\n" +
-                     "1. ARCHITECT STEP (Khảo sát & Thiết kế): Chạy công cụ đọc tệp/thư mục để khảo sát dự án đích và viết tài liệu thiết kế kĩ thuật chi tiết dạng tệp tin (ví dụ: 'spec_design.md').\n" +
-                     "2. EDITOR STEP (Biên tập & Kiểm thử): Chạy công cụ viết tệp hoặc thay thế dòng để lập trình chính xác dựa trên tài liệu thiết kế ở bước 1, sau đó tự chạy kiểm thử (compiler check).\n" +
-                     "Hỗ trợ chạy song song bằng parallel_group và tuần tự bằng depends_on.",
+            "1. ARCHITECT STEP (Khảo sát & Thiết kế): Chạy công cụ đọc tệp/thư mục để khảo sát dự án đích và viết tài liệu thiết kế kĩ thuật chi tiết dạng tệp tin (ví dụ: 'spec_design.md').\n" +
+            "2. EDITOR STEP (Biên tập & Kiểm thử): Chạy công cụ viết tệp hoặc thay thế dòng để lập trình chính xác dựa trên tài liệu thiết kế ở bước 1, sau đó tự chạy kiểm thử (compiler check).\n" +
+            "Hỗ trợ chạy song song bằng parallel_group và tuần tự bằng depends_on.",
         parameters: {
             type: "object",
             properties: {
                 pipeline_name: { type: "string", description: "Tên của pipeline (VD: Xây dựng tính năng Auth)" },
+                plan_name: { type: "string", description: "Tên thay thế dự phòng của pipeline (VD: Xây dựng tính năng Auth)" },
                 stages: {
                     type: "array",
                     description: "Danh sách các giai đoạn cần làm.",
@@ -58,11 +60,11 @@ export default {
                                 }
                             }
                         },
-                        required: ["name", "steps"]
+                        required: ["name"]
                     }
                 }
             },
-            required: ["pipeline_name", "stages"]
+            required: ["stages"]
         },
         handler: async (args) => {
             const memoryDir = path.join(process.cwd(), '.agent_memory');
@@ -70,9 +72,22 @@ export default {
 
             if (!fs.existsSync(memoryDir)) fs.mkdirSync(memoryDir, { recursive: true });
 
-            // Khởi tạo trạng thái mặc định + gán step_key
-            args.stages.forEach((stage, sIdx) => {
+            const pipelineName = args.pipeline_name || args.plan_name || "Unnamed Pipeline";
+            const stages = args.stages || [];
+
+            if (stages.length === 0) {
+                throw new Error("Pipeline phải có ít nhất một giai đoạn (stage) hợp lệ.");
+            }
+
+            // Khởi tạo trạng thái mặc định + gán step_key an toàn
+            stages.forEach((stage, sIdx) => {
                 stage.status = "PENDING";
+
+                // Khắc phục lỗi: Đảm bảo stage.steps luôn tồn tại dưới dạng mảng để tránh crash
+                if (!stage.steps || !Array.isArray(stage.steps)) {
+                    stage.steps = [];
+                }
+
                 stage.steps.forEach((step, stIdx) => {
                     step.status = "PENDING";
                     step.step_key = `stage_${sIdx}.step_${stIdx}`;
@@ -83,8 +98,8 @@ export default {
             });
 
             // In ra Terminal giao diện đẹp mắt giống CI/CD
-            console.log(`\n\x1b[44m\x1b[37m 📋 AI ĐỀ XUẤT PIPELINE: ${args.pipeline_name.toUpperCase()} \x1b[0m`);
-            args.stages.forEach((stage, sIdx) => {
+            console.log(`\n\x1b[44m\x1b[37m 📋 AI ĐỀ XUẤT PIPELINE: ${pipelineName.toUpperCase()} \x1b[0m`);
+            stages.forEach((stage, sIdx) => {
                 console.log(`\x1b[36mStage ${sIdx + 1}: ${stage.name}\x1b[0m`);
                 stage.steps.forEach((step, stIdx) => {
                     const parallelTag = step.parallel_group ? `\x1b[35m[⇄ ${step.parallel_group}]\x1b[0m ` : '';
@@ -104,7 +119,7 @@ export default {
             }
             // Lưu kế hoạch vào bộ nhớ SQLite
             const stmt = db.prepare(`INSERT OR REPLACE INTO pipelines (id, name, status, data) VALUES (?, ?, ?, ?)`);
-            stmt.run('CURRENT', args.pipeline_name, 'IN_PROGRESS', JSON.stringify(args));
+            stmt.run('CURRENT', pipelineName, 'IN_PROGRESS', JSON.stringify({ ...args, pipeline_name: pipelineName, stages }));
 
             // Khởi tạo cấu trúc lưu trữ File-Backed State
             const stateDir = path.join(memoryDir, 'state');
@@ -118,7 +133,7 @@ export default {
             const stateStmt = db.prepare(`INSERT OR REPLACE INTO agent_states (pipeline_id, step_key, state, retry_count, error_history, updated_at) VALUES (?, ?, ?, ?, ?, ?)`);
             const now = new Date().toISOString();
 
-            for (const stage of args.stages) {
+            for (const stage of stages) {
                 for (const step of stage.steps) {
                     stateStmt.run('CURRENT', step.step_key, 'PENDING', 0, '[]', now); // Truyền đủ 6 tham số
 
@@ -160,9 +175,9 @@ export default {
         parameters: {
             type: "object",
             properties: {
-                template_name: { 
-                    type: "string", 
-                    description: "Tên của file cấu hình harness nằm trong thư mục harnesses (VD: react_setup.json)" 
+                template_name: {
+                    type: "string",
+                    description: "Tên của file cấu hình harness nằm trong thư mục harnesses (VD: react_setup.json)"
                 }
             },
             required: ["template_name"]
@@ -170,7 +185,7 @@ export default {
         handler: async (args) => {
             const memoryDir = path.join(process.cwd(), '.agent_memory');
             const harnessesDir = path.join(memoryDir, 'harnesses');
-            
+
             if (!fs.existsSync(harnessesDir)) {
                 fs.mkdirSync(harnessesDir, { recursive: true });
             }
@@ -222,6 +237,11 @@ export default {
             // Gán step_key và trạng thái PENDING ban đầu
             templateData.stages.forEach((stage, sIdx) => {
                 stage.status = "PENDING";
+
+                if (!stage.steps || !Array.isArray(stage.steps)) {
+                    stage.steps = [];
+                }
+
                 stage.steps.forEach((step, stIdx) => {
                     step.status = "PENDING";
                     step.step_key = `stage_${sIdx}.step_${stIdx}`;
@@ -245,9 +265,9 @@ export default {
             const stateStmt = db.prepare(`INSERT OR REPLACE INTO agent_states (pipeline_id, step_key, state, retry_count, error_history, updated_at) VALUES (?, ?, ?, ?, ?, ?)`);
             const now = new Date().toISOString();
 
-                for (const stage of templateData.stages) {
-                    for (const step of stage.steps) {
-                        stateStmt.run('CURRENT', step.step_key, 'PENDING', 0, '[]', now); // Truyền đủ 6 tham số
+            for (const stage of templateData.stages) {
+                for (const step of stage.steps) {
+                    stateStmt.run('CURRENT', step.step_key, 'PENDING', 0, '[]', now); // Truyền đủ 6 tham số
 
                     // Thiết lập Hợp đồng thực thi (Execution Contract) tĩnh
                     const contract = {
@@ -282,5 +302,4 @@ export default {
             };
         }
     }
-
 };

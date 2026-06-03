@@ -126,23 +126,19 @@ export async function executeAgentTurn({
     // KHẮC PHỤC LỖI: Liên kết chặt chẽ askPermission lên phạm vi toàn cục ngay khi nhận lượt chat
     const originalAskPermission = global.askPermission;
     if (onAskPermission) {
-        global.askPermission = onAskPermission;
+        global.askPermission = (query, detailsOverride = null) => onAskPermission(query, detailsOverride);
     } else {
-        // Fallback mặc định khi không truyền onAskPermission (ví dụ: chế độ CLI hoặc v1 API)
-        global.askPermission = async (query) => {
+        global.askPermission = async (query, detailsOverride = null) => {
             if (process.argv.includes('--cli')) {
-                // Chế độ CLI Terminal: sử dụng @inquirer/prompts để hiển thị câu hỏi tương tác trực tiếp
                 try {
                     const { input } = await import('@inquirer/prompts');
                     const ans = await input({ message: query });
                     return ans.toLowerCase().trim();
                 } catch {
-                    // Fallback nếu có sự cố khi import prompts
                     return 'y';
                 }
             } else {
-                // Chế độ API tự động (như v1/chat/completions): tự động đồng ý để tránh kẹt luồng của Client
-                console.log(chalk.yellow(`[Auto-Approve] Tự động cấp quyền trong chế độ không tương tác cho yêu cầu: "${query}"`));
+                console.log(chalk.yellow(`[Auto-Approve] Tự động duyệt yêu cầu: "${query}"`));
                 return 'y';
             }
         };

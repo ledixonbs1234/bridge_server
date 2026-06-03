@@ -35,27 +35,28 @@ export const SKILL_CATEGORIES = {
 // Skill groups mapping
 export const SKILL_GROUPS = {
     [SKILL_CATEGORIES.CHAT]: [
-         'read_file',
+        'read_file',
         'read_multiple_files',
         'write_file',
-        'read_image_asset', 
+        'read_image_asset',
         'read_file_lines',
         'list_directory',
         'execute_terminal_command',
         'get_os_context',
         'memorize_rule',
         'find_files',
-         'google_search',
-        'google_search_and_summarize', // Đã đăng ký thêm
-        'parallel_web_summarizer' ,
-        'capture_system_screenshot'       // Đã đăng ký thêm
+        'google_search',
+        'google_search_and_summarize',
+        'parallel_web_summarizer',
+        'capture_system_screenshot',
+        'ask_questions_if_underspecified' // Đăng ký bổ sung
     ],
     [SKILL_CATEGORIES.CODE]: [
         'read_file',
         'read_multiple_files',
         'write_file',
         'replace_by_lines_safe',
-        'read_image_asset', 
+        'read_image_asset',
         'read_file_lines',
         'list_directory',
         'execute_terminal_command',
@@ -67,19 +68,20 @@ export const SKILL_GROUPS = {
         'find_files',
         'synthesize_skill',
         'google_search',
-        'google_search_and_summarize', // Đã đăng ký thêm
-        'parallel_web_summarizer' ,
-        'capture_system_screenshot'       // Đã đăng ký thêm
+        'google_search_and_summarize',
+        'parallel_web_summarizer',
+        'capture_system_screenshot',
+        'ask_questions_if_underspecified' // Đăng ký bổ sung
     ],
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
-        'parallel_web_summarizer',       // Đã đăng ký thêm
+        'parallel_web_summarizer',
         'dynamic_browser_controller',
         'create_pipeline_plan',
         'load_harness_template',
         'read_file',
         'read_file_lines',
-        'read_image_asset', 
+        'read_image_asset',
         'find_files',
         'list_directory',
         'capture_system_screenshot',
@@ -87,7 +89,8 @@ export const SKILL_GROUPS = {
         'get_os_context',
         'stop_terminal_process',
         'google_search',
-        'google_search_and_summarize'   // Đã đăng ký thêm
+        'google_search_and_summarize',
+        'ask_questions_if_underspecified' // Đăng ký bổ sung
     ],
     [SKILL_CATEGORIES.COMPLEX]: null
 };

@@ -388,7 +388,7 @@ async function processAgentChat(chatId, promptText, base64Img, thinkingMsg) {
             useReformulate: telegramUseReformulate,
             onLog: () => { },
             image: base64Img,
-            onAskPermission: async (queryMsg) => {
+            onAskPermission: async (queryMsg, detailsOverride = null) => { // Đã đồng bộ signature
                 const { randomUUID } = await import('crypto');
                 const permId = 'perm_' + randomUUID();
 
