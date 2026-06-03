@@ -16,6 +16,7 @@ class QwenWebProvider extends BaseProvider {
     }
 
     // Thiết lập hướng dẫn gọi Tool bằng định dạng JSON
+    // Thiết lập hướng dẫn gọi Tool bằng định dạng JSON
     _buildToolInstructions(skillRegistry) {
         let toolText = "Bạn CÓ THỂ SỬ DỤNG CÁC CÔNG CỤ (TOOLS) sau đây để trợ giúp người dùng:\n";
         for (const [key, skill] of Object.entries(skillRegistry)) {
@@ -23,7 +24,7 @@ class QwenWebProvider extends BaseProvider {
         }
 
         toolText += `\n[HƯỚNG DẪN GỌI TOOL BẮT BUỘC]
-Nếu bạn cần chạy một công cụ để lấy thông tin, BẠN PHẢI TRẢ LỜI ĐÚNG ĐỊNH DẠNG JSON sau trong một khối mã \`\`\`json ... \`\`\`, KHÔNG GIẢI THÍCH GÌ THÊM:
+Nếu bạn cần chạy một công cụ để lấy thông tin hoặc thực hiện thay đổi, BẠN PHẢI TRẢ LỜI ĐÚNG ĐỊNH DẠNG JSON sau trong một khối mã \`\`\`json ... \`\`\`, KHÔNG GIẢI THÍCH GÌ THÊM:
 \`\`\`json
 {
   "type": "tool_call",
@@ -34,10 +35,12 @@ Nếu bạn cần chạy một công cụ để lấy thông tin, BẠN PHẢI T
   }
 }
 \`\`\`
+Hệ thống sẽ chạy và trả kết quả lại cho bạn để bạn suy nghĩ tiếp.
+
 QUAN TRỌNG:
 - BẮT BUỘC sử dụng cấu trúc JSON trên. KHÔNG dùng định dạng XML hay Markdown khác cho lệnh gọi.
 - Đảm bảo tất cả các chuỗi có chứa ký tự đặc biệt như dấu nháy kép ("), nháy đơn ('), gạch chéo (/), gạch chéo ngược (\\), dấu phẩy (,), hoặc các ký tự xuống dòng (\\n) đều được escape (thoát chuỗi) chuẩn xác theo định dạng JSON (ví dụ sử dụng \\" cho dấu nháy kép bên trong chuỗi, \\\\ cho dấu gạch chéo ngược, \\n cho xuống dòng).
-- TUYỆT ĐỐI KHÔNG sử dụng các tham số Base64 như 'content_base64' hoặc 'replace_string_base64' vì mô hình của bạn rất dễ sinh mã hóa Base64 bị lỗi gây hỏng file nguồn. Hãy luôn sử dụng tham số chuỗi thường ('content' hoặc 'replace_string').`;
+- TUYỆT ĐỐI KHÔNG tự ý sử dụng các tham số mã hóa Base64 tự chế nếu schema của công cụ không yêu cầu cụ thể. Luôn luôn truyền các tham số chuỗi thường ('content' hoặc 'replace_string') đúng theo định nghĩa có sẵn để tránh gây lỗi phân tích cú pháp nguồn.`;
 
         return toolText;
     }

@@ -60,12 +60,10 @@ function performLineReplacement(content, replaceString, startLine, endLine) {
 
     let newLines = replaceString ? replaceString.split(/\r?\n/) : [];
 
-    // Smart Line Anchor Stripper: Tránh việc xóa nhầm toán tử logic dạng '1 | 2'
     newLines = newLines.map((line, idx) => {
         const match = line.match(/^(\d+)\s*\|\s(.*)$/);
         if (match) {
             const lineNum = parseInt(match[1], 10);
-            // Chỉ loại bỏ tiền tố số dòng nếu giá trị số khớp hoặc gần khớp với dòng đang biên tập
             if (Math.abs(lineNum - (startLine + idx)) <= 2) {
                 return match[2];
             }
@@ -112,7 +110,7 @@ function searchFilesRecursive(dir, query, maxResults = 40, currentDepth = 0, max
             if (results.length >= maxResults) break;
         }
     } catch (e) {
-        // Bỏ qua lỗi truy cập cục bộ
+        // Bỏ qua lỗi truy cập
     }
     return results.slice(0, maxResults);
 }
@@ -151,12 +149,6 @@ async function applyReviewSuggestion({ originalCode, issues, suggestion, filePat
     }
 }
 
-function getLangFromExt(filePath) {
-    const ext = filePath.split('.').pop().toLowerCase();
-    const map = { js: 'javascript', ts: 'typescript', py: 'python', jsx: 'javascript', tsx: 'typescript' };
-    return map[ext] || 'javascript';
-}
-
 export default {
     "list_directory": {
         description: "Lấy danh sách các tệp và thư mục trong một đường dẫn cụ thể (hỗ trợ đệ quy tối đa 3 tầng). Dùng để xem máy tính đang có gì.",
@@ -179,7 +171,6 @@ export default {
                 const result = [];
 
                 for (const entry of entries) {
-                    // 🚨 BỘ LỌC AN TOÀN: Bỏ qua thư mục thư viện, rác và bộ nhớ đệm để tránh tràn text và lệch ngữ cảnh
                     if (entry.isDirectory() && [
                         'node_modules', '.git', 'profile', 'dist', 'build', 'out',
                         '.next', '.agent_memory', '.agents', 'venv', '.venv', 'env'
@@ -214,15 +205,14 @@ export default {
         parameters: {
             type: "object",
             properties: {
-                file_path: { type: "string", description: "Đường dẫn đến file." },
+                file_path: { type: "string", description: "Đường dẫn tuyệt đối hoặc tương đối đến file cần sửa đổi." },
                 start_line: { type: "number", description: "Dòng bắt đầu cần xóa/thay thế (tính từ 1)." },
                 end_line: { type: "number", description: "Dòng kết thúc cần xóa/thay thế (tính từ 1)." },
-                replace_string: { type: "string", description: "Mã nguồn MỚI dạng chuỗi thường." },
-                replace_string_base64: { type: "string", description: "Mã nguồn MỚI dạng mã hóa Base64." },
+                replace_string: { type: "string", description: "Mã nguồn MỚI dạng chuỗi văn bản thường để thay thế vào khoảng dòng đã chọn." },
                 task_description: { type: "string", description: "Mô tả ngắn gọn bạn đang cố làm gì." },
                 skip_logic_review: { type: "boolean", description: "Bỏ qua bước AI review (mặc định: false)." }
             },
-            required: ["file_path", "start_line", "end_line"]
+            required: ["file_path", "start_line", "end_line", "replace_string"]
         },
         handler: async (args) => {
             const filePath = resolveUserPath(args.file_path);
@@ -232,17 +222,14 @@ export default {
 
             cleanupOldShadows(24);
 
-            let currentReplaceString = "";
-            if (args.replace_string_base64) {
-                currentReplaceString = Buffer.from(args.replace_string_base64, 'base64').toString('utf8');
-            } else if (args.replace_string !== undefined) {
-                currentReplaceString = args.replace_string;
-            } else {
-                throw new Error("Thiếu tham số 'replace_string' hoặc 'replace_string_base64'.");
+            const currentReplaceString = args.replace_string;
+            if (currentReplaceString === undefined) {
+                throw new Error("Thiếu tham số bắt buộc 'replace_string'.");
             }
 
             const MAX_RETRIES = 2;
             let attempt = 0;
+            let finalReplaceString = currentReplaceString;
 
             while (attempt <= MAX_RETRIES) {
                 attempt++;
@@ -261,7 +248,7 @@ export default {
 
                 let newContent;
                 try {
-                    newContent = performLineReplacement(originalContent, currentReplaceString, args.start_line, args.end_line);
+                    newContent = performLineReplacement(originalContent, finalReplaceString, args.start_line, args.end_line);
                 } catch (err) {
                     shadow.cleanup();
                     throw err;
@@ -277,8 +264,8 @@ export default {
 
                     if (attempt <= MAX_RETRIES) {
                         console.log(chalk.yellow(`[Safe-Replace] 🤖 Đang nhờ AI tự sửa lỗi cú pháp...`));
-                        currentReplaceString = await autoFixSyntaxError({
-                            originalCode: currentReplaceString,
+                        finalReplaceString = await autoFixSyntaxError({
+                            originalCode: finalReplaceString,
                             syntaxError: syntaxResult.error,
                             language: syntaxResult.language,
                             filePath
@@ -300,7 +287,7 @@ export default {
                         provider: globalThis.activeProvider,
                         filePath,
                         originalContext,
-                        newCode: currentReplaceString,
+                        newCode: finalReplaceString,
                         fullNewContent: newContent,
                         taskDescription: args.task_description || ''
                     });
@@ -314,8 +301,8 @@ export default {
 
                         if (attempt <= MAX_RETRIES && review.suggestion) {
                             console.log(chalk.yellow(`[Safe-Replace] 🤖 Đang áp dụng gợi ý sửa...`));
-                            currentReplaceString = await applyReviewSuggestion({
-                                originalCode: currentReplaceString,
+                            finalReplaceString = await applyReviewSuggestion({
+                                originalCode: finalReplaceString,
                                 issues: review.issues,
                                 suggestion: review.suggestion,
                                 filePath
@@ -348,7 +335,7 @@ export default {
                             range: `${args.start_line} đến ${args.end_line}`,
                             functionality: 'Thay thế/Sửa đổi cấu trúc tệp tin'
                         },
-                        { content: currentReplaceString }
+                        { content: finalReplaceString }
                     );
                     const answer = await global.askPermission(`👉 Cho phép thay thế vùng code này? [y/a/n] : `);
                     if (answer === 'a') global.isAutoApproveAll = true;
@@ -362,8 +349,8 @@ export default {
                     status: "success",
                     message: `Đã thay thế an toàn từ dòng ${args.start_line} đến ${args.end_line} (sau ${attempt} lần thử)`,
                     file: aiSafePath(filePath),
-                    absolute_path: filePath.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN TUYỆT ĐỐI FILE
-                    directory: path.dirname(filePath).replace(/\\/g, '/'), // TRẢ VỀ THƯ MỤC CHỨA FILE
+                    absolute_path: filePath.replace(/\\/g, '/'),
+                    directory: path.dirname(filePath).replace(/\\/g, '/'),
                     validations_passed: {
                         syntax: true,
                         logic_review: !args.skip_logic_review,
@@ -388,7 +375,6 @@ export default {
             const filePath = resolveUserPath(args.file_path);
             if (!fs.existsSync(filePath)) throw new Error(`File không tồn tại: ${args.file_path}`);
 
-            // Sửa lỗi: Sử dụng biến filePath tuyệt đối đã xác thực để đọc
             const content = fs.readFileSync(filePath, 'utf8');
             const lines = content.split(/\r?\n/);
             const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`);
@@ -480,57 +466,6 @@ export default {
         }
     },
 
-    // "replace_by_lines": {
-    //     description: "[CÔNG NGHỆ HARNESS] Sửa code dựa trên TỌA ĐỘ DÒNG. Cho phép ghi đè khoảng dòng hoặc ghi thêm vào cuối tệp tin.",
-    //     parameters: {
-    //         type: "object",
-    //         properties: {
-    //             file_path: { type: "string", description: "Đường dẫn tuyệt đối đến file." },
-    //             start_line: { type: "number", description: "Dòng bắt đầu cần xóa/thay thế (tính từ 1)." },
-    //             end_line: { type: "number", description: "Dòng kết thúc cần xóa/thay thế (tính từ 1)." },
-    //             replace_string: { type: "string", description: "Mã nguồn MỚI thuần túy để chèn vào." }
-    //         },
-    //         required: ["file_path", "start_line", "end_line", "replace_string"]
-    //     },
-    //     handler: async (args) => {
-    //         const filePath = resolveUserPath(args.file_path);
-    //         if (!fs.existsSync(filePath)) {
-    //             throw new Error(`File không tồn tại: ${aiSafePath(filePath)}`);
-    //         }
-
-    //         if (!global.isAutoApproveAll) {
-    //             const highlightedCode = args.replace_string
-    //                 ? highlight(args.replace_string, { language: 'javascript', ignoreIllegals: true })
-    //                 : chalk.red.italic('// Xóa bỏ những dòng này');
-
-    //             const promptContent = `\n${chalk.bold.yellow('📂 File :')} ${chalk.cyan(args.file_path)}\n${chalk.bold.yellow('📍 Dòng :')} ${chalk.bgGray.white(` ${args.start_line} đến ${args.end_line} `)}\n${chalk.bold.green('✨ Nội dung thay thế:')}\n${chalk.gray('----------------------------------------')}\n${highlightedCode}\n${chalk.gray('----------------------------------------')}\n`;
-    //             console.log(boxen(promptContent, {
-    //                 title: chalk.bold.redBright(' ⚠️ YÊU CẦU SỬA CODE '),
-    //                 titleAlignment: 'center',
-    //                 padding: 1, borderColor: 'yellow', borderStyle: 'round'
-    //             }));
-
-    //             const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép thay thế vùng code này? [y/a/n] : `));
-    //             if (answer === 'a') global.isAutoApproveAll = true;
-    //             else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
-    //         }
-
-    //         const content = fs.readFileSync(filePath, 'utf8');
-    //         let updatedContent;
-    //         try {
-    //             updatedContent = performLineReplacement(content, args.replace_string, args.start_line, args.end_line);
-    //         } catch (err) {
-    //             throw err;
-    //         }
-
-    //         fs.writeFileSync(filePath, updatedContent, 'utf8');
-    //         return {
-    //             message: `Đã thay thế thành công từ dòng ${args.start_line} đến ${args.end_line}`,
-    //             file: aiSafePath(filePath)
-    //         };
-    //     }
-    // },
-
     "write_file": {
         description: "Tạo file mới hoàn toàn hoặc ghi đè TOÀN BỘ nội dung vào file đã có. Hỗ trợ tự động tạo thư mục cha. Chấp nhận chuỗi thường (content) hoặc chuỗi mã hóa base64 (content_base64) để tránh lỗi unicode/JSON escape.",
         parameters: {
@@ -579,8 +514,8 @@ export default {
             return {
                 message: `Đã ghi file thành công`,
                 file: aiSafePath(filePath),
-                absolute_path: filePath.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN TUYỆT ĐỐI FILE
-                directory: parentDir.replace(/\\/g, '/')      // TRẢ VỀ THƯ MỤC CHỨA FILE
+                absolute_path: filePath.replace(/\\/g, '/'),
+                directory: parentDir.replace(/\\/g, '/')
             };
         }
     },
@@ -596,7 +531,6 @@ export default {
             required: ["query"]
         },
         handler: async (args) => {
-            // SỬA ĐỔI: Sử dụng activeWorkspace hoặc process.cwd() làm thư mục mặc định tìm kiếm
             const defaultBase = globalThis.activeWorkspace || process.cwd();
             const basePath = args.base_path ? resolveUserPath(args.base_path) : defaultBase;
             const query = args.query;
@@ -615,6 +549,7 @@ export default {
             };
         }
     },
+
     "read_image_asset": {
         description: "Đọc nội dung của một tệp tin hình ảnh cục bộ (PNG, JPG, JPEG, WEBP) từ Workspace dự án, mã hóa sang định dạng Base64 giúp AI có khả năng xem và đối chiếu thiết kế giao diện trực quan.",
         parameters: {
@@ -651,4 +586,38 @@ export default {
             }
         }
     },
+
+    "change_active_workspace": {
+        description: "Thay đổi thư mục làm việc hiện hành tuyệt đối (Active Workspace) của Agent. Chỉ sử dụng khi bạn thực sự cần chuyển đổi hẳn ngữ cảnh làm việc sang một dự án khác hoặc thư mục con/cha khác. Thư mục mục tiêu phải hợp lệ, tồn tại thực tế và nằm ngoài vùng cấm bảo mật.",
+        parameters: {
+            type: "object",
+            properties: {
+                directory_path: {
+                    type: "string",
+                    description: "Đường dẫn tuyệt đối hoặc tương đối đến thư mục mục tiêu muốn chuyển sang làm Workspace chính. Hãy sử dụng '/' làm dấu ngăn cách đường dẫn."
+                }
+            },
+            required: ["directory_path"]
+        },
+        handler: async (args) => {
+            const targetPath = resolveUserPath(args.directory_path);
+            if (!fs.existsSync(targetPath)) {
+                throw new Error(`Thư mục không tồn tại: ${aiSafePath(targetPath)}`);
+            }
+
+            const stat = fs.statSync(targetPath);
+            if (!stat.isDirectory()) {
+                throw new Error(`Đường dẫn được cung cấp không phải là một thư mục: ${aiSafePath(targetPath)}`);
+            }
+
+            globalThis.activeWorkspace = aiSafePath(targetPath);
+            console.log(chalk.green(`\n[Workspace-Switch] 📂 Đã chuyển activeWorkspace sang: ${globalThis.activeWorkspace}`));
+
+            return {
+                status: "success",
+                message: `Đã thay đổi thư mục làm việc hiện tại thành công sang: ${globalThis.activeWorkspace}`,
+                active_workspace: globalThis.activeWorkspace
+            };
+        }
+    }
 };

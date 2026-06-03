@@ -3,7 +3,7 @@ import chalk from 'chalk';
 
 export default {
     "ask_questions_if_underspecified": {
-        description: "Hỏi ý kiến người dùng khi gặp bối cảnh hoặc yêu cầu chưa rõ ràng (underspecified). Bắt buộc sử dụng công cụ này khi có nhiều phương án lựa chọn mà bạn không chắc chắn. Kết quả trả về sẽ là một chuỗi JSON chứa đầy đủ câu trả lời của người dùng cho từng câu hỏi để bạn suy nghĩ tiếp.Lưu ý: Tham số 'questions' phải là một chuỗi JSON hợp lệ (JSON String) và BẮT BUỘC được bọc trong thẻ <![CDATA[ ... ]]> khi gọi qua XML.",
+        description: "Hỏi ý kiến người dùng khi bối cảnh hoặc yêu cầu của tác vụ chưa rõ ràng (underspecified). Bắt buộc sử dụng công cụ này khi có nhiều phương án lựa chọn mà bạn không chắc chắn. Kết quả trả về sẽ là một chuỗi JSON chứa đầy đủ câu trả lời của người dùng cho từng câu hỏi để bạn phân tích và suy nghĩ tiếp.",
         parameters: {
             type: "object",
             properties: {
@@ -57,7 +57,7 @@ export default {
         handler: async (args) => {
             let { explanation, questions } = args;
 
-            // Đảm bảo questions được parse thành Array chuẩn nếu bị bọc trong chuỗi CDATA
+            // Phòng ngừa trường hợp mô hình truyền nhầm chuỗi JSON String thay vì Array
             if (typeof questions === 'string') {
                 try {
                     questions = JSON.parse(questions);

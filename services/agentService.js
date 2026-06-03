@@ -41,7 +41,7 @@ export function updateActiveWorkspaceFromContext(message) {
     const msg = message.toLowerCase().trim();
 
     // 1. Kiểm tra nếu đề cập rõ ràng đến Desktop hoặc màn hình chính
-    if (msg.includes('desktop') || msg.includes('màn hình chính')) {
+    if (msg.includes('màn hình chính')) {
         const target = path.join(os.homedir(), 'Desktop').replace(/\\/g, '/');
         globalThis.activeWorkspace = target;
         console.log(chalk.cyan(`[Context-Switch] 📂 Đã chuyển Workspace mặc định sang Desktop: ${globalThis.activeWorkspace}`));
@@ -62,22 +62,25 @@ export function updateActiveWorkspaceFromContext(message) {
     }
 
     // 3. Hỗ trợ các cụm từ chỉ thư mục/folder (VD: "trong thư mục backend", "folder app")
-    const folderMatch = message.match(/(?:thư mục|folder|thư mục dự án|dự án)\s+([a-zA-Z0-9_\-\/\\:\.]+)/i);
-    if (folderMatch) {
-        const folderName = folderMatch[1].trim();
-        if (path.isAbsolute(folderName)) {
-            globalThis.activeWorkspace = folderName.replace(/\\/g, '/');
-            console.log(chalk.cyan(`[Context-Switch] 📂 Chuyển Workspace mặc định sang thư mục: ${globalThis.activeWorkspace}`));
-            return;
-        }
+    // const folderMatch = message.match(/(?:thư mục|folder|thư mục dự án|dự án)\s+([a-zA-Z0-9_\-\/\\:\.]+)/i);
+    // if (folderMatch) {
+    //     const folderName = folderMatch[1].trim();
+    //     if (path.isAbsolute(folderName)) {
+    //         globalThis.activeWorkspace = folderName.replace(/\\/g, '/');
+    //         console.log(chalk.cyan(`[Context-Switch] 📂 Chuyển Workspace mặc định sang thư mục: ${globalThis.activeWorkspace}`));
+    //         return;
+    //     }
 
-        const candidatePath = path.resolve(process.cwd(), folderName).replace(/\\/g, '/');
-        globalThis.activeWorkspace = candidatePath;
-        console.log(chalk.cyan(`[Context-Switch] 📂 Chuyển Workspace mặc định sang thư mục chỉ định: ${globalThis.activeWorkspace}`));
-    }
+    //     const candidatePath = path.resolve(process.cwd(), folderName).replace(/\\/g, '/');
+    //     globalThis.activeWorkspace = candidatePath;
+    //     console.log(chalk.cyan(`[Context-Switch] 📂 Chuyển Workspace mặc định sang thư mục chỉ định: ${globalThis.activeWorkspace}`));
+    // }
 }
 
 
+/**
+ * Hàm điều phối trung tâm thực hiện một lượt xử lý (turn) của Agent.
+ */
 /**
  * Hàm điều phối trung tâm thực hiện một lượt xử lý (turn) của Agent.
  */
@@ -108,6 +111,8 @@ export async function executeAgentTurn({
     // 🧠 SERVER-SIDE LOGS & STEPS TRACKER (FluxMem State Recovery)
     // =================================================================
     const serverSteps = [];
+    const serverTimeline = []; // Khởi tạo mảng timeline đồng bộ để bảo toàn dữ liệu khi reload
+
     const wrappedOnLog = (text) => {
         if (onLog) onLog(text);
         const last = serverSteps[serverSteps.length - 1];
@@ -119,6 +124,49 @@ export async function executeAgentTurn({
                 type: 'thinking',
                 title: 'Thinking process',
                 input: text
+            });
+        }
+
+        // Đồng bộ hóa trạng thái suy nghĩ vào serverTimeline
+        const lastItem = serverTimeline[serverTimeline.length - 1];
+        if (lastItem && lastItem.type === 'steps' && lastItem.steps) {
+            const lastTStep = lastItem.steps[lastItem.steps.length - 1];
+            if (lastTStep && lastTStep.type === 'thinking') {
+                lastTStep.input = (lastTStep.input || '') + '\n' + text;
+            } else {
+                lastItem.steps.push({
+                    id: Math.random().toString(36).substring(2, 9),
+                    type: 'thinking',
+                    title: 'Thinking process',
+                    input: text
+                });
+            }
+        } else {
+            serverTimeline.push({
+                id: 'steps-' + Math.random().toString(36).substring(2, 9),
+                type: 'steps',
+                steps: [{
+                    id: Math.random().toString(36).substring(2, 9),
+                    type: 'thinking',
+                    title: 'Thinking process',
+                    input: text
+                }]
+            });
+        }
+    };
+
+    const wrappedOnChunk = (chunk) => {
+        if (onChunk) onChunk(chunk);
+
+        // Đồng bộ hóa văn bản trả về vào serverTimeline
+        const lastItem = serverTimeline[serverTimeline.length - 1];
+        if (lastItem && lastItem.type === 'text') {
+            lastItem.content = (lastItem.content || '') + chunk;
+        } else {
+            serverTimeline.push({
+                id: 'text-' + Math.random().toString(36).substring(2, 9),
+                type: 'text',
+                content: chunk
             });
         }
     };
@@ -196,69 +244,85 @@ export async function executeAgentTurn({
             messages: enrichedMessages
         }) : null;
 
+        // Định nghĩa hàm wrappedExecuteSkill dùng chung cho cả chatWithFailover và WorkflowEngine
+        const wrappedExecuteSkill = async (funcName, args) => {
+            const stepId = 'step_' + Math.random().toString(36).substring(2, 9);
+
+            if (onAction) onAction(funcName, args, stepId);
+
+            let stepType = 'generic';
+            let cleanTitle = `Execute ${funcName}`;
+            const tool = funcName;
+            if (tool.includes('bash') || tool.includes('command') || tool.includes('run') || tool.includes('terminal')) {
+                stepType = 'terminal';
+                cleanTitle = `Terminal ${args?.command || 'Command'}`;
+            } else if (tool.includes('read') || tool.includes('view') || tool.includes('file') || tool.includes('list_directory') || tool.includes('dir')) {
+                stepType = 'read_file';
+                cleanTitle = `List Directory ${args?.path || 'folder'}`;
+            } else if (tool.includes('search') || tool.includes('grep') || tool.includes('find')) {
+                stepType = 'search';
+                cleanTitle = `Search ${args?.query || args?.pattern || 'query'}`;
+            }
+
+            const currentStep = {
+                id: stepId,
+                type: stepType,
+                title: cleanTitle,
+                input: args ? (args.command || args.file_path || args.query || args.url || args.pattern || JSON.stringify(args)) : ''
+            };
+            serverSteps.push(currentStep);
+
+            // Đồng bộ bước thực thi này sang serverTimeline
+            let timelineStep = { ...currentStep };
+            const lastItem = serverTimeline[serverTimeline.length - 1];
+            if (lastItem && lastItem.type === 'steps' && lastItem.steps) {
+                lastItem.steps.push(timelineStep);
+            } else {
+                serverTimeline.push({
+                    id: 'steps-' + Math.random().toString(36).substring(2, 9),
+                    type: 'steps',
+                    steps: [timelineStep]
+                });
+            }
+
+            const toolSpanId = traceId ? tracer.startSpan(traceId, funcName, 'tool', llmSpanId, args) : null;
+
+            try {
+                const toolResult = await executeSkillForProvider(funcName, args, resolvedProvider, wrappedOnLog);
+
+                // Ghi nhận Output vào cả mảng steps phẳng và mảng timeline
+                currentStep.output = toolResult;
+                timelineStep.output = toolResult;
+
+                if (onToolOutput) {
+                    onToolOutput(toolResult, stepId);
+                }
+
+                if (toolSpanId) {
+                    try {
+                        const parsed = JSON.parse(toolResult);
+                        tracer.endSpan(toolSpanId, parsed.status === 'success' ? 'completed' : 'failed', parsed);
+                    } catch (e) {
+                        tracer.endSpan(toolSpanId, 'completed', { text: String(toolResult).substring(0, 1000) });
+                    }
+                }
+                return toolResult;
+            } catch (toolErr) {
+                if (toolSpanId) tracer.endSpan(toolSpanId, 'failed', null, toolErr.message);
+                throw toolErr;
+            }
+        };
+
         const result = await chatWithFailover({
             messages: enrichedMessages,
             mode: runMode,
             skillRegistry: filteredSkills,
             systemPrompt,
             maxSteps: 25,
-            onStreamChunk: onChunk,
+            onStreamChunk: wrappedOnChunk, // Đồng bộ lưu chunk văn bản
             image,
-            headless, // THÊM DÒNG NÀY: Đưa vào failover option để nạp sang provider
-            executeSkill: async (funcName, args) => {
-                const stepId = 'step_' + Math.random().toString(36).substring(2, 9); // Tạo ID định danh duy nhất cho step này
-
-                if (onAction) onAction(funcName, args, stepId); // Truyền kèm stepId
-
-                // Tự động phân loại và ghi nhận Step kỹ thuật tương ứng trên Server
-                let stepType = 'generic';
-                let cleanTitle = `Execute ${funcName}`;
-                const tool = funcName;
-                if (tool.includes('bash') || tool.includes('command') || tool.includes('run') || tool.includes('terminal')) {
-                    stepType = 'terminal';
-                    cleanTitle = `Terminal ${args?.command || 'Command'}`;
-                } else if (tool.includes('read') || tool.includes('view') || tool.includes('file') || tool.includes('list_directory') || tool.includes('dir')) {
-                    stepType = 'read_file';
-                    cleanTitle = `List Directory ${args?.path || 'folder'}`;
-                } else if (tool.includes('search') || tool.includes('grep') || tool.includes('find')) {
-                    stepType = 'search';
-                    cleanTitle = `Search ${args?.query || args?.pattern || 'query'}`;
-                }
-
-                const currentStep = {
-                    id: stepId, // Sử dụng stepId thống nhất
-                    type: stepType,
-                    title: cleanTitle,
-                    input: args ? (args.command || args.file_path || args.query || args.url || args.pattern || JSON.stringify(args)) : ''
-                };
-                serverSteps.push(currentStep);
-
-                const toolSpanId = traceId ? tracer.startSpan(traceId, funcName, 'tool', llmSpanId, args) : null;
-
-                try {
-                    const toolResult = await executeSkillForProvider(funcName, args, resolvedProvider, wrappedOnLog);
-
-                    // Ghi nhận Output vào Step
-                    currentStep.output = toolResult;
-
-                    if (onToolOutput) {
-                        onToolOutput(toolResult, stepId); // Truyền kèm stepId khi trả kết quả về
-                    }
-
-                    if (toolSpanId) {
-                        try {
-                            const parsed = JSON.parse(toolResult);
-                            tracer.endSpan(toolSpanId, parsed.status === 'success' ? 'completed' : 'failed', parsed);
-                        } catch {
-                            tracer.endSpan(toolSpanId, 'completed', { text: String(toolResult).substring(0, 1000) });
-                        }
-                    }
-                    return toolResult;
-                } catch (toolErr) {
-                    if (toolSpanId) tracer.endSpan(toolSpanId, 'failed', null, toolErr.message);
-                    throw toolErr;
-                }
-            }
+            headless,
+            executeSkill: wrappedExecuteSkill // Gọi qua hàm được wrap
         });
 
         if (llmSpanId) {
@@ -266,20 +330,36 @@ export async function executeAgentTurn({
         }
         if (traceId) tracer.completeTrace(traceId, 'completed');
 
+        // Xử lý kịch bản handover cho WorkflowEngine
         if (result === "__HANDOVER_TO_ENGINE__" || (typeof result === 'string' && result.includes("__HANDOVER_TO_ENGINE__"))) {
             if (onSystem) onSystem("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
             if (onLog) onLog("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
 
-            const engine = new WorkflowEngine(resolvedProvider, SKILL_REGISTRY, (fn, args) => executeSkillForProvider(fn, args, resolvedProvider, onLog), message);
+            // Truyền wrappedExecuteSkill vào Engine để lưu vết steps/timeline trong suốt quá trình chạy pipeline
+            const engine = new WorkflowEngine(resolvedProvider, SKILL_REGISTRY, wrappedExecuteSkill, message);
             await engine.run();
+
+            // Đính kèm kết quả pipeline vào lịch sử trước khi lưu
+            currentHistory.push({
+                role: 'assistant',
+                content: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.",
+                steps: serverSteps,
+                timeline: serverTimeline
+            });
 
             const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
             return { type: 'handover', history: currentHistory, sessionFile: savedFile };
         }
 
         const cleanResponse = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-        // Đồng bộ đính kèm toàn bộ mảng steps đã thu thập trên Server vào lịch sử
-        currentHistory.push({ role: 'assistant', content: cleanResponse, steps: serverSteps });
+
+        // Đồng bộ đính kèm đầy đủ steps và cấu trúc timeline nguyên bản
+        currentHistory.push({
+            role: 'assistant',
+            content: cleanResponse,
+            steps: serverSteps,
+            timeline: serverTimeline
+        });
 
         const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
 
@@ -292,7 +372,6 @@ export async function executeAgentTurn({
         if (traceId) tracer.completeTrace(traceId, 'failed');
         throw err;
     } finally {
-        // KHẮC PHỤC LỖI: Chỉ hoàn trả trạng thái askPermission nguyên bản khi toàn bộ turn kết thúc (bao gồm cả engine)
         global.askPermission = originalAskPermission;
         global.logToWebChat = null;
     }
@@ -341,7 +420,16 @@ export function getCompiledSystemPrompt() {
         systemPrompt = fs.readFileSync(promptPath, 'utf8');
     }
 
-    const systemContext = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n\n`;
+    // Lấy thư mục hoạt động hiện hành (ưu tiên activeWorkspace động, fallback về process.cwd)
+    const activeWS = globalThis.activeWorkspace || process.cwd().replace(/\\/g, '/');
+
+    // Bổ sung thêm dòng thông tin thư mục hiện hành vào Ngữ cảnh hệ thống gửi cho AI
+    const systemContext = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]
+- OS Platform: ${process.platform}
+- OS Arch: ${process.arch}
+- Current Working Directory (Thư mục hiện hành tuyệt đối): ${activeWS}
+
+`;
     systemPrompt = systemContext + systemPrompt;
 
     if (persistentGoal) {

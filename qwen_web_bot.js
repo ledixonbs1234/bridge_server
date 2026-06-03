@@ -42,7 +42,7 @@ class QwenWebBot {
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
             headless: headless, // SỬA: Gán biến động
-            viewport: { width: 1280, height: 720 },
+            viewport: { width: 1280, height: 1200 },
             args: ['--disable-blink-features=AutomationControlled']
         });
 
@@ -327,12 +327,12 @@ class QwenWebBot {
                         if (listHolder) {
                             if (targetIsThinking) {
                                 // Tìm option có thuộc tính title là "Think" hoặc "Thinking"
-                                targetItem = listHolder.querySelector('[title="Think"]') || 
-                                             listHolder.querySelector('[title="Thinking"]');
+                                targetItem = listHolder.querySelector('[title="Think"]') ||
+                                    listHolder.querySelector('[title="Thinking"]');
                             } else {
                                 // Tìm option có thuộc tính title là "Fast" (hoặc "Auto" nếu muốn dự phòng)
-                                targetItem = listHolder.querySelector('[title="Fast"]') || 
-                                             listHolder.querySelector('[title="Auto"]');
+                                targetItem = listHolder.querySelector('[title="Fast"]') ||
+                                    listHolder.querySelector('[title="Auto"]');
                             }
                         }
 
@@ -343,7 +343,7 @@ class QwenWebBot {
                                 if (item === modelSelectorBtn) return false;
                                 const title = item.getAttribute('title')?.trim().toLowerCase();
                                 const text = item.innerText?.trim().toLowerCase();
-                                
+
                                 if (targetIsThinking) {
                                     return title === 'think' || title === 'thinking' || text === 'think' || text === 'thinking';
                                 } else {

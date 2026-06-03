@@ -49,7 +49,8 @@ export const SKILL_GROUPS = {
         'google_search_and_summarize',
         'parallel_web_summarizer',
         'capture_system_screenshot',
-        'ask_questions_if_underspecified' // Đăng ký bổ sung
+        'ask_questions_if_underspecified',
+        'change_active_workspace'
     ],
     [SKILL_CATEGORIES.CODE]: [
         'read_file',
@@ -71,7 +72,8 @@ export const SKILL_GROUPS = {
         'google_search_and_summarize',
         'parallel_web_summarizer',
         'capture_system_screenshot',
-        'ask_questions_if_underspecified' // Đăng ký bổ sung
+        'ask_questions_if_underspecified',
+        'change_active_workspace'
     ],
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
@@ -90,7 +92,8 @@ export const SKILL_GROUPS = {
         'stop_terminal_process',
         'google_search',
         'google_search_and_summarize',
-        'ask_questions_if_underspecified' // Đăng ký bổ sung
+        'ask_questions_if_underspecified',
+        'change_active_workspace'
     ],
     [SKILL_CATEGORIES.COMPLEX]: null
 };
