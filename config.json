@@ -71,7 +71,7 @@
     "enabled": true,
     "botToken": "8797925608:AAFrPzWxJmTcXsJuu34eWkr_ZLjbTF4dWWI",
     "chatId": "5426966814",
-    "notifyOnPermission": true,
+    "notifyOnPermission": false,
     "notifyOnPipelineSuccess": true,
     "notifyOnPipelineFailure": true,
     "notifyOnPipelineStart": true

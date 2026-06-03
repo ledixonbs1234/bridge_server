@@ -85,10 +85,6 @@ async function bootstrap() {
         await loadSkills();
         setupHotReload();
 
-        // 🚀 KÍCH HOẠT PHƯƠNG ÁN 1: Tiến hành nạp Vector Cache cho danh sách kỹ năng chuyên dụng
-        const { cacheSkillEmbeddings } = await import('./services/agentService.js');
-        cacheSkillEmbeddings(SKILL_REGISTRY).catch(() => { });
-
         // 3. Start server
         app.listen(PORT, async () => {
             console.log(chalk.green(`\n🚀 Bridge Server Agent đang chạy tại http://localhost:${PORT}`));
