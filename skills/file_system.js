@@ -3,6 +3,7 @@ import path from 'path';
 import os from 'os';
 import boxen from 'boxen';
 import chalk from 'chalk';
+import { execSync } from 'child_process';
 import { highlight } from 'cli-highlight';
 import { validatePath, printPathWarning } from './validators/path_guard.js';
 import { validateSyntax } from './validators/syntax_validator.js';
@@ -22,62 +23,182 @@ function aiSafePath(inputPath) {
 }
 
 /**
- * Convert input path từ AI và kiểm duyệt bảo mật bằng Path Guard
+ * Hàm dịch ngược đường dẫn từ Sandbox về Thư mục gốc để "đánh lừa" AI không nhận ra cơ chế ảo hóa
+ */
+function aiVirtualPath(p) {
+    if (!p || typeof p !== 'string') return p;
+    if (globalThis.isIsolatedWorkspace && globalThis.originalWorkspace) {
+        const normalizedP = p.replace(/\\/g, '/');
+        const normalizedIsolated = globalThis.activeWorkspace.replace(/\\/g, '/');
+        const normalizedOriginal = globalThis.originalWorkspace.replace(/\\/g, '/');
+        if (normalizedP.startsWith(normalizedIsolated)) {
+            return normalizedP.replace(normalizedIsolated, normalizedOriginal);
+        }
+    }
+    return p;
+}
+
+/**
+ * Tự động khởi tạo và chuyển đổi sang Git Worktree cách ly an toàn nếu thư mục hoạt động thuộc Git Repository
+ */
+export async function ensureGitWorktreeSandbox(customBranchName = null) {
+    if (globalThis.isIsolatedWorkspace) {
+        return globalThis.activeWorkspace;
+    }
+
+    const currentWS = globalThis.activeWorkspace || process.cwd();
+    let isGit = false;
+    let repoRoot = currentWS;
+
+    try {
+        const isInside = execSync('git rev-parse --is-inside-work-tree', {
+            cwd: currentWS,
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+
+        if (isInside === 'true') {
+            isGit = true;
+            repoRoot = execSync('git rev-parse --show-toplevel', {
+                cwd: currentWS,
+                encoding: 'utf8',
+                stdio: ['ignore', 'pipe', 'ignore']
+            }).trim();
+        }
+    } catch (e) {
+        // Không phải hoặc chưa khởi tạo Git repo, bỏ qua cách ly
+        return currentWS;
+    }
+
+    if (!isGit) {
+        return currentWS;
+    }
+
+    // Hỏi ý kiến người dùng trước khi tạo Git Worktree (nếu chưa bật Auto-Approve)
+    if (!global.isAutoApproveAll) {
+        const terminalLogger = global.originalConsoleLog || console.log;
+        terminalLogger(boxen(
+            `${chalk.bold.yellow('🛡️ BẢO VỆ MÃ NGUỒN (SAFE WORKSPACE)')}\n\n` +
+            `Hệ thống phát hiện thư mục hiện tại thuộc một Git Repository:\n` +
+            `${chalk.cyan(repoRoot)}\n\n` +
+            `Để tránh rủi ro làm hỏng mã nguồn gốc, ứng dụng đề xuất tự động khởi tạo\n` +
+            `một ${chalk.bold.green('Git Worktree')} độc lập (nhánh mới) chạy song song.\n` +
+            `Mọi thay đổi của AI sẽ chỉ tác động lên không gian cát này.`,
+            { padding: 1, borderColor: 'yellow', borderStyle: 'round' }
+        ));
+
+        if (typeof global.logToWebChat === 'function') {
+            global.logToWebChat(JSON.stringify({
+                type: 'APPROVAL_REQUEST',
+                title: '🛡️ ĐỀ XUẤT CÁCH LY WORKSPACE (GIT WORKTREE)',
+                details: {
+                    file_path: repoRoot,
+                    range: 'Tạo Git Worktree cách ly',
+                    functionality: 'Cô lập không gian làm việc của AI trên nhánh mới'
+                }
+            }));
+        }
+
+        const answer = await global.askPermission(
+            chalk.bold.greenBright(`👉 Bạn có đồng ý chuyển sang chế độ Git Worktree an toàn? [y/a/n] : `)
+        );
+
+        if (answer === 'a') {
+            global.isAutoApproveAll = true;
+        } else if (answer !== 'y') {
+            console.log(chalk.yellow(`⚠️ Cảnh báo: Bạn đã từ chối sử dụng Git Worktree. AI sẽ ghi đè trực tiếp lên thư mục làm việc hiện tại.`));
+            return currentWS;
+        }
+    }
+
+    try {
+        console.log(chalk.cyan(`\n[Sandbox] Đang chuẩn bị Git Worktree độc lập...`));
+        const timestamp = Date.now();
+        const branchName = customBranchName ? customBranchName.replace(/[^a-zA-Z0-9_-]/g, '_') : `ai-sandbox-${timestamp}`;
+        const parentDir = path.dirname(repoRoot);
+        const repoName = path.basename(repoRoot);
+        const sandboxPath = path.join(parentDir, `${repoName}_sandbox_${timestamp}`).replace(/\\/g, '/');
+
+        if (!fs.existsSync(parentDir)) {
+            fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        console.log(chalk.gray(`> git worktree add "${sandboxPath}" -b ${branchName}`));
+        execSync(`git worktree add "${sandboxPath}" -b ${branchName}`, {
+            cwd: repoRoot,
+            stdio: 'ignore'
+        });
+
+        // Sao chép các tệp cấu hình không được track (nếu có) để AI chạy thử được dự án
+        const gitignoredConfigs = ['.env', '.env.local', '.env.development', '.env.production'];
+        for (const file of gitignoredConfigs) {
+            const srcFile = path.join(repoRoot, file);
+            const destFile = path.join(sandboxPath, file);
+            if (fs.existsSync(srcFile)) {
+                try {
+                    fs.copyFileSync(srcFile, destFile);
+                    console.log(chalk.gray(`[Sandbox] Đã đồng bộ cấu hình: ${file}`));
+                } catch (e) { }
+            }
+        }
+
+        // Cấu hình trạng thái cách ly toàn cục
+        globalThis.originalWorkspace = repoRoot;
+        globalThis.activeWorkspace = sandboxPath;
+        globalThis.isIsolatedWorkspace = true;
+
+        const successMsg =
+            `✨ ĐÃ KHỞI TẠO KHÔNG GIAN LÀM VIỆC AN TOÀN (SANDBOX ACTIVATED)\n` +
+            `• Nhánh Git mới: ${chalk.bold.green(branchName)}\n` +
+            `• Thư mục cách ly: ${chalk.bold.cyan(sandboxPath)}\n\n` +
+            `Mã nguồn gốc của bạn đã được bảo vệ hoàn toàn 100%!`;
+
+        console.log(boxen(successMsg, { padding: 1, borderColor: 'green', borderStyle: 'round' }));
+
+        if (typeof global.logToWebChat === 'function') {
+            global.logToWebChat(`🛡️ [Sandbox] Đã chuyển sang Git Worktree an toàn: ${sandboxPath} (nhánh: ${branchName})`);
+        }
+
+        return sandboxPath;
+    } catch (err) {
+        console.error(chalk.red(`[Sandbox] Không thể khởi tạo Git Worktree: ${err.message}`));
+        console.log(chalk.yellow(`⚠️ Chuyển về chế độ ghi đè trực tiếp lên thư mục gốc.`));
+        return currentWS;
+    }
+}
+
+/**
+ * Convert input path từ AI và kiểm duyệt bảo mật bằng Path Guard, hỗ trợ tự động dịch chuyển đường dẫn sang thư mục sandbox cách ly
  */
 function resolveUserPath(inputPath) {
     if (!inputPath || typeof inputPath !== 'string') {
         throw new Error('Path không hợp lệ');
     }
 
-    const validation = validatePath(inputPath);
+    let targetPath = inputPath;
+
+    // Nếu đang ở trong Workspace cách ly, tự động dịch chuyển đường dẫn tuyệt đối của Workspace gốc sang Workspace mới
+    if (globalThis.isIsolatedWorkspace && globalThis.originalWorkspace) {
+        const normalizedInput = path.resolve(inputPath).replace(/\\/g, '/');
+        const normalizedOriginal = path.resolve(globalThis.originalWorkspace).replace(/\\/g, '/');
+        const normalizedIsolated = path.resolve(globalThis.activeWorkspace).replace(/\\/g, '/');
+
+        if (normalizedInput.startsWith(normalizedOriginal)) {
+            const relativePart = normalizedInput.substring(normalizedOriginal.length);
+            targetPath = path.join(normalizedIsolated, relativePart).replace(/\\/g, '/');
+        }
+    }
+
+    const validation = validatePath(targetPath);
     if (!validation.allowed) {
-        printPathWarning(validation, inputPath);
+        printPathWarning(validation, targetPath);
         throw new Error(
-            `PATH_BLOCKED: Path "${inputPath}" bị chặn vì lý do bảo mật. ` +
+            `PATH_BLOCKED: Path "${targetPath}" bị chặn vì lý do bảo mật. ` +
             `Lý do: ${validation.reason}. ` +
             `Vui lòng sử dụng đường dẫn trong các thư mục được phép.`
         );
     }
     return validation.resolved;
-}
-
-/**
- * Helper dùng chung để thực hiện thay thế dòng an toàn (hỗ trợ cả Append)
- */
-function performLineReplacement(content, replaceString, startLine, endLine) {
-    const isCRLF = content.includes('\r\n');
-    const lineEnding = isCRLF ? '\r\n' : '\n';
-    const lines = content.split(/\r?\n/);
-    const totalLines = lines.length;
-
-    const start = Math.max(1, startLine) - 1;
-    const isAppend = (start === totalLines);
-    const end = isAppend ? start : Math.min(totalLines - 1, endLine - 1);
-
-    if (start > end || start > totalLines) {
-        throw new Error(`Khoảng dòng không hợp lệ! File hiện tại có ${totalLines} dòng.`);
-    }
-
-    let newLines = replaceString ? replaceString.split(/\r?\n/) : [];
-
-    newLines = newLines.map((line, idx) => {
-        const match = line.match(/^(\d+)\s*\|\s(.*)$/);
-        if (match) {
-            const lineNum = parseInt(match[1], 10);
-            if (Math.abs(lineNum - (startLine + idx)) <= 2) {
-                return match[2];
-            }
-        }
-        return line;
-    });
-
-    if (isAppend) {
-        lines.splice(start, 0, ...newLines);
-    } else {
-        lines.splice(start, end - start + 1, ...newLines);
-    }
-
-    return lines.join(lineEnding);
 }
 
 function searchFilesRecursive(dir, query, maxResults = 40, currentDepth = 0, maxDepth = 4) {
@@ -150,6 +271,24 @@ async function applyReviewSuggestion({ originalCode, issues, suggestion, filePat
 }
 
 export default {
+    "create_isolated_workspace": {
+        description: "[SAFE MODE - GIT WORKTREE] Khởi tạo không gian làm việc an toàn (Sandbox) bằng cách tạo Git Worktree độc lập trên nhánh mới. Bắt đầu từ đây, mọi thay đổi và lệnh chạy thử sẽ hoàn toàn được cách ly nhằm bảo vệ mã nguồn gốc khỏi bị hư hỏng.",
+        parameters: {
+            type: "object",
+            properties: {
+                branch_name: { type: "string", description: "Tên nhánh tùy chọn. Nếu không truyền, hệ thống tự động sinh tên nhánh dạng ai-sandbox-<timestamp>." }
+            }
+        },
+        handler: async (args) => {
+            const workspace = await ensureGitWorktreeSandbox(args.branch_name);
+            return {
+                status: "success",
+                message: "Đã kích hoạt chế độ cách ly Workspace bằng Git Worktree thành công.",
+                active_workspace: aiVirtualPath(workspace)
+            };
+        }
+    },
+
     "list_directory": {
         description: "Lấy danh sách các tệp và thư mục trong một đường dẫn cụ thể (hỗ trợ đệ quy tối đa 3 tầng). Dùng để xem máy tính đang có gì.",
         parameters: {
@@ -182,7 +321,7 @@ export default {
                     const item = {
                         name: entry.name,
                         type: entry.isDirectory() ? 'directory' : 'file',
-                        path: aiSafePath(fullPath)
+                        path: aiVirtualPath(aiSafePath(fullPath))
                     };
 
                     if (entry.isDirectory() && currentDepth < maxDepth) {
@@ -196,7 +335,7 @@ export default {
                 return result;
             };
 
-            return { path: aiSafePath(targetPath), files: getFilesRecursive(targetPath, 1) };
+            return { path: aiVirtualPath(aiSafePath(targetPath)), files: getFilesRecursive(targetPath, 1) };
         }
     },
 
@@ -215,6 +354,9 @@ export default {
             required: ["file_path", "start_line", "end_line", "replace_string"]
         },
         handler: async (args) => {
+            // Tự động kích hoạt Git Worktree cách ly trước khi thực hiện thay đổi file
+            await ensureGitWorktreeSandbox();
+
             const filePath = resolveUserPath(args.file_path);
             if (!fs.existsSync(filePath)) {
                 throw new Error(`File không tồn tại: ${aiSafePath(filePath)}`);
@@ -276,7 +418,7 @@ export default {
                     return {
                         status: "error",
                         error_message: `Syntax Error sau khi thay thế: ${syntaxResult.error}`,
-                        file: aiSafePath(filePath),
+                        file: aiVirtualPath(aiSafePath(filePath)),
                         rolled_back: true
                     };
                 }
@@ -314,7 +456,7 @@ export default {
                             status: "error",
                             error_message: `Logic Error: ${review.issues.join(' | ')}`,
                             suggestion: review.suggestion,
-                            file: aiSafePath(filePath),
+                            file: aiVirtualPath(aiSafePath(filePath)),
                             rolled_back: true
                         };
                     }
@@ -331,7 +473,7 @@ export default {
                     presentApprovalRequest(
                         '⚠️ YÊU CẦU SỬA CODE',
                         {
-                            file_path: args.file_path,
+                            file_path: aiVirtualPath(args.file_path),
                             range: `${args.start_line} đến ${args.end_line}`,
                             functionality: 'Thay thế/Sửa đổi cấu trúc tệp tin'
                         },
@@ -348,9 +490,9 @@ export default {
                 return {
                     status: "success",
                     message: `Đã thay thế an toàn từ dòng ${args.start_line} đến ${args.end_line} (sau ${attempt} lần thử)`,
-                    file: aiSafePath(filePath),
-                    absolute_path: filePath.replace(/\\/g, '/'),
-                    directory: path.dirname(filePath).replace(/\\/g, '/'),
+                    file: aiVirtualPath(aiSafePath(filePath)),
+                    absolute_path: aiVirtualPath(filePath.replace(/\\/g, '/')),
+                    directory: aiVirtualPath(path.dirname(filePath).replace(/\\/g, '/')),
                     validations_passed: {
                         syntax: true,
                         logic_review: !args.skip_logic_review,
@@ -380,7 +522,7 @@ export default {
             const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`);
 
             return {
-                file: aiSafePath(filePath),
+                file: aiVirtualPath(aiSafePath(filePath)),
                 total_lines: lines.length,
                 content: numberedLines.join('\n')
             };
@@ -407,7 +549,7 @@ export default {
                     const filePath = resolveUserPath(inputPath);
                     if (!fs.existsSync(filePath)) {
                         results.push({
-                            file: aiSafePath(filePath),
+                            file: aiVirtualPath(aiSafePath(filePath)),
                             status: "error",
                             error_message: "File không tồn tại"
                         });
@@ -417,14 +559,14 @@ export default {
                     const lines = content.split(/\r?\n/);
                     const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`);
                     results.push({
-                        file: aiSafePath(filePath),
+                        file: aiVirtualPath(aiSafePath(filePath)),
                         status: "success",
                         total_lines: lines.length,
                         content: numberedLines.join('\n')
                     });
                 } catch (e) {
                     results.push({
-                        file: inputPath,
+                        file: aiVirtualPath(inputPath),
                         status: "error",
                         error_message: e.message
                     });
@@ -458,7 +600,7 @@ export default {
             const numberedLines = lines.slice(start, end).map((line, idx) => `${start + idx + 1} | ${line}`);
 
             return {
-                file: aiSafePath(filePath),
+                file: aiVirtualPath(aiSafePath(filePath)),
                 total_lines_in_file: lines.length,
                 showing_lines: `${start + 1} to ${end}`,
                 content: numberedLines.join('\n')
@@ -478,6 +620,9 @@ export default {
             required: ["file_path"]
         },
         handler: async (args) => {
+            // Tự động kích hoạt Git Worktree cách ly trước khi thực hiện thay đổi file
+            await ensureGitWorktreeSandbox();
+
             const filePath = resolveUserPath(args.file_path);
 
             let fileContent = "";
@@ -486,14 +631,14 @@ export default {
             } else if (args.content !== undefined) {
                 fileContent = args.content;
             } else {
-                throw new Error("Thiếu tham số 'content' hoặc 'content_base64'.");
+                throw new Error("Thiếu tham số 'content' || 'content_base64'.");
             }
 
             if (!global.isAutoApproveAll) {
                 presentApprovalRequest(
                     '⚠️ YÊU CẦU TẠO / GHI ĐÈ TOÀN BỘ FILE',
                     {
-                        file_path: args.file_path,
+                        file_path: aiVirtualPath(args.file_path),
                         range: 'Toàn bộ file (Ghi mới hoặc ghi đè)',
                         functionality: 'Tạo hoặc ghi đè toàn bộ tệp tin nguồn'
                     },
@@ -513,9 +658,9 @@ export default {
             fs.writeFileSync(filePath, fileContent, 'utf8');
             return {
                 message: `Đã ghi file thành công`,
-                file: aiSafePath(filePath),
-                absolute_path: filePath.replace(/\\/g, '/'),
-                directory: parentDir.replace(/\\/g, '/')
+                file: aiVirtualPath(aiSafePath(filePath)),
+                absolute_path: aiVirtualPath(filePath.replace(/\\/g, '/')),
+                directory: aiVirtualPath(parentDir.replace(/\\/g, '/'))
             };
         }
     },
@@ -541,11 +686,11 @@ export default {
 
             const matchedFiles = searchFilesRecursive(basePath, query);
             return {
-                base_path: aiSafePath(basePath),
-                absolute_base_path: basePath.replace(/\\/g, '/'),
+                base_path: aiVirtualPath(aiSafePath(basePath)),
+                absolute_base_path: aiVirtualPath(basePath.replace(/\\/g, '/')),
                 query: query,
                 matches_found: matchedFiles.length,
-                files: matchedFiles
+                files: matchedFiles.map(f => aiVirtualPath(f))
             };
         }
     },
@@ -576,7 +721,7 @@ export default {
                 const base64Data = fileBuffer.toString('base64');
                 return {
                     status: "success",
-                    file_path: aiSafePath(filePath),
+                    file_path: aiVirtualPath(aiSafePath(filePath)),
                     mime_type: mimeType,
                     image_base64: `data:${mimeType};base64,${base64Data}`,
                     message: "Đã đọc thành công tệp tin hình ảnh. Bạn có thể sử dụng dữ liệu 'image_base64' này để gửi kèm và phục vụ phân tích thị giác."
@@ -616,7 +761,7 @@ export default {
             return {
                 status: "success",
                 message: `Đã thay đổi thư mục làm việc hiện tại thành công sang: ${globalThis.activeWorkspace}`,
-                active_workspace: globalThis.activeWorkspace
+                active_workspace: aiVirtualPath(globalThis.activeWorkspace)
             };
         }
     }
