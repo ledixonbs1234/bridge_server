@@ -13,6 +13,12 @@
       "skillPath": "plugins/ask-questions-if-underspecified/skills/ask-questions-if-underspecified/SKILL.md",
       "computedHash": "49f0e8c2b94fb240ae1e90ea94ff0d1c56d5ca6ed22de5f9b1bfd6e7b71b93b2"
     },
+    "baoyu-youtube-transcript": {
+      "source": "jimliu/baoyu-skills",
+      "sourceType": "github",
+      "skillPath": "skills/baoyu-youtube-transcript/SKILL.md",
+      "computedHash": "e39b39f19d681ef05e3d8e7fc6eabbbc0a9260f4512a5bb51fbb04b1e56c8664"
+    },
     "baseline-ui": {
       "source": "ibelick/ui-skills",
       "sourceType": "github",

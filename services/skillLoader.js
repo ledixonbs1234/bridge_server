@@ -3,12 +3,21 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import yaml from 'js-yaml';
 import chalk from 'chalk';
+import { execSync } from 'child_process'; // Thêm module để kiểm tra môi trường
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
 
 export const SKILL_REGISTRY = {};
+
+// Tự động kiểm tra xem môi trường đã cài đặt bun hay chưa
+let bunX = 'bun';
+try {
+    execSync('bun --version', { stdio: 'ignore' });
+} catch (e) {
+    bunX = 'npx -y bun';
+}
 
 export async function loadSkills() {
     for (const key in SKILL_REGISTRY) {
@@ -67,13 +76,21 @@ export async function loadSkills() {
                         const rawName = yamlData.name || folder;
                         const skillName = rawName.replace(/-/g, '_');
 
+                        // Lấy đường dẫn tuyệt đối của thư mục chứa kỹ năng này
+                        const baseDirAbsolute = path.dirname(skillFilePath).replace(/\\/g, '/');
+
+                        // Tự động thay thế các biến giữ chỗ {baseDir} và ${BUN_X}
+                        const optimizedMarkdownBody = markdownBody
+                            .replace(/\{baseDir\}/g, baseDirAbsolute)
+                            .replace(/\$\{BUN_X\}/g, bunX);
+
                         SKILL_REGISTRY[`workflow_${skillName}`] = {
                             description: `[HƯỚNG DẪN QUY TRÌNH] ${yamlData.description || 'Quy trình thực hiện'}. Gọi hàm này ĐẦU TIÊN (không cần tham số) để đọc sổ tay hướng dẫn trước khi làm nhiệm vụ.`,
                             handler: async () => {
                                 console.log(`\n[Node] 📖 AI đang đọc sổ tay hướng dẫn: \x1b[36m${skillName}\x1b[0m`);
                                 return {
                                     message: "Hãy đọc kỹ hướng dẫn dưới đây và sử dụng execute_terminal_command hoặc các skill khác để thực thi từng bước.",
-                                    workflow_instructions: markdownBody
+                                    workflow_instructions: optimizedMarkdownBody
                                 };
                             }
                         };
