@@ -633,6 +633,34 @@ Chỉ trả lời cực ngắn gọn (1-2 câu).`;
         console.warn(chalk.yellow(`[Critic Agent] Lỗi khi chạy Critic: ${e.message}`));
     }
 }
+/**
+ * Trích xuất ngưỡng lọc bộ nhớ thích ứng động (Dynamic Gating) dựa trên ngữ cảnh tin nhắn
+ */
+function getDynamicGatingThresholds(message) {
+    const msg = (message || "").toLowerCase();
+
+    // Nhóm tác vụ có độ rủi ro cao (Cần bảo vệ nghiêm ngặt)
+    if (msg.match(/(deploy|delete|remove|drop|truncate|overwrite|reset|revert|force|production|prod|accept|sửa|thay thế)/)) {
+        return {
+            minTrustScore: 0.80, // Chỉ chấp nhận các node cực kỳ uy tín và chín muồi
+            minSimilarity: 0.65  // Yêu cầu độ tương đồng cao tránh lấy nhầm bối cảnh khác
+        };
+    }
+
+    // Nhóm tác vụ nghiên cứu, tìm kiếm thông tin (Nới lỏng để AI thoải mái tiếp cận kiến thức rộng)
+    if (msg.match(/(search|find|google|explain|what is|summarize|research|crawl|read|link|giải thích|là gì|tìm kiếm|tin tức)/)) {
+        return {
+            minTrustScore: 0.15, // Chấp nhận cả các trải nghiệm sơ khai hoặc trust score thấp
+            minSimilarity: 0.45  // Nới lỏng độ tương đồng để lấy được nhiều góc nhìn đa dạng
+        };
+    }
+
+    // Mặc định cho các tác vụ phát triển/lập trình tiêu chuẩn
+    return {
+        minTrustScore: 0.40,
+        minSimilarity: 0.55
+    };
+}
 
 export async function recallMemory(lastUserMessage, allMessagesContext = "", onLog) {
     const logger = onLog || global.logToWebChat;
@@ -674,7 +702,7 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
                 const vector = await getOllamaEmbedding(m.situation);
                 if (vector) {
                     m.embedding = JSON.stringify(vector);
-                    // Lưu lại cấu trúc vector vào tệp SQLite-mock của bạn
+                    // Lưu lại cấu trúc vector vào tệp SQLite-mock
                     db.prepare(`UPDATE memories SET embedding = ? WHERE id = ?`).run(m.embedding, m.id);
                 }
             }
@@ -696,12 +724,21 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
                 return { ...m, similarity };
             });
 
-            // 2. LỚP TRẢI NGHIỆM SỰ KIỆN (𝒱_epi) - Ngưỡng tương đồng >= 0.55
+            // 🧬 ĐIỀU CHỈNH NGƯỠNG LỌC ĐỘNG (DYNAMIC GATING)
+            const thresholds = getDynamicGatingThresholds(lastUserMessage);
+            if (logger) {
+                logger(`🧬 [FluxMem I] Dynamic Gating kích hoạt [Ngưỡng Trust: ${thresholds.minTrustScore} | Ngưỡng Similar: ${thresholds.minSimilarity}]`);
+            }
+
+            // 2. LỚP TRẢI NGHIỆM SỰ KIỆN (𝒱_epi) - Ngưỡng động thích ứng
             const relevantEpisodes = scoredMemories.filter(m => {
-                const memoryType = m.type || 'episodic';
+                const memoryType = m.memory_type || m.type || 'episodic';
                 if (memoryType !== 'episodic') return false;
-                const isReliable = (m.trust_score ?? 0.7) > 0.35;
-                const isSimilar = m.similarity >= 0.55;
+
+                // Episodic được nới nhẹ hơn 0.1 so với ngưỡng cơ sở để tận dụng được nhiều kinh nghiệm thực tế
+                const targetTrustThreshold = Math.max(0.1, thresholds.minTrustScore - 0.1);
+                const isReliable = (m.trust_score ?? 0.7) >= targetTrustThreshold;
+                const isSimilar = m.similarity >= thresholds.minSimilarity;
                 return isReliable && isSimilar;
             }).sort((a, b) => b.similarity - a.similarity);
 
@@ -714,12 +751,13 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
                 if (logger) logger(`📖 [FluxMem I] Tìm thấy ${relevantEpisodes.length} node Episodic phù hợp bằng Vector Search.`);
             }
 
-            // 3. LỚP KỸ NĂNG QUY TRÌNH (𝒱_proc) - Ngưỡng tương đồng >= 0.55
+            // 3. LỚP KỸ NĂNG QUY TRÌNH (𝒱_proc) - Ngưỡng động thích ứng (Sửa lỗi kiểm tra type)
             const relevantProcedures = scoredMemories.filter(m => {
-                const memoryType = m.type || 'episodic';
+                const memoryType = m.memory_type || m.type || 'episodic';
                 if (memoryType !== 'procedural') return false;
-                const isMature = (m.trust_score ?? 0.7) > 0.45;
-                const isSimilar = m.similarity >= 0.55;
+
+                const isMature = (m.trust_score ?? 0.7) >= thresholds.minTrustScore;
+                const isSimilar = m.similarity >= thresholds.minSimilarity;
                 return isMature && isSimilar;
             }).sort((a, b) => b.similarity - a.similarity);
 
@@ -738,7 +776,7 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
 
             const searchSpaceLower = searchSpace.toLowerCase();
             const fallbackEpisodes = memories.filter(m => {
-                const memoryType = m.type || 'episodic';
+                const memoryType = m.memory_type || m.type || 'episodic';
                 if (memoryType !== 'episodic') return false;
                 let tags = [];
                 try { tags = JSON.parse(m.tags || '[]'); } catch { }
