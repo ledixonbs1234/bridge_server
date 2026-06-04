@@ -402,23 +402,27 @@ export default {
     },
 
     "git_sandbox_status": {
-        description: "Xem danh sách và trạng thái của tất cả các Git Worktree Sandbox hiện hành.",
+        description: "Xem danh sách và trạng thái của tất cả các Git Worktree Sandbox hiện hành dưới dạng bảng Markdown rút gọn để tối ưu token.",
         handler: async () => {
             const dbModule = await import('../database.js');
             const db = dbModule.default;
             const list = db.prepare(`SELECT * FROM sandboxes`).all() || [];
-            return {
-                sandboxes: list.map(s => ({
-                    taskId: s.task_id,
-                    branch: s.branch,
-                    worktree: aiVirtualPath(s.worktree),
-                    status: s.status,
-                    parentBranch: s.parent_branch,
-                    createdAt: s.created_at
-                })),
-                active_workspace: aiVirtualPath(globalThis.activeWorkspace),
-                is_isolated: globalThis.isIsolatedWorkspace
-            };
+
+            let markdownResult = `### 🛡️ Trạng thái các Git Sandbox\n\n`;
+            markdownResult += `| Task ID | Nhánh Git | Thư mục cách ly | Trạng thái |\n`;
+            markdownResult += `| :--- | :--- | :--- | :--- |\n`;
+
+            if (list.length === 0) {
+                markdownResult += `| - | - | *(Không có sandbox nào đang hoạt động)* | - |\n`;
+            } else {
+                list.forEach(s => {
+                    markdownResult += `| \`${s.task_id}\` | \`${s.branch}\` | \`${aiVirtualPath(s.worktree)}\` | **${s.status.toUpperCase()}** |\n`;
+                });
+            }
+
+            markdownResult += `\n- **Thư mục làm việc hiện tại**: \`${aiVirtualPath(aiSafePath(globalThis.activeWorkspace))}\`\n`;
+            markdownResult += `- **Chế độ cách ly hoạt động**: \`${globalThis.isIsolatedWorkspace ? 'Đang bật (ON)' : 'Đang tắt (OFF)'}\`\n`;
+            return markdownResult;
         }
     },
 
@@ -451,7 +455,7 @@ export default {
     },
 
     "list_directory": {
-        description: "Lấy danh sách các tệp và thư mục trong một đường dẫn cụ thể (hỗ trợ đệ quy tối đa 3 tầng). Dùng để xem máy tính đang có gì.",
+        description: "Lấy danh sách các tệp và thư mục trong một đường dẫn cụ thể (hỗ trợ đệ quy tối đa 3 tầng). Kết quả trả về ở dạng bảng Markdown tối ưu hóa cấu trúc giúp tiết kiệm token.",
         parameters: {
             type: "object",
             properties: {
@@ -496,7 +500,32 @@ export default {
                 return result;
             };
 
-            return { path: aiVirtualPath(aiSafePath(targetPath)), files: getFilesRecursive(targetPath, 1) };
+            const files = getFilesRecursive(targetPath, 1);
+
+            // Tự động chuyển đổi sang bảng Markdown trực quan và gọn nhẹ
+            let markdownTable = `### Thư mục: \`${aiVirtualPath(aiSafePath(targetPath))}\`\n\n`;
+            markdownTable += `| Tên tệp / Thư mục | Phân loại |\n`;
+            markdownTable += `| :--- | :--- |\n`;
+
+            if (files.length === 0) {
+                markdownTable += `| *(Thư mục trống)* | - |\n`;
+            } else {
+                const renderItems = (items, level = 0) => {
+                    const indent = '  '.repeat(level);
+                    const prefix = level > 0 ? `${indent}├─ ` : '';
+                    for (const item of items) {
+                        const displayName = item.type === 'directory' ? `**${item.name}**` : item.name;
+                        const typeLabel = item.type === 'directory' ? 'Thư mục' : 'Tệp tin';
+                        markdownTable += `| ${prefix}${displayName} | ${typeLabel} |\n`;
+                        if (item.children && item.children.length > 0) {
+                            renderItems(item.children, level + 1);
+                        }
+                    }
+                };
+                renderItems(files, 0);
+            }
+
+            return markdownTable;
         }
     },
 
@@ -685,7 +714,7 @@ export default {
     },
 
     "read_file": {
-        description: "Đọc toàn bộ file. Dữ liệu trả về sẽ ĐƯỢC ĐÁNH SỐ DÒNG làm 'Mỏ neo' (Anchor) để bạn sử dụng cho lệnh thay thế sau đó.",
+        description: "Đọc toàn bộ nội dung của tệp tin. Dữ liệu trả về ở dạng khối Markdown được đánh số dòng (Line Anchors), giúp loại bỏ hoàn toàn việc escape ký tự trong chuỗi JSON và tối ưu hóa lượng token cực kỳ hiệu quả.",
         parameters: {
             type: "object",
             properties: { file_path: { type: "string", description: "Đường dẫn tuyệt đối đến tệp tin cần đọc." } },
@@ -697,18 +726,16 @@ export default {
 
             const content = fs.readFileSync(filePath, 'utf8');
             const lines = content.split(/\r?\n/);
-            const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`);
+            const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
 
-            return {
-                file: aiVirtualPath(aiSafePath(filePath)),
-                total_lines: lines.length,
-                content: numberedLines.join('\n')
-            };
+            let md = `### 📂 File: \`${aiVirtualPath(aiSafePath(filePath))}\` *(Tổng số dòng: ${lines.length})*\n`;
+            md += `\`\`\`text\n${numberedLines}\n\`\`\``;
+            return md;
         }
     },
 
     "read_multiple_files": {
-        description: "[ĐỌC NHIỀU FILE] Đọc nội dung của nhiều file cùng một lúc với tính năng đánh số dòng tự động.",
+        description: "[ĐỌC NHIỀU FILE] Đọc nội dung của nhiều file cùng một lúc với tính năng đánh số dòng tự động, định dạng dưới dạng khối Markdown để tối ưu token.",
         parameters: {
             type: "object",
             properties: {
@@ -721,41 +748,30 @@ export default {
             required: ["file_paths"]
         },
         handler: async (args) => {
-            const results = [];
+            let markdownResult = ``;
             for (const inputPath of args.file_paths) {
                 try {
                     const filePath = resolveUserPath(inputPath);
                     if (!fs.existsSync(filePath)) {
-                        results.push({
-                            file: aiVirtualPath(aiSafePath(filePath)),
-                            status: "error",
-                            error_message: "File không tồn tại"
-                        });
+                        markdownResult += `### ❌ Tệp tin không tồn tại: \`${aiVirtualPath(aiSafePath(filePath))}\`\n\n`;
                         continue;
                     }
                     const content = fs.readFileSync(filePath, 'utf8');
                     const lines = content.split(/\r?\n/);
-                    const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`);
-                    results.push({
-                        file: aiVirtualPath(aiSafePath(filePath)),
-                        status: "success",
-                        total_lines: lines.length,
-                        content: numberedLines.join('\n')
-                    });
+                    const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
+
+                    markdownResult += `### 📂 File: \`${aiVirtualPath(aiSafePath(filePath))}\` *(Tổng số dòng: ${lines.length})*\n`;
+                    markdownResult += `\`\`\`text\n${numberedLines}\n\`\`\`\n\n`;
                 } catch (e) {
-                    results.push({
-                        file: aiVirtualPath(inputPath),
-                        status: "error",
-                        error_message: e.message
-                    });
+                    markdownResult += `### ❌ Gặp lỗi khi đọc tệp tin \`${inputPath}\`: ${e.message}\n\n`;
                 }
             }
-            return { results };
+            return markdownResult;
         }
     },
 
     "read_file_lines": {
-        description: "Đọc một phần của file. LUÔN DÙNG công cụ này trước khi sửa file để biết CHÍNH XÁC SỐ DÒNG (Line Anchors).",
+        description: "Đọc một phần nội dung của tệp tin theo khoảng dòng. Dữ liệu trả về ở dạng khối Markdown giúp tránh việc escape ký tự trong chuỗi JSON và tối ưu hóa token.",
         parameters: {
             type: "object",
             properties: {
@@ -775,14 +791,11 @@ export default {
 
             const start = Math.max(0, args.start_line - 1);
             const end = Math.min(lines.length, args.end_line);
-            const numberedLines = lines.slice(start, end).map((line, idx) => `${start + idx + 1} | ${line}`);
+            const numberedLines = lines.slice(start, end).map((line, idx) => `${start + idx + 1} | ${line}`).join('\n');
 
-            return {
-                file: aiVirtualPath(aiSafePath(filePath)),
-                total_lines_in_file: lines.length,
-                showing_lines: `${start + 1} to ${end}`,
-                content: numberedLines.join('\n')
-            };
+            let md = `### 📂 File: \`${aiVirtualPath(aiSafePath(filePath))}\` *(Dòng ${start + 1} đến ${end} / Tổng số dòng: ${lines.length})*\n`;
+            md += `\`\`\`text\n${numberedLines}\n\`\`\``;
+            return md;
         }
     },
 
@@ -861,7 +874,7 @@ export default {
     },
 
     "find_files": {
-        description: "[ƯU TIÊN DÙNG ĐỂ TÌM FILE] Tìm kiếm tệp tin theo từ khóa tên file (case-insensitive) một cách đệ quy.",
+        description: "[ƯU TIÊN DÙNG ĐỂ TÌM FILE] Tìm kiếm tệp tin theo từ khóa tên file (case-insensitive) một cách đệ quy. Kết quả trả về dưới dạng danh sách Markdown rút gọn để tối ưu token.",
         parameters: {
             type: "object",
             properties: {
@@ -880,13 +893,20 @@ export default {
             }
 
             const matchedFiles = searchFilesRecursive(basePath, query);
-            return {
-                base_path: aiVirtualPath(aiSafePath(basePath)),
-                absolute_base_path: aiVirtualPath(basePath.replace(/\\/g, '/')),
-                query: query,
-                matches_found: matchedFiles.length,
-                files: matchedFiles.map(f => aiVirtualPath(f))
-            };
+
+            let markdownResult = `### 🔍 Kết quả tìm kiếm cho từ khóa: \`${query}\`\n`;
+            markdownResult += `- **Thư mục quét**: \`${aiVirtualPath(aiSafePath(basePath))}\`\n`;
+            markdownResult += `- **Số lượng khớp**: ${matchedFiles.length}\n\n`;
+
+            if (matchedFiles.length === 0) {
+                markdownResult += `*(Không tìm thấy tệp nào khớp)*\n`;
+            } else {
+                markdownResult += `**Danh sách tệp tin:**\n`;
+                matchedFiles.forEach(f => {
+                    markdownResult += `- \`${aiVirtualPath(f)}\`\n`;
+                });
+            }
+            return markdownResult;
         }
     },
 

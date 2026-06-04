@@ -259,7 +259,7 @@ async function runGoogleSearchInternal(query, limit) {
 
 export default {
     "google_search": {
-        description: "Tìm kiếm thông tin trực tuyến trên Google để cập nhật tin tức thời gian thực, tra cứu tài liệu hoặc thu thập bối cảnh khi cơ sở dữ liệu ngoại tuyến của bạn không có sẵn.",
+        description: "Tìm kiếm thông tin trực tuyến trên Google để cập nhật tin tức thời gian thực, tra cứu tài liệu hoặc thu thập bối cảnh. Kết quả trả về dưới dạng danh sách Markdown thu gọn giúp tối ưu hóa token.",
         parameters: {
             type: "object",
             properties: {
@@ -279,11 +279,18 @@ export default {
             const limit = Math.min(args.limit || 5, 15);
             try {
                 const results = await runGoogleSearchInternal(query, limit);
-                return {
-                    query,
-                    results_found: results.length,
-                    results
-                };
+
+                let markdownResult = `## 🌐 Kết quả tìm kiếm Google: \`${query}\`\n\n`;
+                if (results.length === 0) {
+                    markdownResult += `*(Không tìm thấy kết quả phù hợp)*\n`;
+                    return markdownResult;
+                }
+
+                results.forEach((item, idx) => {
+                    markdownResult += `### ${idx + 1}. [${item.title}](${item.link})\n`;
+                    markdownResult += `> ${item.snippet || 'Không có mô tả chi tiết.'}\n\n`;
+                });
+                return markdownResult;
             } catch (err) {
                 throw new Error(`Tìm kiếm thất bại: ${err.message}`);
             }
