@@ -9,9 +9,12 @@ const __dirname = path.dirname(__filename);
 
 export default {
     "create_pipeline_plan": {
-        description: "[QUAN TRỌNG] Lập kế hoạch Pipeline theo mô hình Architect - Editor. BẮT BUỘC dùng công cụ này ĐẦU TIÊN khi người dùng giao một tác vụ lớn hoặc phức tạp. Các Stage lập kế hoạch phải tuân thủ nghiêm ngặt nguyên tắc chia nhỏ nhiệm vụ thành 2 bước nối tiếp:\n" +
-            "1. ARCHITECT STEP (Khảo sát & Thiết kế): Chạy công cụ đọc tệp/thư mục để khảo sát dự án đích và viết tài liệu thiết kế kĩ thuật chi tiết dạng tệp tin (ví dụ: 'spec_design.md').\n" +
-            "2. EDITOR STEP (Biên tập & Kiểm thử): Chạy công cụ viết tệp hoặc thay thế dòng để lập trình chính xác dựa trên tài liệu thiết kế ở bước 1, sau đó tự chạy kiểm thử (compiler check).\n" +
+        description: "[QUAN TRỌNG] Lập kế hoạch Pipeline theo mô hình Architect - Editor. BẮT BUỘC phải thực hiện đúng quy trình sau:\n" +
+            "1. TRƯỚC KHI CHẠY LỆNH NÀY: Nếu tác vụ có tính sáng tạo (tạo tính năng mới, tạo component, sửa đổi hành vi), BẮT BUỘC phải gọi `workflow_brainstorming` trước để hiểu thấu đáo bối cảnh dự án, đề xuất các phương án giải quyết và lấy phê duyệt từ người dùng.\n" +
+            "2. THIẾT KẾ PIPELINE: Chia nhỏ các Stage thành các bước nối tiếp:\n" +
+            "   - ARCHITECT STEP (Khảo sát & Thiết kế): Khảo sát dự án đích và viết tài liệu thiết kế kĩ thuật chi tiết dạng tệp tin (ví dụ: 'spec_design.md').\n" +
+            "   - EDITOR STEP (Biên tập & Kiểm thử): Lập trình chính xác dựa trên tài liệu thiết kế, sau đó tự chạy kiểm thử (compiler check).\n" +
+            "   - VERIFICATION STEP (Chụp ảnh kiểm tra lỗi): BẮT BUỘC phải thêm bước chạy `capture_system_screenshot` (hoặc chụp màn hình trình duyệt) sau khi chạy ứng dụng/giao diện để tự động đối sánh, phân tích lỗi hiển thị trực quan, tránh phán đoán mù quáng.\n" +
             "Hỗ trợ chạy song song bằng parallel_group và tuần tự bằng depends_on.",
         parameters: {
             type: "object",
@@ -60,7 +63,7 @@ export default {
                                 }
                             }
                         },
-                        required: ["name"]
+                        required: ["name", "steps"]
                     }
                 }
             },
@@ -84,8 +87,8 @@ export default {
                 stage.status = "PENDING";
 
                 // Khắc phục lỗi: Đảm bảo stage.steps luôn tồn tại dưới dạng mảng để tránh crash
-                if (!stage.steps || !Array.isArray(stage.steps)) {
-                    stage.steps = [];
+                if (!stage.steps || !Array.isArray(stage.steps) || stage.steps.length === 0) {
+                    throw new Error(`Giai đoạn "${stage.name}" bắt buộc phải có mảng "steps" chứa nhất một tác vụ cụ thể.`);
                 }
 
                 stage.steps.forEach((step, stIdx) => {

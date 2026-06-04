@@ -2,7 +2,7 @@ import { launchPersistentContext } from "cloakbrowser";
 import path from 'path';
 import fs from 'fs';
 import chalk from 'chalk';
-
+import tracer from '../tracer.js';
 const profilePath = path.join(process.cwd(), 'profile', 'Profile_Reader');
 
 /**
@@ -261,16 +261,26 @@ Nhiệm vụ của bạn:
 Hãy trả về báo cáo tổng hợp trực tiếp bám sát yêu cầu.`;
 
             try {
-                let summaryResponse = await activeProvider.chat({
-                    messages: [{ role: 'user', content: synthesisPrompt }],
-                    mode: 'fast',
-                    skillRegistry: {},
-                    executeSkill: async () => {},
-                    systemPrompt: "Bạn là chuyên gia tổng hợp thông tin nghiên cứu từ các nguồn tài liệu.",
-                    maxSteps: 1,
-                    isWorker: true,
-                    workerType: 'research_summarizer'
-                });
+                // Bọc Worker tóm tắt nghiên cứu vào hệ thống theo dõi
+                let summaryResponse = await tracer.traceWorker(
+                    `[Worker: Research Summarizer]`,
+                    'agent',
+                    { user_query },
+                    globalThis.activeWorkerSpanId || null,
+                    async () => {
+                        return await activeProvider.chat({
+                            messages: [{ role: 'user', content: synthesisPrompt }],
+                            mode: 'fast',
+                            skillRegistry: {},
+                            executeSkill: async () => { },
+                            systemPrompt: "Bạn là chuyên gia tổng hợp thông tin nghiên cứu từ các nguồn tài liệu.",
+                            maxSteps: 1,
+                            isWorker: true,
+                            workerType: 'research_summarizer'
+                        });
+                    }
+                );
+
                 
                 summaryResponse = summaryResponse.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
                 console.log(chalk.green(`[Parallel Reader] ✅ Đã hoàn thành tổng hợp thông tin!`));

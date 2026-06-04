@@ -47,8 +47,6 @@ function completeTrace(traceId, status = 'completed') {
 function startSpan(traceId, name, type = 'tool', parentSpanId = null, input = null) {
     const id = 'span_' + randomUUID().replace(/-/g, '').substring(0, 16);
     const now = new Date().toISOString();
-    
-    // 🚀 ĐÃ LOẠI BỎ .substring(0, 5000) - Lưu trữ trọn vẹn Input JSON
     db.prepare(`INSERT INTO trace_spans (id, trace_id, parent_span_id, name, type, status, started_at, input) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
         .run(id, traceId, parentSpanId, name, type, 'running', now, input ? JSON.stringify(input) : null);
     return id;
@@ -66,8 +64,6 @@ function endSpan(spanId, status = 'completed', output = null, error = null) {
     if (!span) return;
     const now = new Date().toISOString();
     const duration = new Date(now) - new Date(span.started_at);
-    
-    // 🚀 ĐÃ LOẠI BỎ .substring(0, 5000) và .substring(0, 1000) - Lưu trữ trọn vẹn Output & Error
     const outputStr = output ? JSON.stringify(output) : null;
     db.prepare(`UPDATE trace_spans SET status = ?, completed_at = ?, duration_ms = ?, output = ?, error = ? WHERE id = ?`)
         .run(status, now, duration, outputStr, error || null, spanId);
@@ -94,11 +90,71 @@ function getTraceDetail(traceId) {
     return { trace, spans };
 }
 
+/**
+ * Thực thi một bọc xử lý Worker ngầm nhằm tự động gán Span cha/con
+ */
+async function traceWorker(name, type = 'agent', input = null, parentSpanId = null, actionFn) {
+    const traceId = globalThis.activeTraceId;
+    if (!traceId) {
+        return await actionFn(null);
+    }
+    const spanId = startSpan(traceId, name, type, parentSpanId, input);
+    const previousWorkerSpanId = globalThis.activeWorkerSpanId;
+    globalThis.activeWorkerSpanId = spanId;
+    try {
+        const result = await actionFn(spanId);
+        endSpan(spanId, 'completed', typeof result === 'object' ? result : { response: String(result) });
+        return result;
+    } catch (err) {
+        endSpan(spanId, 'failed', null, err.message);
+        throw err;
+    } finally {
+        globalThis.activeWorkerSpanId = previousWorkerSpanId;
+    }
+}
+
+/**
+ * Tự động chặn và bọc proxy cuộc gọi chat của Agent phụ (Workers)
+ */
+function wrapProviderWithTracing(provider) {
+    if (!provider || typeof provider.chat !== 'function' || provider._isWrappedWithTracing) {
+        return provider;
+    }
+
+    const originalChat = provider.chat.bind(provider);
+    provider.chat = async function (options) {
+        if (options.isWorker) {
+            const workerType = options.workerType || 'unknown_worker';
+            const parentSpanId = globalThis.activeWorkerSpanId || null;
+            const lastMsg = options.messages?.[options.messages.length - 1]?.content || '';
+
+            return await traceWorker(
+                `[Worker: ${workerType.toUpperCase()}]`,
+                'agent',
+                {
+                    worker_type: workerType,
+                    prompt: lastMsg.substring(0, 1500) + (lastMsg.length > 1500 ? '...' : '')
+                },
+                parentSpanId,
+                async (spanId) => {
+                    return await originalChat(options);
+                }
+            );
+        }
+        return await originalChat(options);
+    };
+
+    provider._isWrappedWithTracing = true;
+    return provider;
+}
+
 export default {
     createTrace,
     completeTrace,
     startSpan,
     endSpan,
     listTraces,
-    getTraceDetail
+    getTraceDetail,
+    traceWorker,
+    wrapProviderWithTracing
 };

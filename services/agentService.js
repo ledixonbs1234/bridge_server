@@ -101,7 +101,7 @@ export async function executeAgentTurn({
 }) {
     const resolvedProvider = activeProvider || globalThis.activeProvider;
     const traceId = tracer.createTrace(message.substring(0, 80));
-
+    globalThis.activeTraceId = traceId;
     if (onLog) global.logToWebChat = onLog;
 
     // Cập nhật Workspace dựa trên phân tích ngữ cảnh tin nhắn
@@ -285,7 +285,8 @@ export async function executeAgentTurn({
                 });
             }
 
-            const toolSpanId = traceId ? tracer.startSpan(traceId, funcName, 'tool', llmSpanId, args) : null;
+            const parentSpanId = globalThis.activeWorkerSpanId || llmSpanId;
+            const toolSpanId = traceId ? tracer.startSpan(traceId, funcName, 'tool', parentSpanId, args) : null;
 
             try {
                 const toolResult = await executeSkillForProvider(funcName, args, resolvedProvider, wrappedOnLog);
@@ -852,7 +853,6 @@ async function getProviderInstance(providerName) {
     const adapterPath = providerMap[providerName];
     if (!adapterPath) return null;
 
-    // Load config
     const configPath = path.join(projectRoot, 'config.json');
     let providerConfig = {};
     try {
@@ -870,8 +870,11 @@ async function getProviderInstance(providerName) {
         const module = await import(adapterPath);
         const ProviderClass = module.default;
         const instance = new ProviderClass(settings);
-        loadedProviders[providerName] = instance;
-        return instance;
+
+        // Proxy hóa tự động
+        const wrappedInstance = tracer.wrapProviderWithTracing(instance);
+        loadedProviders[providerName] = wrappedInstance;
+        return wrappedInstance;
     } catch { return null; }
 }
 

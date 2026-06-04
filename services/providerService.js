@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
+import tracer from '../tracer.js'; // Nhập khẩu tracer
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,7 +23,7 @@ export async function loadProviderConfig(showMenu = false) {
     } catch (err) {
         providerConfig = { activeProvider: 'gemini-studio', providers: {} };
     }
-    
+
     // Load env vars
     if (process.env.OPENAI_API_KEY && providerConfig.providers?.openai) {
         providerConfig.providers.openai.apiKey = process.env.OPENAI_API_KEY;
@@ -35,25 +36,25 @@ export async function loadProviderConfig(showMenu = false) {
     }
 
     const selectedProviderName = providerConfig.activeProvider || 'gemini-studio';
-    
+
     // Load provider instance
     activeProvider = await getProviderInstance(selectedProviderName);
-    
+
     if (!activeProvider) {
         console.log(chalk.yellow(`⚠️ Không thể nạp provider "${selectedProviderName}". Sử dụng default.`));
         activeProvider = await getProviderInstance('gemini-studio');
     }
-    
+
     // Store in global
     globalThis.activeProvider = activeProvider;
     globalThis.providerConfig = providerConfig;
-    
+
     return { activeProvider, providerConfig };
 }
 
 async function getProviderInstance(providerName) {
     if (loadedProviders[providerName]) return loadedProviders[providerName];
-    
+
     const providerMap = {
         'deepseek-web': '../providers/deepseek-web.js',
         'qwen-web': '../providers/qwen-web.js',
@@ -64,19 +65,22 @@ async function getProviderInstance(providerName) {
         'ollama': '../providers/ollama.js',
         'gemini-api': '../providers/gemini-api.js',
     };
-    
+
     const adapterPath = providerMap[providerName];
     if (!adapterPath) return null;
-    
+
     const settings = providerConfig.providers?.[providerName] || {};
     if (!settings.enabled) return null;
-    
+
     try {
         const module = await import(adapterPath);
         const ProviderClass = module.default;
         const instance = new ProviderClass(settings);
-        loadedProviders[providerName] = instance;
-        return instance;
+
+        // Tự động gán bọc Proxy giám sát Worker
+        const wrappedInstance = tracer.wrapProviderWithTracing(instance);
+        loadedProviders[providerName] = wrappedInstance;
+        return wrappedInstance;
     } catch (err) {
         console.error(chalk.red(`[Provider] Lỗi nạp ${providerName}:`, err.message));
         return null;
@@ -96,13 +100,13 @@ export async function switchProvider(providerName) {
     if (newProvider) {
         activeProvider = newProvider;
         providerConfig.activeProvider = providerName;
-        
+
         globalThis.activeProvider = activeProvider;
-        
+
         // Save config
         const configPath = path.join(projectRoot, 'config.json');
         fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
-        
+
         return true;
     }
     return false;

@@ -32,7 +32,7 @@ export const SKILL_CATEGORIES = {
     COMPLEX: 'complex'
 };
 
-// Skill groups mapping
+// Skill groups mapping (Added Sandbox skills)
 export const SKILL_GROUPS = {
     [SKILL_CATEGORIES.CHAT]: [
         'read_file',
@@ -50,7 +50,9 @@ export const SKILL_GROUPS = {
         'parallel_web_summarizer',
         'capture_system_screenshot',
         'ask_questions_if_underspecified',
-        'change_active_workspace'
+        'change_active_workspace',
+        'create_isolated_workspace',
+        'git_sandbox_status'
     ],
     [SKILL_CATEGORIES.CODE]: [
         'read_file',
@@ -73,7 +75,11 @@ export const SKILL_GROUPS = {
         'parallel_web_summarizer',
         'capture_system_screenshot',
         'ask_questions_if_underspecified',
-        'change_active_workspace'
+        'change_active_workspace',
+        'create_isolated_workspace',
+        'git_sandbox_status',
+        'git_sandbox_accept',
+        'git_sandbox_reject'
     ],
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
@@ -93,7 +99,9 @@ export const SKILL_GROUPS = {
         'google_search',
         'google_search_and_summarize',
         'ask_questions_if_underspecified',
-        'change_active_workspace'
+        'change_active_workspace',
+        'create_isolated_workspace',
+        'git_sandbox_status'
     ],
     [SKILL_CATEGORIES.COMPLEX]: null
 };

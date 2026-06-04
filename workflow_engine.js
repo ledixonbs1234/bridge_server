@@ -313,7 +313,7 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
         return prompt;
     }
 
-    async validateStep(step, executorOutput) {
+    async validateStep(step, executorOutput, parentSpanId = null) {
         const val = step.validation || { type: 'bypass', value: 'auto-pass' };
         if (val.type === 'bypass') return { passed: true, reason: '' };
 
@@ -391,26 +391,35 @@ ${errorCtx}
                 delete workerSkills['create_pipeline_plan'];
                 delete workerSkills['update_pipeline_status'];
 
-                const resp = await this.provider.chat({
-                    messages: [{ role: 'user', content: validationPrompt }],
-                    mode: 'fast', // Validator chạy chế độ nhanh để tiết kiệm token
-                    skillRegistry: workerSkills,
-                    executeSkill: async (fn, args) => {
-                        if (fn === 'execute_terminal_command') {
-                            if (!args.working_directory) {
-                                args.working_directory = workspace;
-                            }
-                        }
-                        return await this.executeSkillFn(fn, args);
-                    },
-                    systemPrompt: "Bạn là Validator. Nếu đạt -> PASS. Nếu không -> chỉ ra lỗi.",
-                    maxSteps: 10, isWorker: true, workerType: `validator_${step.step_key}`
-                });
+                // Lưu giữ mốc neo cũ và thiết lập mốc neo của Validator Worker hiện tại
+                const prevWorkerSpanId = globalThis.activeWorkerSpanId;
+                globalThis.activeWorkerSpanId = parentSpanId;
 
-                const cleanResp = resp.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-                return cleanResp.toUpperCase().includes('PASS')
-                    ? { passed: true, reason: '' }
-                    : { passed: false, reason: cleanResp };
+                try {
+                    const resp = await this.provider.chat({
+                        messages: [{ role: 'user', content: validationPrompt }],
+                        mode: 'fast', // Validator chạy chế độ nhanh để tiết kiệm token
+                        skillRegistry: workerSkills,
+                        executeSkill: async (fn, args) => {
+                            if (fn === 'execute_terminal_command') {
+                                if (!args.working_directory) {
+                                    args.working_directory = workspace;
+                                }
+                            }
+                            return await this.executeSkillFn(fn, args);
+                        },
+                        systemPrompt: "Bạn là Validator. Nếu đạt -> PASS. Nếu không -> chỉ ra lỗi.",
+                        maxSteps: 10, isWorker: true, workerType: `validator_${step.step_key}`
+                    });
+
+                    const cleanResp = resp.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+                    return cleanResp.toUpperCase().includes('PASS')
+                        ? { passed: true, reason: '' }
+                        : { passed: false, reason: cleanResp };
+                } finally {
+                    // Khôi phục mốc neo về trạng thái trước đó
+                    globalThis.activeWorkerSpanId = prevWorkerSpanId;
+                }
             } catch (e) {
                 return { passed: false, reason: `[VALIDATOR_SYSTEM_ERROR] Lỗi hệ thống kiểm duyệt: ${e.message}` };
             }
@@ -668,7 +677,7 @@ Thư mục dự án đích: ${workspace}
             if (!execError) {
                 this.transitionState('CURRENT', stepKey, 'VALIDATING');
                 const valSpinner = ora(`Đang kiểm duyệt kết quả (Validator)...`).start();
-                const valResult = await this.validateStep(step, response);
+                const valResult = await this.validateStep(step, response, stepSpanId); 
 
                 logAgentEvent('VALIDATION_RESULT', {
                     step_key: stepKey,
@@ -814,6 +823,17 @@ Thư mục dự án đích: ${workspace}
             logMessage(chalk.yellow("\n[Engine] Không có Pipeline nào đang chờ xử lý."));
             return;
         }
+
+        // TỰ ĐỘNG KHỞI TẠO GIT WORKTREE NẾU ĐANG CHẠY PIPELINE SỬA FILE TRÊN GIT REPO
+        try {
+            const { ensureGitWorktreeSandbox } = await import('./skills/file_system.js');
+            await ensureGitWorktreeSandbox();
+            // Cập nhật lại workspace của pipeline sau khi đã cách ly thành công
+            this.pipelineWorkspace = globalThis.activeWorkspace;
+        } catch (e) {
+            logMessage(chalk.yellow(`[Engine] Không thể tự động tạo Git Worktree cách ly: ${e.message}`));
+        }
+
         logAgentEvent('PIPELINE_START', {
             pipeline_id: 'CURRENT',
             pipeline_name: pipeline.pipeline_name,
@@ -839,7 +859,17 @@ Thư mục dự án đích: ${workspace}
         for (let sIdx = 0; sIdx < pipeline.stages.length; sIdx++) {
             const stage = pipeline.stages[sIdx];
             if (stage.status === 'DONE') continue;
-
+            if (!stage.steps || stage.steps.length === 0) {
+                logMessage(chalk.red(`\n❌ Lỗi nghiêm trọng: Giai đoạn "${stage.name}" không chứa bất kỳ tác vụ (steps) nào. Dừng thực thi Pipeline để tránh lỗi tự động hoàn tất.`), true);
+                stage.status = 'FAILED';
+                this.updatePipelineStatus(pipeline, 'FAILED');
+                if (this.currentTraceId) {
+                    tracer.completeTrace(this.currentTraceId, 'failed');
+                }
+                await this.triggerReflection(pipeline, 'FAILED', new Error(`Stage "${stage.name}" has 0 steps.`));
+                await this.sendTelegramPipelineFailure(pipeline, `Giai đoạn "${stage.name}" không có tác vụ thực thi.`);
+                return;
+            }
             logMessage(`\n${chalk.bgBlue.white.bold(` STAGE ${sIdx + 1}: ${stage.name} `)}`);
 
             const stepsToProcess = stage.steps.filter(s => {

@@ -36,8 +36,7 @@ Nếu bạn cần chạy một công cụ để lấy thông tin, BẠN PHẢI T
 \`\`\`
 QUAN TRỌNG:
 - BẮT BUỘC sử dụng cấu trúc JSON trên. KHÔNG dùng định dạng XML hay Markdown khác cho lệnh gọi.
-- Đảm bảo tất cả các chuỗi có chứa ký tự đặc biệt như dấu nháy kép ("), nháy đơn ('), gạch chéo (/), gạch chéo ngược (\\), dấu phẩy (,), hoặc các ký tự xuống dòng (\\n) đều được escape (thoát chuỗi) chuẩn xác theo định dạng JSON (ví dụ sử dụng \\" cho dấu nháy kép bên trong chuỗi, \\\\ cho dấu gạch chéo ngược, \\n cho xuống dòng).
-- TUYỆT ĐỐI KHÔNG tự ý sử dụng các tham số mã hóa Base64 tự chế nếu schema của công cụ không yêu cầu cụ thể. Luôn luôn truyền các tham số chuỗi thường ('content' hoặc 'replace_string') đúng theo định nghĩa có sẵn để tránh gây lỗi phân tích cú pháp nguồn.`;
+- Đảm bảo tất cả các chuỗi có chứa ký tự đặc biệt như dấu nháy kép ("), nháy đơn ('), gạch chéo (/), gạch chéo ngược (\\), dấu phẩy (,), hoặc các ký tự xuống dòng (\\n) đều được escape (thoát chuỗi) chuẩn xác theo định dạng JSON (ví dụ sử dụng \\" cho dấu nháy kép bên trong chuỗi, \\\\ cho dấu gạch chéo ngược, \\n cho xuống dòng).`;
 
         return toolText;
     }

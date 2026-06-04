@@ -23,8 +23,57 @@ router.get('/telemetry', (req, res) => {
 // Code changes endpoint
 router.get('/code-changes', (req, res) => {
     try {
-        const changes = getGitDiffStats();
+        const changes = getGitDiffStats(globalThis.activeWorkspace);
         res.json({ success: true, changes });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// Simulated table query for Git Sandboxes
+router.get('/sandboxes', (req, res) => {
+    try {
+        const sandboxes = db.prepare('SELECT * FROM sandboxes').all() || [];
+        res.json({
+            success: true,
+            sandboxes,
+            active_workspace: globalThis.activeWorkspace,
+            is_isolated: globalThis.isIsolatedWorkspace
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+router.post('/sandboxes/accept', async (req, res) => {
+    const { taskId } = req.body;
+    if (!taskId) return res.status(400).json({ success: false, error: "Thiếu taskId" });
+    try {
+        const { acceptSandbox } = await import('../skills/file_system.js');
+        const result = await acceptSandbox(taskId);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+router.post('/sandboxes/reject', async (req, res) => {
+    const { taskId } = req.body;
+    if (!taskId) return res.status(400).json({ success: false, error: "Thiếu taskId" });
+    try {
+        const { rejectSandbox } = await import('../skills/file_system.js');
+        const result = await rejectSandbox(taskId);
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+router.post('/sandboxes/create', async (req, res) => {
+    try {
+        const { ensureGitWorktreeSandbox } = await import('../skills/file_system.js');
+        const workspace = await ensureGitWorktreeSandbox();
+        res.json({ success: true, active_workspace: workspace });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
@@ -250,7 +299,6 @@ router.post('/permission/respond', async (req, res) => {
         const resolve = agentService.pendingPermissions.get(id);
         agentService.pendingPermissions.delete(id);
 
-        // SỬA ĐỔI: Giữ nguyên chữ hoa/thường nếu nhận được phản hồi dạng JSON
         const finalResponse = (typeof response === 'string' && response.trim().startsWith('{'))
             ? response.trim()
             : response.toLowerCase().trim();
@@ -427,8 +475,8 @@ router.get('/active-workspace', (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
-// Thêm endpoint này vào file bridge_server/routes/dashboard.js
 
+// Memories/graph endpoint
 router.get('/memories/graph', (req, res) => {
     try {
         const memories = db.prepare('SELECT * FROM memories').all() || [];
@@ -444,19 +492,15 @@ router.get('/memories/graph', (req, res) => {
         if (memories.length === 0) {
             mermaidCode += "  Empty[\"Chưa có dữ liệu đồ thị bộ nhớ\"]:::episodic\n";
         } else {
-            // Khởi tạo các Node bộ nhớ
             memories.forEach(m => {
                 const type = m.type || 'episodic';
                 const rawLabel = m.situation || `Memory ${m.id}`;
-                // Cắt ngắn nhãn để hiển thị vừa vặn trên đồ thị
                 const cleanLabel = rawLabel.replace(/"/g, "'").substring(0, 45) + (rawLabel.length > 45 ? '...' : '');
 
                 mermaidCode += `  ${sanitizeId(m.id)}["${cleanLabel} (${Number(m.trust_score ?? 0.7).toFixed(2)})"]:::${type}\n`;
             });
 
-            // Vẽ các Cạnh (Liên kết giữa các Node)
             edges.forEach(e => {
-                // Xác định kiểu đường nối dựa trên trạng thái củng cố hay cắt tỉa
                 const isPruned = e.type === 'feedback_pruned';
                 const connector = isPruned ? " -.-x " : " --> ";
                 const label = e.type === 'feedback_strengthened' ? "củng cố" : (isPruned ? "cắt tỉa" : "");
@@ -492,7 +536,7 @@ router.get('/traces/:traceId', (req, res) => {
     }
 });
 
-// Commands reference endpoint - Trả về cấu trúc chi tiết tương thích hoàn toàn với client
+// Commands reference endpoint
 router.get('/commands', async (req, res) => {
     try {
         const cliCommands = [
@@ -515,14 +559,12 @@ router.get('/commands', async (req, res) => {
             { method: 'GET', path: '/api/dashboard/traces', desc: 'Xem chuỗi hành động và thời gian thực thi' }
         ];
 
-        // Đọc động danh sách Skills đang có trong hệ thống
         const { SKILL_REGISTRY } = await import('../services/skillLoader.js');
         const skills = Object.entries(SKILL_REGISTRY).map(([name, skill]) => ({
             name,
             desc: skill.description || ''
         }));
 
-        // Trích xuất Provider hiện tại đang kích hoạt
         const provider = globalThis.activeProvider ? {
             name: globalThis.activeProvider.getDisplayName?.() || globalThis.activeProvider.name,
             active: globalThis.activeProvider.name
@@ -538,6 +580,7 @@ router.get('/commands', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
+
 router.post('/consolidate', async (req, res) => {
     try {
         if (!globalThis.activeProvider) {
@@ -593,6 +636,5 @@ function getLatestSession(sessionDir) {
     }
     return { file: latestFile, messages, meta, ageMinutes: Math.round(ageMinutes) };
 }
-
 
 export default router;

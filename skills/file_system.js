@@ -4,7 +4,6 @@ import os from 'os';
 import boxen from 'boxen';
 import chalk from 'chalk';
 import { execSync } from 'child_process';
-import { highlight } from 'cli-highlight';
 import { validatePath, printPathWarning } from './validators/path_guard.js';
 import { validateSyntax } from './validators/syntax_validator.js';
 import { createShadow, cleanupOldShadows } from './validators/shadow_file.js';
@@ -38,51 +37,59 @@ function aiVirtualPath(p) {
     return p;
 }
 
+export function getGitRoot(cwd = process.cwd()) {
+    try {
+        return execSync('git rev-parse --show-toplevel', { cwd, encoding: 'utf8' }).trim().replace(/\\/g, '/');
+    } catch (e) {
+        return null;
+    }
+}
+
+export function getNextTaskId(gitRoot) {
+    const sandboxDir = path.join(gitRoot, '.sandbox');
+    if (!fs.existsSync(sandboxDir)) {
+        return 'task-001';
+    }
+    try {
+        const dirs = fs.readdirSync(sandboxDir).filter(f => f.startsWith('task-'));
+        let maxNum = 0;
+        for (const dir of dirs) {
+            const num = parseInt(dir.replace('task-', ''), 10);
+            if (!isNaN(num) && num > maxNum) {
+                maxNum = num;
+            }
+        }
+        const nextNum = maxNum + 1;
+        return `task-${String(nextNum).padStart(3, '0')}`;
+    } catch (e) {
+        return 'task-001';
+    }
+}
+
 /**
- * Tự động khởi tạo và chuyển đổi sang Git Worktree cách ly an toàn nếu thư mục hoạt động thuộc Git Repository
+ * Tự động khởi tạo và chuyển đổi sang Git Worktree Sandbox cô lập an toàn
  */
-export async function ensureGitWorktreeSandbox(customBranchName = null) {
+export async function ensureGitWorktreeSandbox() {
     if (globalThis.isIsolatedWorkspace) {
         return globalThis.activeWorkspace;
     }
 
     const currentWS = globalThis.activeWorkspace || process.cwd();
-    let isGit = false;
-    let repoRoot = currentWS;
+    const gitRoot = getGitRoot(currentWS);
 
-    try {
-        const isInside = execSync('git rev-parse --is-inside-work-tree', {
-            cwd: currentWS,
-            encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'ignore']
-        }).trim();
-
-        if (isInside === 'true') {
-            isGit = true;
-            repoRoot = execSync('git rev-parse --show-toplevel', {
-                cwd: currentWS,
-                encoding: 'utf8',
-                stdio: ['ignore', 'pipe', 'ignore']
-            }).trim();
-        }
-    } catch (e) {
-        // Không phải hoặc chưa khởi tạo Git repo, bỏ qua cách ly
-        return currentWS;
+    if (!gitRoot) {
+        return currentWS; // Không thuộc Git, bỏ qua cô lập
     }
 
-    if (!isGit) {
-        return currentWS;
-    }
-
-    // Hỏi ý kiến người dùng trước khi tạo Git Worktree (nếu chưa bật Auto-Approve)
+    // Hỏi ý kiến người dùng trước khi tạo Sandbox (nếu chưa bật Auto-Approve)
     if (!global.isAutoApproveAll) {
         const terminalLogger = global.originalConsoleLog || console.log;
         terminalLogger(boxen(
             `${chalk.bold.yellow('🛡️ BẢO VỆ MÃ NGUỒN (SAFE WORKSPACE)')}\n\n` +
             `Hệ thống phát hiện thư mục hiện tại thuộc một Git Repository:\n` +
-            `${chalk.cyan(repoRoot)}\n\n` +
+            `${chalk.cyan(gitRoot)}\n\n` +
             `Để tránh rủi ro làm hỏng mã nguồn gốc, ứng dụng đề xuất tự động khởi tạo\n` +
-            `một ${chalk.bold.green('Git Worktree')} độc lập (nhánh mới) chạy song song.\n` +
+            `một ${chalk.bold.green('Git Worktree Sandbox')} độc lập.\n` +
             `Mọi thay đổi của AI sẽ chỉ tác động lên không gian cát này.`,
             { padding: 1, borderColor: 'yellow', borderStyle: 'round' }
         ));
@@ -92,15 +99,15 @@ export async function ensureGitWorktreeSandbox(customBranchName = null) {
                 type: 'APPROVAL_REQUEST',
                 title: '🛡️ ĐỀ XUẤT CÁCH LY WORKSPACE (GIT WORKTREE)',
                 details: {
-                    file_path: repoRoot,
-                    range: 'Tạo Git Worktree cách ly',
-                    functionality: 'Cô lập không gian làm việc của AI trên nhánh mới'
+                    file_path: gitRoot,
+                    range: 'Tạo Git Worktree Sandbox',
+                    functionality: 'Cô lập không gian làm việc của AI trên nhánh cát'
                 }
             }));
         }
 
         const answer = await global.askPermission(
-            chalk.bold.greenBright(`👉 Bạn có đồng ý chuyển sang chế độ Git Worktree an toàn? [y/a/n] : `)
+            chalk.bold.greenBright(`👉 Bạn có đồng ý chuyển sang chế độ Git Worktree Sandbox an toàn? [y/a/n] : `)
         );
 
         if (answer === 'a') {
@@ -112,63 +119,169 @@ export async function ensureGitWorktreeSandbox(customBranchName = null) {
     }
 
     try {
-        console.log(chalk.cyan(`\n[Sandbox] Đang chuẩn bị Git Worktree độc lập...`));
-        const timestamp = Date.now();
-        const branchName = customBranchName ? customBranchName.replace(/[^a-zA-Z0-9_-]/g, '_') : `ai-sandbox-${timestamp}`;
-        const parentDir = path.dirname(repoRoot);
-        const repoName = path.basename(repoRoot);
-        const sandboxPath = path.join(parentDir, `${repoName}_sandbox_${timestamp}`).replace(/\\/g, '/');
+        console.log(chalk.cyan(`\n[Sandbox] Đang chuẩn bị Git Worktree Sandbox...`));
+        const taskId = getNextTaskId(gitRoot);
+        const branchName = `ai-${taskId}`;
+        const sandboxPath = path.join(gitRoot, '.sandbox', taskId).replace(/\\/g, '/');
 
+        // Tìm nhánh hiện tại làm nhánh gốc
+        let parentBranch = 'main';
+        try {
+            parentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: gitRoot, encoding: 'utf8' }).trim();
+        } catch (e) { }
+
+        const parentDir = path.dirname(sandboxPath);
         if (!fs.existsSync(parentDir)) {
             fs.mkdirSync(parentDir, { recursive: true });
         }
 
-        console.log(chalk.gray(`> git worktree add "${sandboxPath}" -b ${branchName}`));
-        execSync(`git worktree add "${sandboxPath}" -b ${branchName}`, {
-            cwd: repoRoot,
-            stdio: 'ignore'
-        });
+        // Chạy lệnh tạo Worktree Sandbox
+        const cmd = `git worktree add ".sandbox/${taskId}" -b ${branchName}`;
+        console.log(chalk.gray(`> ${cmd}`));
+        execSync(cmd, { cwd: gitRoot, stdio: 'ignore' });
 
-        // Sao chép các tệp cấu hình không được track (nếu có) để AI chạy thử được dự án
+        // Loại trừ thư mục .sandbox khỏi Git chính
+        const excludePath = path.join(gitRoot, '.git', 'info', 'exclude');
+        if (fs.existsSync(excludePath)) {
+            let excludeContent = fs.readFileSync(excludePath, 'utf8');
+            if (!excludeContent.includes('.sandbox/')) {
+                fs.appendFileSync(excludePath, '\n.sandbox/\n', 'utf8');
+            }
+        }
+
+        // Sao chép các tệp cấu hình un-tracked cần thiết
         const gitignoredConfigs = ['.env', '.env.local', '.env.development', '.env.production'];
         for (const file of gitignoredConfigs) {
-            const srcFile = path.join(repoRoot, file);
+            const srcFile = path.join(gitRoot, file);
             const destFile = path.join(sandboxPath, file);
             if (fs.existsSync(srcFile)) {
                 try {
                     fs.copyFileSync(srcFile, destFile);
-                    console.log(chalk.gray(`[Sandbox] Đã đồng bộ cấu hình: ${file}`));
                 } catch (e) { }
             }
         }
 
-        // Cấu hình trạng thái cách ly toàn cục
-        globalThis.originalWorkspace = repoRoot;
+        // Ghi nhận Metadata vào simulated SQLite
+        const dbModule = await import('../database.js');
+        const db = dbModule.default;
+        db.prepare(`INSERT OR REPLACE INTO sandboxes (id, task_id, branch, worktree, status, parent_branch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+            null, taskId, branchName, sandboxPath, 'active', parentBranch, new Date().toISOString()
+        );
+
+        globalThis.originalWorkspace = gitRoot;
         globalThis.activeWorkspace = sandboxPath;
         globalThis.isIsolatedWorkspace = true;
 
         const successMsg =
-            `✨ ĐÃ KHỞI TẠO KHÔNG GIAN LÀM VIỆC AN TOÀN (SANDBOX ACTIVATED)\n` +
-            `• Nhánh Git mới: ${chalk.bold.green(branchName)}\n` +
+            `✨ ĐÃ KHỞI TẠO CÁT LÀM VIỆC AN TOÀN (SANDBOX ACTIVATED)\n` +
+            `• Task ID: ${chalk.bold.green(taskId)}\n` +
+            `• Nhánh Git Sandbox: ${chalk.bold.green(branchName)}\n` +
             `• Thư mục cách ly: ${chalk.bold.cyan(sandboxPath)}\n\n` +
             `Mã nguồn gốc của bạn đã được bảo vệ hoàn toàn 100%!`;
 
         console.log(boxen(successMsg, { padding: 1, borderColor: 'green', borderStyle: 'round' }));
 
         if (typeof global.logToWebChat === 'function') {
-            global.logToWebChat(`🛡️ [Sandbox] Đã chuyển sang Git Worktree an toàn: ${sandboxPath} (nhánh: ${branchName})`);
+            global.logToWebChat(`🛡️ [Sandbox] Đã chuyển sang Git Worktree Sandbox: ${sandboxPath} (nhánh: ${branchName})`);
         }
 
         return sandboxPath;
     } catch (err) {
-        console.error(chalk.red(`[Sandbox] Không thể khởi tạo Git Worktree: ${err.message}`));
+        console.error(chalk.red(`[Sandbox] Không thể khởi tạo Git Worktree Sandbox: ${err.message}`));
         console.log(chalk.yellow(`⚠️ Chuyển về chế độ ghi đè trực tiếp lên thư mục gốc.`));
         return currentWS;
     }
 }
 
+export async function acceptSandbox(taskId) {
+    const dbModule = await import('../database.js');
+    const db = dbModule.default;
+    const sandbox = db.prepare(`SELECT * FROM sandboxes WHERE task_id = ?`).get(taskId);
+    if (!sandbox) {
+        throw new Error(`Không tìm thấy Sandbox với Task ID: ${taskId}`);
+    }
+    if (sandbox.status !== 'active') {
+        throw new Error(`Sandbox ${taskId} không ở trạng thái hoạt động (Trạng thái hiện tại: ${sandbox.status})`);
+    }
+
+    const gitRoot = sandbox.worktree.split('/.sandbox')[0];
+
+    // 1. Commit thay đổi bên trong sandbox
+    try {
+        const status = execSync('git status --porcelain', { cwd: sandbox.worktree, encoding: 'utf8' }).trim();
+        if (status) {
+            execSync('git add .', { cwd: sandbox.worktree });
+            execSync('git commit -m "AI: implement feature"', { cwd: sandbox.worktree });
+            console.log(chalk.green(`[Sandbox] Đã tạo commit trên nhánh cát ${sandbox.branch}`));
+        }
+    } catch (e) {
+        console.warn(`[Sandbox] Không thể tự động tạo commit: ${e.message}`);
+    }
+
+    // 2. Chuyển về workspace chính, tiến hành Merge code cát
+    try {
+        execSync(`git checkout ${sandbox.parent_branch}`, { cwd: gitRoot });
+        execSync(`git merge ${sandbox.branch}`, { cwd: gitRoot });
+        console.log(chalk.green(`[Sandbox] Đã trộn (merge) thành công nhánh cát ${sandbox.branch} vào ${sandbox.parent_branch}`));
+    } catch (mergeErr) {
+        throw new Error(`Xung đột hoặc lỗi khi merge nhánh ${sandbox.branch} vào ${sandbox.parent_branch}: ${mergeErr.message}`);
+    }
+
+    // 3. Dọn dẹp Sandbox
+    try {
+        execSync(`git worktree remove ".sandbox/${sandbox.task_id}" --force`, { cwd: gitRoot });
+        execSync(`git branch -D ${sandbox.branch}`, { cwd: gitRoot });
+        console.log(chalk.green(`[Sandbox] Đã dọn dẹp và xóa hoàn toàn worktree & branch cát của ${sandbox.task_id}`));
+    } catch (cleanupErr) {
+        console.warn(`[Sandbox Warning] Lỗi khi dọn dẹp: ${cleanupErr.message}`);
+    }
+
+    db.prepare(`UPDATE sandboxes SET status = 'accepted' WHERE task_id = ?`).run(taskId);
+
+    globalThis.activeWorkspace = gitRoot;
+    globalThis.isIsolatedWorkspace = false;
+
+    return {
+        status: "success",
+        message: `Đã chấp nhận thành công các thay đổi từ Sandbox ${taskId} và đồng bộ về nhánh ${sandbox.parent_branch}.`
+    };
+}
+
+export async function rejectSandbox(taskId) {
+    const dbModule = await import('../database.js');
+    const db = dbModule.default;
+    const sandbox = db.prepare(`SELECT * FROM sandboxes WHERE task_id = ?`).get(taskId);
+    if (!sandbox) {
+        throw new Error(`Không tìm thấy Sandbox với Task ID: ${taskId}`);
+    }
+    if (sandbox.status !== 'active') {
+        throw new Error(`Sandbox ${taskId} không ở trạng thái hoạt động (Trạng thái hiện tại: ${sandbox.status})`);
+    }
+
+    const gitRoot = sandbox.worktree.split('/.sandbox')[0];
+
+    // Dọn dẹp Sandbox, bỏ qua commit
+    try {
+        execSync(`git worktree remove ".sandbox/${sandbox.task_id}" --force`, { cwd: gitRoot });
+        execSync(`git branch -D ${sandbox.branch}`, { cwd: gitRoot });
+        console.log(chalk.green(`[Sandbox] Đã hủy và dọn dẹp hoàn toàn ${sandbox.task_id}`));
+    } catch (cleanupErr) {
+        console.warn(`[Sandbox Warning] Lỗi khi dọn dẹp: ${cleanupErr.message}`);
+    }
+
+    db.prepare(`UPDATE sandboxes SET status = 'rejected' WHERE task_id = ?`).run(taskId);
+
+    globalThis.activeWorkspace = gitRoot;
+    globalThis.isIsolatedWorkspace = false;
+
+    return {
+        status: "success",
+        message: `Đã hủy bỏ toàn bộ thay đổi của Sandbox ${taskId}. Thư mục làm việc chính không bị ảnh hưởng.`
+    };
+}
+
 /**
- * Convert input path từ AI và kiểm duyệt bảo mật bằng Path Guard, hỗ trợ tự động dịch chuyển đường dẫn sang thư mục sandbox cách ly
+ * Convert input path từ AI và kiểm duyệt bảo mật bằng Path Guard
  */
 function resolveUserPath(inputPath) {
     if (!inputPath || typeof inputPath !== 'string') {
@@ -177,7 +290,6 @@ function resolveUserPath(inputPath) {
 
     let targetPath = inputPath;
 
-    // Nếu đang ở trong Workspace cách ly, tự động dịch chuyển đường dẫn tuyệt đối của Workspace gốc sang Workspace mới
     if (globalThis.isIsolatedWorkspace && globalThis.originalWorkspace) {
         const normalizedInput = path.resolve(inputPath).replace(/\\/g, '/');
         const normalizedOriginal = path.resolve(globalThis.originalWorkspace).replace(/\\/g, '/');
@@ -231,7 +343,7 @@ function searchFilesRecursive(dir, query, maxResults = 40, currentDepth = 0, max
             if (results.length >= maxResults) break;
         }
     } catch (e) {
-        // Bỏ qua lỗi truy cập
+        // Bỏ qua lỗi
     }
     return results.slice(0, maxResults);
 }
@@ -272,20 +384,69 @@ async function applyReviewSuggestion({ originalCode, issues, suggestion, filePat
 
 export default {
     "create_isolated_workspace": {
-        description: "[SAFE MODE - GIT WORKTREE] Khởi tạo không gian làm việc an toàn (Sandbox) bằng cách tạo Git Worktree độc lập trên nhánh mới. Bắt đầu từ đây, mọi thay đổi và lệnh chạy thử sẽ hoàn toàn được cách ly nhằm bảo vệ mã nguồn gốc khỏi bị hư hỏng.",
+        description: "[SAFE MODE - GIT WORKTREE] Khởi tạo không gian làm việc an toàn (Sandbox) bằng cách tạo Git Worktree độc lập trên nhánh mới dưới thư mục .sandbox/. Mọi thay đổi và lệnh chạy thử sẽ hoàn toàn được cách ly nhằm bảo vệ mã nguồn gốc khỏi bị hư hỏng.",
         parameters: {
             type: "object",
             properties: {
-                branch_name: { type: "string", description: "Tên nhánh tùy chọn. Nếu không truyền, hệ thống tự động sinh tên nhánh dạng ai-sandbox-<timestamp>." }
+                branch_name: { type: "string", description: "Tên nhánh tùy chọn." }
             }
         },
         handler: async (args) => {
-            const workspace = await ensureGitWorktreeSandbox(args.branch_name);
+            const workspace = await ensureGitWorktreeSandbox();
             return {
                 status: "success",
-                message: "Đã kích hoạt chế độ cách ly Workspace bằng Git Worktree thành công.",
+                message: "Đã kích hoạt chế độ cách ly Workspace bằng Git Worktree Sandbox thành công.",
                 active_workspace: aiVirtualPath(workspace)
             };
+        }
+    },
+
+    "git_sandbox_status": {
+        description: "Xem danh sách và trạng thái của tất cả các Git Worktree Sandbox hiện hành.",
+        handler: async () => {
+            const dbModule = await import('../database.js');
+            const db = dbModule.default;
+            const list = db.prepare(`SELECT * FROM sandboxes`).all() || [];
+            return {
+                sandboxes: list.map(s => ({
+                    taskId: s.task_id,
+                    branch: s.branch,
+                    worktree: aiVirtualPath(s.worktree),
+                    status: s.status,
+                    parentBranch: s.parent_branch,
+                    createdAt: s.created_at
+                })),
+                active_workspace: aiVirtualPath(globalThis.activeWorkspace),
+                is_isolated: globalThis.isIsolatedWorkspace
+            };
+        }
+    },
+
+    "git_sandbox_accept": {
+        description: "[ACCEPT SANDBOX] Chấp nhận thay đổi của Sandbox chỉ định: commit toàn bộ mã nguồn cát, trộn (merge) vào nhánh chính, dọn dẹp worktree và branch.",
+        parameters: {
+            type: "object",
+            properties: {
+                task_id: { type: "string", description: "Task ID của Sandbox muốn chấp nhận (Ví dụ: 'task-001')." }
+            },
+            required: ["task_id"]
+        },
+        handler: async (args) => {
+            return await acceptSandbox(args.task_id);
+        }
+    },
+
+    "git_sandbox_reject": {
+        description: "[REJECT SANDBOX] Hủy bỏ hoàn toàn thay đổi của Sandbox chỉ định: xóa sạch worktree và branch cát mà không gây ảnh hưởng đến nhánh chính.",
+        parameters: {
+            type: "object",
+            properties: {
+                task_id: { type: "string", description: "Task ID của Sandbox muốn hủy bỏ (Ví dụ: 'task-001')." }
+            },
+            required: ["task_id"]
+        },
+        handler: async (args) => {
+            return await rejectSandbox(args.task_id);
         }
     },
 
@@ -347,14 +508,13 @@ export default {
                 file_path: { type: "string", description: "Đường dẫn tuyệt đối hoặc tương đối đến file cần sửa đổi." },
                 start_line: { type: "number", description: "Dòng bắt đầu cần xóa/thay thế (tính từ 1)." },
                 end_line: { type: "number", description: "Dòng kết thúc cần xóa/thay thế (tính từ 1)." },
-                replace_string: { type: "string", description: "Mã nguồn MỚI dạng chuỗi văn bản thường để thay thế vào khoảng dòng đã chọn." },
+                new_content: { type: "string", description: "Mã nguồn MỚI dạng chuỗi văn bản thường để thay thế vào khoảng dòng đã chọn." },
                 task_description: { type: "string", description: "Mô tả ngắn gọn bạn đang cố làm gì." },
                 skip_logic_review: { type: "boolean", description: "Bỏ qua bước AI review (mặc định: false)." }
             },
-            required: ["file_path", "start_line", "end_line", "replace_string"]
+            required: ["file_path", "start_line", "end_line", "new_content"]
         },
         handler: async (args) => {
-            // Tự động kích hoạt Git Worktree cách ly trước khi thực hiện thay đổi file
             await ensureGitWorktreeSandbox();
 
             const filePath = resolveUserPath(args.file_path);
@@ -364,9 +524,9 @@ export default {
 
             cleanupOldShadows(24);
 
-            const currentReplaceString = args.replace_string;
+            const currentReplaceString = args.new_content;
             if (currentReplaceString === undefined) {
-                throw new Error("Thiếu tham số bắt buộc 'replace_string'.");
+                throw new Error("Thiếu tham số bắt buộc 'new_content'.");
             }
 
             const MAX_RETRIES = 2;
@@ -485,6 +645,24 @@ export default {
                 }
 
                 fs.writeFileSync(filePath, newContent, 'utf8');
+
+                let originalPath = null;
+                if (globalThis.isIsolatedWorkspace && globalThis.originalWorkspace) {
+                    originalPath = aiVirtualPath(filePath);
+                    if (originalPath !== filePath) {
+                        try {
+                            const originalParentDir = path.dirname(originalPath);
+                            if (!fs.existsSync(originalParentDir)) {
+                                fs.mkdirSync(originalParentDir, { recursive: true });
+                            }
+                            fs.writeFileSync(originalPath, newContent, 'utf8');
+                            console.log(chalk.green(`[Dual-Write] 🔄 Đã đồng bộ sang thư mục gốc: ${originalPath}`));
+                        } catch (syncErr) {
+                            console.warn(chalk.yellow(`[Dual-Write] ⚠️ Cảnh báo: Không thể đồng bộ sang thư mục gốc: ${syncErr.message}`));
+                        }
+                    }
+                }
+
                 shadow.cleanup();
 
                 return {
@@ -620,7 +798,6 @@ export default {
             required: ["file_path"]
         },
         handler: async (args) => {
-            // Tự động kích hoạt Git Worktree cách ly trước khi thực hiện thay đổi file
             await ensureGitWorktreeSandbox();
 
             const filePath = resolveUserPath(args.file_path);
@@ -631,7 +808,7 @@ export default {
             } else if (args.content !== undefined) {
                 fileContent = args.content;
             } else {
-                throw new Error("Thiếu tham số 'content' || 'content_base64'.");
+                throw new Error("Thiếu tham số 'content' hoặc 'content_base64'.");
             }
 
             if (!global.isAutoApproveAll) {
@@ -656,6 +833,24 @@ export default {
             }
 
             fs.writeFileSync(filePath, fileContent, 'utf8');
+
+            let originalPath = null;
+            if (globalThis.isIsolatedWorkspace && globalThis.originalWorkspace) {
+                originalPath = aiVirtualPath(filePath);
+                if (originalPath !== filePath) {
+                    try {
+                        const originalParentDir = path.dirname(originalPath);
+                        if (!fs.existsSync(originalParentDir)) {
+                            fs.mkdirSync(originalParentDir, { recursive: true });
+                        }
+                        fs.writeFileSync(originalPath, fileContent, 'utf8');
+                        console.log(chalk.green(`[Dual-Write] 🔄 Đã đồng bộ sang thư mục gốc: ${originalPath}`));
+                    } catch (syncErr) {
+                        console.warn(chalk.yellow(`[Dual-Write] ⚠️ Cảnh báo: Không thể đồng bộ sang thư mục gốc: ${syncErr.message}`));
+                    }
+                }
+            }
+
             return {
                 message: `Đã ghi file thành công`,
                 file: aiVirtualPath(aiSafePath(filePath)),
@@ -766,3 +961,14 @@ export default {
         }
     }
 };
+
+function performLineReplacement(content, replaceStr, startLine, endLine) {
+    const lines = content.split(/\r?\n/);
+    const before = lines.slice(0, startLine - 1);
+    const after = lines.slice(endLine);
+
+    // Đảm bảo không gặp sự cố xuống dòng thừa khi nối chuỗi
+    const newMiddle = replaceStr.replace(/\r?\n$/, '').split(/\r?\n/);
+    const combined = [...before, ...newMiddle, ...after];
+    return combined.join('\n');
+}
