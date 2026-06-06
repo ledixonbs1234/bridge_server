@@ -6,7 +6,16 @@
  */
 
 import BaseProvider from './base-provider.js';
-
+function parseBase64Image(dataUri) {
+    const match = dataUri.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+        return {
+            media_type: match[1],
+            data: match[2]
+        };
+    }
+    return null;
+}
 class GeminiAPIProvider extends BaseProvider {
     constructor(config) {
         super(config);
@@ -37,10 +46,38 @@ class GeminiAPIProvider extends BaseProvider {
         const contents = [];
         for (const m of (Array.isArray(messages) ? messages : [])) {
             if (m.role === 'system') continue;
-            contents.push({
-                role: m.role === 'assistant' ? 'model' : 'user',
-                parts: [{ text: m.content }]
-            });
+
+            if (m.role === 'user' && (m.image || (m.images && m.images.length > 0))) {
+                const parts = [{ text: m.content }];
+
+                const addImageToParts = (imgUri) => {
+                    const parsed = parseBase64Image(imgUri);
+                    if (parsed) {
+                        parts.push({
+                            inlineData: {
+                                mimeType: parsed.media_type,
+                                data: parsed.data
+                            }
+                        });
+                    }
+                };
+
+                if (m.images && m.images.length > 0) {
+                    m.images.forEach(addImageToParts);
+                } else if (m.image) {
+                    addImageToParts(m.image);
+                }
+
+                contents.push({
+                    role: 'user',
+                    parts
+                });
+            } else {
+                contents.push({
+                    role: m.role === 'assistant' ? 'model' : 'user',
+                    parts: [{ text: m.content }]
+                });
+            }
         }
         if (typeof messages === 'string') {
             contents.push({ role: 'user', parts: [{ text: messages }] });

@@ -22,8 +22,7 @@ class QwenWebBot {
         this.activeRequestId = null;
     }
 
-    async init(headless = false) { // SỬA: Nhận tham số headless
-        // Nếu đã khởi tạo nhưng người dùng đổi chế độ headless, tắt đi khởi động lại
+    async init(headless = false) {
         if (this.isReady) {
             if (this.currentHeadless === headless) return;
             console.log(`[Qwen Web] 🔄 Đổi chế độ headless sang: ${headless}. Khởi động lại trình duyệt...`);
@@ -41,7 +40,7 @@ class QwenWebBot {
         const profilePath = path.join(__dirname, 'profile', 'Profile_Xon_Pro_All');
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
-            headless: headless, // SỬA: Gán biến động
+            headless: headless,
             viewport: { width: 1280, height: 1200 },
             args: ['--disable-blink-features=AutomationControlled']
         });
@@ -198,7 +197,6 @@ class QwenWebBot {
         }
     }
 
-    // Thay thế hàm clickNewChat() trong ridge_server/qwen_web_bot.js
     async clickNewChat() {
         if (!this.isReady) return;
         try {
@@ -218,7 +216,7 @@ class QwenWebBot {
         }
     }
 
-    async sendPrompt(promptText, useThinking = false, image = null) {
+    async sendPrompt(promptText, useThinking = false, image = null, images = null) {
         if (!this.isReady) await this.init();
 
         await this.page.evaluate(() => {
@@ -230,16 +228,23 @@ class QwenWebBot {
         this.accumulatedAnswer = '';
         this.streamFinished = false;
         this.streamError = null;
-        this.activeResponseId = null; 
-        console.log(`[Qwen Web] Đang nhập dữ liệu (${promptText.length} ký tự)... (Reasoning: ${useThinking ? 'ON (Think)' : 'OFF (Fast)'})${image ? ' [KÈM HÌNH ẢNH]' : ''}`);
+        this.activeResponseId = null;
 
-        const filled = await this.page.evaluate(async ({ text, useDeepThink, imageBase64 }) => {
+        // NÂNG CẤP: Chuẩn hóa ảnh. Gom cả ảnh đơn (image) và mảng ảnh (images) thành một mảng duy nhất để dán
+        let targetImages = [];
+        if (Array.isArray(images) && images.length > 0) {
+            targetImages = images;
+        } else if (image) {
+            targetImages = [image];
+        }
+
+        console.log(`[Qwen Web] Đang nhập dữ liệu (${promptText.length} ký tự)... (Reasoning: ${useThinking ? 'ON (Think)' : 'OFF (Fast)'})${targetImages.length > 0 ? ` [KÈM ${targetImages.length} HÌNH ẢNH]` : ''}`);
+
+        const filled = await this.page.evaluate(async ({ text, useDeepThink, targetImages }) => {
             const sleep = ms => new Promise(r => setTimeout(r, ms));
 
             const simulateClick = (element) => {
                 if (!element) return;
-
-                // Khai báo rõ ràng cấu hình click chuột trái (button: 0, buttons: 1)
                 const eventOpts = {
                     bubbles: true,
                     cancelable: true,
@@ -247,8 +252,6 @@ class QwenWebBot {
                     button: 0,
                     buttons: 1
                 };
-
-                // Bắn đầy đủ chuỗi sự kiện Pointer và Mouse
                 element.dispatchEvent(new PointerEvent('pointerdown', eventOpts));
                 element.dispatchEvent(new MouseEvent('mousedown', eventOpts));
                 element.dispatchEvent(new PointerEvent('pointerup', eventOpts));
@@ -269,27 +272,30 @@ class QwenWebBot {
                 textarea.blur();
                 textarea.focus();
 
-                // 🚀 XỬ LÝ DÁN ẢNH TỰ ĐỘNG LÊN KHUNG CHAT QWEN
-                if (imageBase64) {
-                    try {
-                        const response = await fetch(imageBase64);
-                        const blob = await response.blob();
-                        const file = new File([blob], "pasted-image.png", { type: blob.type });
+                // 🚀 NÂNG CẤP: Thực thi dán tuần tự từng ảnh lên khung chat
+                if (targetImages && targetImages.length > 0) {
+                    for (let idx = 0; idx < targetImages.length; idx++) {
+                        const imgBase64 = targetImages[idx];
+                        try {
+                            const response = await fetch(imgBase64);
+                            const blob = await response.blob();
+                            const file = new File([blob], `pasted-image-${idx}.png`, { type: blob.type });
 
-                        const dataTransfer = new DataTransfer();
-                        dataTransfer.items.add(file);
+                            const dataTransfer = new DataTransfer();
+                            dataTransfer.items.add(file);
 
-                        const pasteEvent = new ClipboardEvent("paste", {
-                            bubbles: true,
-                            cancelable: true,
-                            clipboardData: dataTransfer
-                        });
+                            const pasteEvent = new ClipboardEvent("paste", {
+                                bubbles: true,
+                                cancelable: true,
+                                clipboardData: dataTransfer
+                            });
 
-                        textarea.dispatchEvent(pasteEvent);
-                        // Đợi 3.5 giây để Qwen hoàn tất tải ảnh lên máy chủ của họ và tạo preview
-                        await sleep(2000);
-                    } catch (err) {
-                        console.error("[Qwen Web Browser Error] Lỗi giả lập paste ảnh:", err);
+                            textarea.dispatchEvent(pasteEvent);
+                            // Thời gian trễ để Qwen upload và render preview cho từng ảnh
+                            await sleep(2500);
+                        } catch (err) {
+                            console.error("[Qwen Web Browser Error] Lỗi giả lập paste ảnh:", err);
+                        }
                     }
                 }
 
@@ -375,7 +381,7 @@ class QwenWebBot {
                 return true;
             }
             return false;
-        }, { text: promptText, useDeepThink: useThinking, imageBase64: image });
+        }, { text: promptText, useDeepThink: useThinking, targetImages: targetImages }); // <-- ĐÃ SỬA ĐỒNG BỘ KHÓA Ở ĐÂY
 
         if (!filled) {
             console.error("[Qwen Web Error] Không tìm thấy ô nhập liệu (textarea) trong DOM!");

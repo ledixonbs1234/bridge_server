@@ -46,7 +46,7 @@ QUAN TRỌNG:
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image, headless = false } = options;
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image, images, headless = false } = options;
 
         await qwenBot.init(headless);
 
@@ -79,7 +79,8 @@ QUAN TRỌNG:
         }
 
         const isThinkingMode = (mode === 'thinking');
-        await bot.sendPrompt(finalPrompt, isThinkingMode, image);
+        // NÂNG CẤP: Truyền thêm mảng images
+        await bot.sendPrompt(finalPrompt, isThinkingMode, image, images);
 
         let stepCount = 0;
 

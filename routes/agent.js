@@ -26,13 +26,12 @@ function detectWorkspace(message) {
 }
 
 router.post('/chat', async (req, res) => {
-    // SỬA ĐỔI: Tiếp nhận thêm tham số 'agent' và 'model' từ giao diện Web Client
-    const { message, stream, useReformulate, image, agent, model, headless } = req.body;
+    // SỬA ĐỔI: Tiếp nhận thêm tham số 'agent', 'model' và mảng 'images' từ giao diện Web Client
+    const { message, stream, useReformulate, image, images, agent, model, headless } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
 
     console.log(chalk.magenta(`\n[Web Terminal] 📥 "${message.substring(0, 80)}"${stream ? ' (Stream)' : ''}`));
 
-    // SỬA ĐỔI: Tự động ánh xạ model từ frontend sang provider tương ứng trên server
     if (model) {
         const modelMap = {
             'MiniMax-M3': 'gemini-studio',
@@ -50,7 +49,6 @@ router.post('/chat', async (req, res) => {
             const switchConfig = getProviderConfig();
             const available = Object.keys(switchConfig.providers || {});
 
-            // Chỉ thực hiện chuyển đổi nếu provider tồn tại trong config.json
             if (available.includes(targetProvider)) {
                 await switchProvider(targetProvider);
             }
@@ -168,7 +166,8 @@ router.post('/chat', async (req, res) => {
             sessionFile: globalThis.activeWebSessionFile,
             useReformulate: useReformulate !== false,
             headless: !!headless,
-            image,
+            image, // Ảnh đơn để tương thích ngược
+            images: images || [], // NÂNG CẤP: Nhận danh sách mảng ảnh mới
             onChunk: stream ? (chunk) => {
                 res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
             } : null,

@@ -33,6 +33,8 @@ export const SKILL_CATEGORIES = {
 };
 
 // Skill groups mapping
+// Cập nhật phần SKILL_GROUPS trong ridge_server/constants.js
+
 export const SKILL_GROUPS = {
     [SKILL_CATEGORIES.CHAT]: [
         'read_file',
@@ -45,6 +47,7 @@ export const SKILL_GROUPS = {
         'get_os_context',
         'memorize_rule',
         'find_files',
+        'find_content', // Đã đăng ký
         'google_search',
         'google_search_and_summarize',
         'parallel_web_summarizer',
@@ -71,6 +74,7 @@ export const SKILL_GROUPS = {
         'load_harness_template',
         'replace_multiple_files_safe',
         'find_files',
+        'find_content', // Đã đăng ký
         'synthesize_skill',
         'google_search',
         'google_search_and_summarize',
@@ -90,6 +94,7 @@ export const SKILL_GROUPS = {
         'read_file_lines',
         'read_image_asset',
         'find_files',
+        'find_content', // Đã đăng ký
         'list_directory',
         'capture_system_screenshot',
         'execute_terminal_command',

@@ -108,6 +108,7 @@ export async function executeAgentTurn({
     onLog = null,
     activeProvider = globalThis.activeProvider,
     image = null,
+    images = [], // NÂNG CẤP: Thêm mảng hình ảnh
     headless = true
 }) {
     const resolvedProvider = activeProvider || globalThis.activeProvider;
@@ -115,14 +116,10 @@ export async function executeAgentTurn({
     globalThis.activeTraceId = traceId;
     if (onLog) global.logToWebChat = onLog;
 
-    // Cập nhật Workspace dựa trên phân tích ngữ cảnh tin nhắn
     updateActiveWorkspaceFromContext(message);
 
-    // =================================================================
-    // 🧠 SERVER-SIDE LOGS & STEPS TRACKER (FluxMem State Recovery)
-    // =================================================================
     const serverSteps = [];
-    const serverTimeline = []; // Khởi tạo mảng timeline đồng bộ để bảo toàn dữ liệu khi reload
+    const serverTimeline = [];
 
     const wrappedOnLog = (text) => {
         if (onLog) onLog(text);
@@ -215,6 +212,7 @@ export async function executeAgentTurn({
         const currentHistory = [...history];
         const userMsg = { role: 'user', content: reformulatedText };
         if (image) userMsg.image = image;
+        if (images && images.length > 0) userMsg.images = images; // Ghi nhận mảng ảnh
         currentHistory.push(userMsg);
 
         // Nén ngữ cảnh nếu chat history quá dài
@@ -255,7 +253,6 @@ export async function executeAgentTurn({
             messages: enrichedMessages
         }) : null;
 
-        // Định nghĩa hàm wrappedExecuteSkill dùng chung cho cả chatWithFailover và WorkflowEngine
         const wrappedExecuteSkill = async (funcName, args) => {
             const stepId = 'step_' + Math.random().toString(36).substring(2, 9);
 
@@ -343,10 +340,11 @@ export async function executeAgentTurn({
             skillRegistry: filteredSkills,
             systemPrompt,
             maxSteps: 25,
-            onStreamChunk: wrappedOnChunk, // Đồng bộ lưu chunk văn bản
-            image,
+            onStreamChunk: wrappedOnChunk,
+            image, // Cho tương thích cũ
+            images, // NÂNG CẤP: Truyền danh sách ảnh mới sang failover chain
             headless,
-            executeSkill: wrappedExecuteSkill // Gọi qua hàm được wrap
+            executeSkill: wrappedExecuteSkill
         });
 
         if (llmSpanId) {

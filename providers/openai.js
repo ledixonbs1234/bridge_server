@@ -66,7 +66,23 @@ class OpenAIProvider extends BaseProvider {
         if (typeof messages === 'string') {
             chatMessages.push({ role: 'user', content: messages });
         } else if (Array.isArray(messages)) {
-            chatMessages.push(...messages);
+            // NÂNG CẤP: Chuyển đổi mảng lịch sử sang chuẩn OpenAI Vision Content Block
+            const formattedMessages = messages.map(m => {
+                if (m.role === 'user' && (m.image || (m.images && m.images.length > 0))) {
+                    const content = [{ type: 'text', text: m.content }];
+
+                    if (m.images && m.images.length > 0) {
+                        m.images.forEach(img => {
+                            content.push({ type: 'image_url', image_url: { url: img } });
+                        });
+                    } else if (m.image) {
+                        content.push({ type: 'image_url', image_url: { url: m.image } });
+                    }
+                    return { role: m.role, content };
+                }
+                return { role: m.role, content: m.content };
+            });
+            chatMessages.push(...formattedMessages);
         }
 
         // 2. Chuẩn bị tools

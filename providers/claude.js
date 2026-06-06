@@ -6,7 +6,16 @@
  */
 
 import BaseProvider from './base-provider.js';
-
+function parseBase64Image(dataUri) {
+    const match = dataUri.match(/^data:([^;]+);base64,(.+)$/);
+    if (match) {
+        return {
+            media_type: match[1],
+            data: match[2]
+        };
+    }
+    return null;
+}
 class ClaudeProvider extends BaseProvider {
     constructor(config) {
         super(config);
@@ -32,6 +41,7 @@ class ClaudeProvider extends BaseProvider {
             };
         });
     }
+    
 
     async chat(options) {
         const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15 } = options;
@@ -39,9 +49,34 @@ class ClaudeProvider extends BaseProvider {
         // Claude tách system prompt ra riêng (không nằm trong messages)
         const claudeMessages = [];
         for (const m of (Array.isArray(messages) ? messages : [])) {
-            if (m.role === 'system') continue; // Bỏ qua, dùng field `system` riêng
+            if (m.role === 'system') continue;
             if (m.role === 'user' || m.role === 'assistant') {
-                claudeMessages.push({ role: m.role, content: m.content });
+                if (m.role === 'user' && (m.image || (m.images && m.images.length > 0))) {
+                    const content = [{ type: 'text', text: m.content }];
+
+                    const addImageToContent = (imgUri) => {
+                        const parsed = parseBase64Image(imgUri);
+                        if (parsed) {
+                            content.push({
+                                type: 'image',
+                                source: {
+                                    type: 'base64',
+                                    media_type: parsed.media_type,
+                                    data: parsed.data
+                                }
+                            });
+                        }
+                    };
+
+                    if (m.images && m.images.length > 0) {
+                        m.images.forEach(addImageToContent);
+                    } else if (m.image) {
+                        addImageToContent(m.image);
+                    }
+                    claudeMessages.push({ role: m.role, content });
+                } else {
+                    claudeMessages.push({ role: m.role, content: m.content });
+                }
             }
         }
         if (typeof messages === 'string') {
@@ -119,6 +154,8 @@ class ClaudeProvider extends BaseProvider {
         }
         return '[Lỗi: Vượt quá giới hạn bước xử lý]';
     }
+
+    
 
     _extractText(contentBlocks) {
         if (!Array.isArray(contentBlocks)) return String(contentBlocks);
