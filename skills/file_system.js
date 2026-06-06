@@ -9,6 +9,7 @@ import { validateSyntax } from './validators/syntax_validator.js';
 import { createShadow, cleanupOldShadows } from './validators/shadow_file.js';
 import { reviewLogicChange } from './validators/logic_reviewer.js';
 import { presentApprovalRequest } from '../utils/display.js';
+const { activeShadowRegistry, penultimateShadowRegistry } = await import('./validators/shadow_file.js');
 
 /**
  * Chuẩn hóa path để tránh lỗi ký tự phân tách trên các OS khác nhau
@@ -22,265 +23,6 @@ function aiSafePath(inputPath) {
 }
 
 /**
- * Hàm dịch ngược đường dẫn từ Sandbox về Thư mục gốc để "đánh lừa" AI không nhận ra cơ chế ảo hóa
- */
-function aiVirtualPath(p) {
-    if (!p || typeof p !== 'string') return p;
-    if (globalThis.isIsolatedWorkspace && globalThis.originalWorkspace) {
-        const normalizedP = p.replace(/\\/g, '/');
-        const normalizedIsolated = globalThis.activeWorkspace.replace(/\\/g, '/');
-        const normalizedOriginal = globalThis.originalWorkspace.replace(/\\/g, '/');
-        if (normalizedP.startsWith(normalizedIsolated)) {
-            return normalizedP.replace(normalizedIsolated, normalizedOriginal);
-        }
-    }
-    return p;
-}
-
-export function getGitRoot(cwd = process.cwd()) {
-    try {
-        return execSync('git rev-parse --show-toplevel', { cwd, encoding: 'utf8' }).trim().replace(/\\/g, '/');
-    } catch (e) {
-        return null;
-    }
-}
-
-export function getNextTaskId(gitRoot) {
-    const sandboxDir = path.join(gitRoot, '.sandbox');
-    if (!fs.existsSync(sandboxDir)) {
-        return 'task-001';
-    }
-    try {
-        const dirs = fs.readdirSync(sandboxDir).filter(f => f.startsWith('task-'));
-        let maxNum = 0;
-        for (const dir of dirs) {
-            const num = parseInt(dir.replace('task-', ''), 10);
-            if (!isNaN(num) && num > maxNum) {
-                maxNum = num;
-            }
-        }
-        const nextNum = maxNum + 1;
-        return `task-${String(nextNum).padStart(3, '0')}`;
-    } catch (e) {
-        return 'task-001';
-    }
-}
-
-/**
- * Tự động khởi tạo và chuyển đổi sang Git Worktree Sandbox cô lập an toàn
- */
-export async function ensureGitWorktreeSandbox() {
-    if (globalThis.isIsolatedWorkspace) {
-        return globalThis.activeWorkspace;
-    }
-
-    const currentWS = globalThis.activeWorkspace || process.cwd();
-    const gitRoot = getGitRoot(currentWS);
-
-    if (!gitRoot) {
-        return currentWS; // Không thuộc Git, bỏ qua cô lập
-    }
-
-    // Hỏi ý kiến người dùng trước khi tạo Sandbox (nếu chưa bật Auto-Approve)
-    if (!global.isAutoApproveAll) {
-        const terminalLogger = global.originalConsoleLog || console.log;
-        terminalLogger(boxen(
-            `${chalk.bold.yellow('🛡️ BẢO VỆ MÃ NGUỒN (SAFE WORKSPACE)')}\n\n` +
-            `Hệ thống phát hiện thư mục hiện tại thuộc một Git Repository:\n` +
-            `${chalk.cyan(gitRoot)}\n\n` +
-            `Để tránh rủi ro làm hỏng mã nguồn gốc, ứng dụng đề xuất tự động khởi tạo\n` +
-            `một ${chalk.bold.green('Git Worktree Sandbox')} độc lập.\n` +
-            `Mọi thay đổi của AI sẽ chỉ tác động lên không gian cát này.`,
-            { padding: 1, borderColor: 'yellow', borderStyle: 'round' }
-        ));
-
-        if (typeof global.logToWebChat === 'function') {
-            global.logToWebChat(JSON.stringify({
-                type: 'APPROVAL_REQUEST',
-                title: '🛡️ ĐỀ XUẤT CÁCH LY WORKSPACE (GIT WORKTREE)',
-                details: {
-                    file_path: gitRoot,
-                    range: 'Tạo Git Worktree Sandbox',
-                    functionality: 'Cô lập không gian làm việc của AI trên nhánh cát'
-                }
-            }));
-        }
-
-        const answer = await global.askPermission(
-            chalk.bold.greenBright(`👉 Bạn có đồng ý chuyển sang chế độ Git Worktree Sandbox an toàn? [y/a/n] : `)
-        );
-
-        if (answer === 'a') {
-            global.isAutoApproveAll = true;
-        } else if (answer !== 'y') {
-            console.log(chalk.yellow(`⚠️ Cảnh báo: Bạn đã từ chối sử dụng Git Worktree. AI sẽ ghi đè trực tiếp lên thư mục làm việc hiện tại.`));
-            return currentWS;
-        }
-    }
-
-    try {
-        console.log(chalk.cyan(`\n[Sandbox] Đang chuẩn bị Git Worktree Sandbox...`));
-        const taskId = getNextTaskId(gitRoot);
-        const branchName = `ai-${taskId}`;
-        const sandboxPath = path.join(gitRoot, '.sandbox', taskId).replace(/\\/g, '/');
-
-        // Tìm nhánh hiện tại làm nhánh gốc
-        let parentBranch = 'main';
-        try {
-            parentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: gitRoot, encoding: 'utf8' }).trim();
-        } catch (e) { }
-
-        const parentDir = path.dirname(sandboxPath);
-        if (!fs.existsSync(parentDir)) {
-            fs.mkdirSync(parentDir, { recursive: true });
-        }
-
-        // Chạy lệnh tạo Worktree Sandbox
-        const cmd = `git worktree add ".sandbox/${taskId}" -b ${branchName}`;
-        console.log(chalk.gray(`> ${cmd}`));
-        execSync(cmd, { cwd: gitRoot, stdio: 'ignore' });
-
-        // Loại trừ thư mục .sandbox khỏi Git chính
-        const excludePath = path.join(gitRoot, '.git', 'info', 'exclude');
-        if (fs.existsSync(excludePath)) {
-            let excludeContent = fs.readFileSync(excludePath, 'utf8');
-            if (!excludeContent.includes('.sandbox/')) {
-                fs.appendFileSync(excludePath, '\n.sandbox/\n', 'utf8');
-            }
-        }
-
-        // Sao chép các tệp cấu hình un-tracked cần thiết
-        const gitignoredConfigs = ['.env', '.env.local', '.env.development', '.env.production'];
-        for (const file of gitignoredConfigs) {
-            const srcFile = path.join(gitRoot, file);
-            const destFile = path.join(sandboxPath, file);
-            if (fs.existsSync(srcFile)) {
-                try {
-                    fs.copyFileSync(srcFile, destFile);
-                } catch (e) { }
-            }
-        }
-
-        // Ghi nhận Metadata vào simulated SQLite
-        const dbModule = await import('../database.js');
-        const db = dbModule.default;
-        db.prepare(`INSERT OR REPLACE INTO sandboxes (id, task_id, branch, worktree, status, parent_branch, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
-            null, taskId, branchName, sandboxPath, 'active', parentBranch, new Date().toISOString()
-        );
-
-        globalThis.originalWorkspace = gitRoot;
-        globalThis.activeWorkspace = sandboxPath;
-        globalThis.isIsolatedWorkspace = true;
-
-        const successMsg =
-            `✨ ĐÃ KHỞI TẠO CÁT LÀM VIỆC AN TOÀN (SANDBOX ACTIVATED)\n` +
-            `• Task ID: ${chalk.bold.green(taskId)}\n` +
-            `• Nhánh Git Sandbox: ${chalk.bold.green(branchName)}\n` +
-            `• Thư mục cách ly: ${chalk.bold.cyan(sandboxPath)}\n\n` +
-            `Mã nguồn gốc của bạn đã được bảo vệ hoàn toàn 100%!`;
-
-        console.log(boxen(successMsg, { padding: 1, borderColor: 'green', borderStyle: 'round' }));
-
-        if (typeof global.logToWebChat === 'function') {
-            global.logToWebChat(`🛡️ [Sandbox] Đã chuyển sang Git Worktree Sandbox: ${sandboxPath} (nhánh: ${branchName})`);
-        }
-
-        return sandboxPath;
-    } catch (err) {
-        console.error(chalk.red(`[Sandbox] Không thể khởi tạo Git Worktree Sandbox: ${err.message}`));
-        console.log(chalk.yellow(`⚠️ Chuyển về chế độ ghi đè trực tiếp lên thư mục gốc.`));
-        return currentWS;
-    }
-}
-
-export async function acceptSandbox(taskId) {
-    const dbModule = await import('../database.js');
-    const db = dbModule.default;
-    const sandbox = db.prepare(`SELECT * FROM sandboxes WHERE task_id = ?`).get(taskId);
-    if (!sandbox) {
-        throw new Error(`Không tìm thấy Sandbox với Task ID: ${taskId}`);
-    }
-    if (sandbox.status !== 'active') {
-        throw new Error(`Sandbox ${taskId} không ở trạng thái hoạt động (Trạng thái hiện tại: ${sandbox.status})`);
-    }
-
-    const gitRoot = sandbox.worktree.split('/.sandbox')[0];
-
-    // 1. Commit thay đổi bên trong sandbox
-    try {
-        const status = execSync('git status --porcelain', { cwd: sandbox.worktree, encoding: 'utf8' }).trim();
-        if (status) {
-            execSync('git add .', { cwd: sandbox.worktree });
-            execSync('git commit -m "AI: implement feature"', { cwd: sandbox.worktree });
-            console.log(chalk.green(`[Sandbox] Đã tạo commit trên nhánh cát ${sandbox.branch}`));
-        }
-    } catch (e) {
-        console.warn(`[Sandbox] Không thể tự động tạo commit: ${e.message}`);
-    }
-
-    // 2. Chuyển về workspace chính, tiến hành Merge code cát
-    try {
-        execSync(`git checkout ${sandbox.parent_branch}`, { cwd: gitRoot });
-        execSync(`git merge ${sandbox.branch}`, { cwd: gitRoot });
-        console.log(chalk.green(`[Sandbox] Đã trộn (merge) thành công nhánh cát ${sandbox.branch} vào ${sandbox.parent_branch}`));
-    } catch (mergeErr) {
-        throw new Error(`Xung đột hoặc lỗi khi merge nhánh ${sandbox.branch} vào ${sandbox.parent_branch}: ${mergeErr.message}`);
-    }
-
-    // 3. Dọn dẹp Sandbox
-    try {
-        execSync(`git worktree remove ".sandbox/${sandbox.task_id}" --force`, { cwd: gitRoot });
-        execSync(`git branch -D ${sandbox.branch}`, { cwd: gitRoot });
-        console.log(chalk.green(`[Sandbox] Đã dọn dẹp và xóa hoàn toàn worktree & branch cát của ${sandbox.task_id}`));
-    } catch (cleanupErr) {
-        console.warn(`[Sandbox Warning] Lỗi khi dọn dẹp: ${cleanupErr.message}`);
-    }
-
-    db.prepare(`UPDATE sandboxes SET status = 'accepted' WHERE task_id = ?`).run(taskId);
-
-    globalThis.activeWorkspace = gitRoot;
-    globalThis.isIsolatedWorkspace = false;
-
-    return {
-        status: "success",
-        message: `Đã chấp nhận thành công các thay đổi từ Sandbox ${taskId} và đồng bộ về nhánh ${sandbox.parent_branch}.`
-    };
-}
-
-export async function rejectSandbox(taskId) {
-    const dbModule = await import('../database.js');
-    const db = dbModule.default;
-    const sandbox = db.prepare(`SELECT * FROM sandboxes WHERE task_id = ?`).get(taskId);
-    if (!sandbox) {
-        throw new Error(`Không tìm thấy Sandbox với Task ID: ${taskId}`);
-    }
-    if (sandbox.status !== 'active') {
-        throw new Error(`Sandbox ${taskId} không ở trạng thái hoạt động (Trạng thái hiện tại: ${sandbox.status})`);
-    }
-
-    const gitRoot = sandbox.worktree.split('/.sandbox')[0];
-
-    // Dọn dẹp Sandbox, bỏ qua commit
-    try {
-        execSync(`git worktree remove ".sandbox/${sandbox.task_id}" --force`, { cwd: gitRoot });
-        execSync(`git branch -D ${sandbox.branch}`, { cwd: gitRoot });
-        console.log(chalk.green(`[Sandbox] Đã hủy và dọn dẹp hoàn toàn ${sandbox.task_id}`));
-    } catch (cleanupErr) {
-        console.warn(`[Sandbox Warning] Lỗi khi dọn dẹp: ${cleanupErr.message}`);
-    }
-
-    db.prepare(`UPDATE sandboxes SET status = 'rejected' WHERE task_id = ?`).run(taskId);
-
-    globalThis.activeWorkspace = gitRoot;
-    globalThis.isIsolatedWorkspace = false;
-
-    return {
-        status: "success",
-        message: `Đã hủy bỏ toàn bộ thay đổi của Sandbox ${taskId}. Thư mục làm việc chính không bị ảnh hưởng.`
-    };
-}
-
-/**
  * Convert input path từ AI và kiểm duyệt bảo mật bằng Path Guard
  */
 function resolveUserPath(inputPath) {
@@ -288,24 +30,22 @@ function resolveUserPath(inputPath) {
         throw new Error('Path không hợp lệ');
     }
 
-    let targetPath = inputPath;
+    const defaultBase = globalThis.activeWorkspace || process.cwd();
 
-    if (globalThis.isIsolatedWorkspace && globalThis.originalWorkspace) {
-        const normalizedInput = path.resolve(inputPath).replace(/\\/g, '/');
-        const normalizedOriginal = path.resolve(globalThis.originalWorkspace).replace(/\\/g, '/');
-        const normalizedIsolated = path.resolve(globalThis.activeWorkspace).replace(/\\/g, '/');
-
-        if (normalizedInput.startsWith(normalizedOriginal)) {
-            const relativePart = normalizedInput.substring(normalizedOriginal.length);
-            targetPath = path.join(normalizedIsolated, relativePart).replace(/\\/g, '/');
-        }
+    let resolved;
+    try {
+        resolved = path.isAbsolute(inputPath)
+            ? path.resolve(inputPath)
+            : path.resolve(defaultBase, inputPath);
+    } catch (e) {
+        throw new Error(`Không thể resolve path: ${e.message}`);
     }
 
-    const validation = validatePath(targetPath);
+    const validation = validatePath(resolved);
     if (!validation.allowed) {
-        printPathWarning(validation, targetPath);
+        printPathWarning(validation, resolved);
         throw new Error(
-            `PATH_BLOCKED: Path "${targetPath}" bị chặn vì lý do bảo mật. ` +
+            `PATH_BLOCKED: Path "${resolved}" bị chặn vì lý do bảo mật. ` +
             `Lý do: ${validation.reason}. ` +
             `Vui lòng sử dụng đường dẫn trong các thư mục được phép.`
         );
@@ -382,75 +122,292 @@ async function applyReviewSuggestion({ originalCode, issues, suggestion, filePat
     }
 }
 
+/**
+ * Thuật toán khoanh vùng so khớp và thay thế nội dung (Hybrid Bounded Replacer)
+ * Hỗ trợ so khớp tuyệt đối trong phân đoạn hoặc chuyển đổi sang so khớp mờ regex linh hoạt
+ */
+function performBoundedReplacement(originalContent, targetContent, replacementContent, startLine, endLine) {
+    // Đồng bộ kết thúc dòng về LF (\n) để tránh lệch Windows/Linux
+    const normalizedContent = originalContent.replace(/\r\n/g, '\n');
+    const normalizedTarget = targetContent.replace(/\r\n/g, '\n');
+    const normalizedReplacement = replacementContent.replace(/\r\n/g, '\n');
+
+    const lines = normalizedContent.split('\n');
+
+    // Xác định biên tìm kiếm tối ưu [start_line - 20, end_line + 20] (0-based index)
+    const startIdx = Math.max(0, startLine - 20 - 1);
+    const endIdx = Math.min(lines.length, endLine + 20);
+
+    const prefix = lines.slice(0, startIdx).join('\n');
+    const searchSegment = lines.slice(startIdx, endIdx).join('\n');
+    const suffix = lines.slice(endIdx).join('\n');
+
+    const countOccurrences = (str, subStr) => {
+        if (!subStr) return 0;
+        let count = 0;
+        let pos = str.indexOf(subStr);
+        while (pos !== -1) {
+            count++;
+            pos = str.indexOf(subStr, pos + subStr.length);
+        }
+        return count;
+    };
+
+    // Mức 1: So khớp tuyệt đối trong phân đoạn khoanh vùng
+    let matchCount = countOccurrences(searchSegment, normalizedTarget);
+
+    if (matchCount === 1) {
+        const modifiedSegment = searchSegment.replace(normalizedTarget, normalizedReplacement);
+        const finalParts = [];
+        if (startIdx > 0) finalParts.push(prefix);
+        finalParts.push(modifiedSegment);
+        if (endIdx < lines.length) finalParts.push(suffix);
+        return finalParts.join('\n');
+    }
+
+    if (matchCount > 1) {
+        throw new Error(`[AMBIGUOUS_REPLACEMENT] Phát hiện quá nhiều vị trí trùng khớp (${matchCount} vị trí) cho đoạn mã cần tìm trong khoảng dòng từ ${Math.max(1, startLine - 20)} đến ${Math.min(lines.length, endLine + 20)}. Hãy cung cấp 'target_content' dài hơn hoặc thu hẹp dòng để đảm bảo tính duy nhất.`);
+    }
+
+    // Mức 2: So khớp mờ (Fuzzy matching) - Bỏ qua sự lệch thụt dòng (Indentation/Contiguous whitespace)
+    const cleanString = (str) => {
+        return str.replace(/[ \t]+/g, ' ').replace(/\n\s*\n/g, '\n').trim();
+    };
+
+    const cleanSegment = cleanString(searchSegment);
+    const cleanTarget = cleanString(normalizedTarget);
+
+    let fuzzyCount = countOccurrences(cleanSegment, cleanTarget);
+    if (fuzzyCount === 1) {
+        const escapeRegExp = (string) => {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        };
+
+        const targetLines = normalizedTarget.split('\n').map(l => l.trim()).filter(Boolean);
+        if (targetLines.length > 0) {
+            const regexParts = targetLines.map(line => {
+                const escapedLine = escapeRegExp(line);
+                return escapedLine.replace(/\s+/g, '[ \\t]+');
+            });
+
+            const patternStr = regexParts.join('[\\s\\r\\n]*');
+            const relaxedRegex = new RegExp(patternStr, 'g');
+
+            const regexMatches = searchSegment.match(relaxedRegex);
+            if (regexMatches && regexMatches.length === 1) {
+                const modifiedSegment = searchSegment.replace(relaxedRegex, normalizedReplacement);
+                const finalParts = [];
+                if (startIdx > 0) finalParts.push(prefix);
+                finalParts.push(modifiedSegment);
+                if (endIdx < lines.length) finalParts.push(suffix);
+                return finalParts.join('\n');
+            }
+        }
+    }
+
+    throw new Error(`[TARGET_NOT_FOUND] Không tìm thấy nội dung khớp trong khoảng dòng từ ${Math.max(1, startLine - 20)} đến ${Math.min(lines.length, endLine + 20)}. Vui lòng kiểm tra lại khoảng khoảng trắng, thụt lề, hoặc sử dụng công cụ đọc dòng để cập nhật trạng thái tệp trước khi thực hiện.`);
+}
+
 export default {
-    "create_isolated_workspace": {
-        description: "[SAFE MODE - GIT WORKTREE] Khởi tạo không gian làm việc an toàn (Sandbox) bằng cách tạo Git Worktree độc lập trên nhánh mới dưới thư mục .sandbox/. Mọi thay đổi và lệnh chạy thử sẽ hoàn toàn được cách ly nhằm bảo vệ mã nguồn gốc khỏi bị hư hỏng.",
+    "replace_multiple_files_safe": {
+        description: "[SAFE MODE] Thay thế nội dung trên nhiều file cùng lúc dựa trên cơ chế so khớp khoanh vùng thông minh, tự động lưu vết qua Shadow Files để rollback đồng bộ nếu có lỗi cú pháp hoặc logic xảy ra trên bất kỳ file nào.",
         parameters: {
             type: "object",
             properties: {
-                branch_name: { type: "string", description: "Tên nhánh tùy chọn." }
-            }
+                edits: {
+                    type: "array",
+                    description: "Danh sách các điều chỉnh nội dung trên các file.",
+                    items: {
+                        type: "object",
+                        properties: {
+                            file_path: { type: "string", description: "Đường dẫn tuyệt đối hoặc tương đối đến file cần sửa đổi." },
+                            target_content: { type: "string", description: "Nội dung mã nguồn cũ chính xác cần thay thế." },
+                            replacement_content: { type: "string", description: "Nội dung mã nguồn mới sẽ thay thế vào." },
+                            start_line: { type: "number", description: "Dòng bắt đầu của vùng code cũ (để giới hạn phạm vi tìm kiếm)." },
+                            end_line: { type: "number", description: "Dòng kết thúc của vùng code cũ." }
+                        },
+                        required: ["file_path", "target_content", "replacement_content", "start_line", "end_line"]
+                    }
+                },
+                task_description: { type: "string", description: "Mô tả ngắn gọn tác vụ tổng thể bạn đang thực hiện." },
+                skip_logic_review: { type: "boolean", description: "Bỏ qua bước review logic (mặc định: false)." }
+            },
+            required: ["edits"]
         },
         handler: async (args) => {
-            const workspace = await ensureGitWorktreeSandbox();
-            return {
-                status: "success",
-                message: "Đã kích hoạt chế độ cách ly Workspace bằng Git Worktree Sandbox thành công.",
-                active_workspace: aiVirtualPath(workspace)
-            };
-        }
-    },
-
-    "git_sandbox_status": {
-        description: "Xem danh sách và trạng thái của tất cả các Git Worktree Sandbox hiện hành dưới dạng bảng Markdown rút gọn để tối ưu token.",
-        handler: async () => {
-            const dbModule = await import('../database.js');
-            const db = dbModule.default;
-            const list = db.prepare(`SELECT * FROM sandboxes`).all() || [];
-
-            let markdownResult = `### 🛡️ Trạng thái các Git Sandbox\n\n`;
-            markdownResult += `| Task ID | Nhánh Git | Thư mục cách ly | Trạng thái |\n`;
-            markdownResult += `| :--- | :--- | :--- | :--- |\n`;
-
-            if (list.length === 0) {
-                markdownResult += `| - | - | *(Không có sandbox nào đang hoạt động)* | - |\n`;
-            } else {
-                list.forEach(s => {
-                    markdownResult += `| \`${s.task_id}\` | \`${s.branch}\` | \`${aiVirtualPath(s.worktree)}\` | **${s.status.toUpperCase()}** |\n`;
-                });
+            const edits = args.edits;
+            if (!Array.isArray(edits) || edits.length === 0) {
+                throw new Error("Danh sách sửa đổi 'edits' không hợp lệ hoặc trống.");
             }
 
-            markdownResult += `\n- **Thư mục làm việc hiện tại**: \`${aiVirtualPath(aiSafePath(globalThis.activeWorkspace))}\`\n`;
-            markdownResult += `- **Chế độ cách ly hoạt động**: \`${globalThis.isIsolatedWorkspace ? 'Đang bật (ON)' : 'Đang tắt (OFF)'}\`\n`;
-            return markdownResult;
-        }
-    },
+            cleanupOldShadows(24);
 
-    "git_sandbox_accept": {
-        description: "[ACCEPT SANDBOX] Chấp nhận thay đổi của Sandbox chỉ định: commit toàn bộ mã nguồn cát, trộn (merge) vào nhánh chính, dọn dẹp worktree và branch.",
-        parameters: {
-            type: "object",
-            properties: {
-                task_id: { type: "string", description: "Task ID của Sandbox muốn chấp nhận (Ví dụ: 'task-001')." }
-            },
-            required: ["task_id"]
-        },
-        handler: async (args) => {
-            return await acceptSandbox(args.task_id);
-        }
-    },
+            const shadows = [];
+            const filesToRestore = [];
+            const results = [];
 
-    "git_sandbox_reject": {
-        description: "[REJECT SANDBOX] Hủy bỏ hoàn toàn thay đổi của Sandbox chỉ định: xóa sạch worktree và branch cát mà không gây ảnh hưởng đến nhánh chính.",
-        parameters: {
-            type: "object",
-            properties: {
-                task_id: { type: "string", description: "Task ID của Sandbox muốn hủy bỏ (Ví dụ: 'task-001')." }
-            },
-            required: ["task_id"]
-        },
-        handler: async (args) => {
-            return await rejectSandbox(args.task_id);
+            try {
+                for (const edit of edits) {
+                    const filePath = resolveUserPath(edit.file_path);
+                    if (!fs.existsSync(filePath)) {
+                        throw new Error(`File không tồn tại: ${aiSafePath(edit.file_path)}`);
+                    }
+                    activeShadowRegistry.register(filePath);
+                    penultimateShadowRegistry.register(filePath);
+                    const shadow = createShadow(filePath);
+                    shadows.push(shadow);
+                    filesToRestore.push({ filePath, shadow, edit });
+                }
+
+                for (const item of filesToRestore) {
+                    const { filePath, edit } = item;
+                    const MAX_RETRIES = 2;
+                    let attempt = 0;
+                    let finalReplaceString = edit.replacement_content;
+                    let success = false;
+
+                    while (attempt <= MAX_RETRIES && !success) {
+                        attempt++;
+                        console.log(chalk.cyan(`\n[Multi-Replace] Sửa file: ${aiSafePath(edit.file_path)} - Lần thử ${attempt}/${MAX_RETRIES + 1}`));
+
+                        const originalContent = fs.readFileSync(filePath, 'utf8');
+                        const originalLines = originalContent.split(/\r?\n/);
+
+                        const contextStart = Math.max(0, edit.start_line - 21);
+                        const contextEnd = Math.min(originalLines.length, edit.end_line + 20);
+                        const originalContext = originalLines
+                            .slice(contextStart, contextEnd)
+                            .map((l, i) => `${contextStart + i + 1} | ${l}`)
+                            .join('\n');
+
+                        let newContent;
+                        try {
+                            newContent = performBoundedReplacement(originalContent, edit.target_content, finalReplaceString, edit.start_line, edit.end_line);
+                        } catch (err) {
+                            throw new Error(`Lỗi so khớp thay thế trên file ${aiSafePath(edit.file_path)}: ${err.message}`);
+                        }
+
+                        fs.writeFileSync(filePath, newContent, 'utf8');
+
+                        const syntaxResult = validateSyntax(filePath, newContent);
+                        if (!syntaxResult.valid) {
+                            console.log(chalk.red(`[Multi-Replace] ❌ Lỗi cú pháp trong file ${aiSafePath(edit.file_path)} (${syntaxResult.language}):`));
+                            console.log(chalk.red(`   ${syntaxResult.error}`));
+
+                            if (attempt <= MAX_RETRIES) {
+                                console.log(chalk.yellow(`[Multi-Replace] 🤖 Đang tự động sửa lỗi cú pháp cho file...`));
+                                finalReplaceString = await autoFixSyntaxError({
+                                    originalCode: finalReplaceString,
+                                    syntaxError: syntaxResult.error,
+                                    language: syntaxResult.language,
+                                    filePath
+                                });
+                                continue;
+                            }
+
+                            throw new Error(`Syntax Error trong file ${aiSafePath(edit.file_path)}: ${syntaxResult.error}`);
+                        }
+                        console.log(chalk.green(`[Multi-Replace] ✅ Cú pháp OK (${syntaxResult.language})`));
+
+                        if (!args.skip_logic_review && globalThis.activeProvider) {
+                            const review = await reviewLogicChange({
+                                provider: globalThis.activeProvider,
+                                filePath,
+                                originalContext,
+                                newCode: finalReplaceString,
+                                fullNewContent: newContent,
+                                taskDescription: args.task_description || ''
+                            });
+
+                            if (review.verdict === 'FAIL') {
+                                console.log(chalk.red(`[Multi-Replace] ❌ Lỗi logic phát hiện trong file ${aiSafePath(edit.file_path)}:`));
+                                review.issues.forEach(issue => console.log(chalk.red(`   • ${issue}`)));
+
+                                if (attempt <= MAX_RETRIES && review.suggestion) {
+                                    console.log(chalk.yellow(`[Multi-Replace] 🤖 Đang sửa lỗi logic theo gợi ý...`));
+                                    finalReplaceString = await applyReviewSuggestion({
+                                        originalCode: finalReplaceString,
+                                        issues: review.issues,
+                                        suggestion: review.suggestion,
+                                        filePath
+                                    });
+                                    continue;
+                                }
+
+                                throw new Error(`Logic Error trong file ${aiSafePath(edit.file_path)}: ${review.issues.join(' | ')}`);
+                            }
+
+                            if (review.verdict === 'WARN') {
+                                console.log(chalk.yellow(`[Multi-Replace] ⚠️ Cảnh báo logic (vẫn tiếp tục):`));
+                                review.issues.forEach(issue => console.log(chalk.yellow(`   • ${issue}`)));
+                            } else {
+                                console.log(chalk.green(`[Multi-Replace] ✅ Logic Review PASS`));
+                            }
+                        }
+
+                        success = true;
+                        results.push({
+                            file: aiSafePath(filePath),
+                            absolute_path: filePath.replace(/\\/g, '/'),
+                            start_line: edit.start_line,
+                            end_line: edit.end_line
+                        });
+                    }
+                }
+
+                if (!global.isAutoApproveAll) {
+                    presentApprovalRequest(
+                        '⚠️ YÊU CẦU SỬA NHIỀU FILE CÙNG LÚC',
+                        {
+                            file_path: `Hàng loạt (${filesToRestore.length} files)`,
+                            range: filesToRestore.map(item => `${item.edit.file_path}:${item.edit.start_line}-${item.edit.end_line}`).join(', '),
+                            functionality: `Chức năng: Thay thế code hàng loạt | Mô tả: ${args.task_description || 'N/A'}`
+                        },
+                        { edits: edits.map(e => ({ file_path: e.file_path, start_line: e.start_line, end_line: e.end_line })) }
+                    );
+
+                    const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép áp dụng các thay đổi này cho cả ${filesToRestore.length} file? [y/a/n] : `));
+                    if (answer === 'a') global.isAutoApproveAll = true;
+                    else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
+                }
+
+                const incrementalDiffs = [];
+                for (const item of filesToRestore) {
+                    const { filePath, edit } = item;
+                    const oldContent = fs.existsSync(item.shadow.shadowPath) ? fs.readFileSync(item.shadow.shadowPath, 'utf8') : '';
+                    const newContent = fs.readFileSync(filePath, 'utf8');
+                    const incDiff = computeLineDiff(oldContent, newContent);
+                    incrementalDiffs.push({
+                        file: aiSafePath(edit.file_path),
+                        additions: incDiff.additions,
+                        deletions: incDiff.deletions,
+                        diff: incDiff.diff
+                    });
+                }
+
+                for (const shadow of shadows) {
+                    shadow.cleanup();
+                }
+
+                return {
+                    status: "success",
+                    message: `Đã thay thế an toàn hàng loạt trên cả ${edits.length} file thành công.`,
+                    modified_files: results,
+                    incremental_diffs: incrementalDiffs
+                };
+
+            } catch (err) {
+                console.log(chalk.red(`\n[Multi-Replace] 🚨 Giao dịch bị hủy do lỗi hoặc bị từ chối phê duyệt. Đang tiến hành rollback khôi phục lại toàn bộ file...`));
+                for (const shadow of shadows) {
+                    try {
+                        shadow.restore();
+                        shadow.cleanup();
+                    } catch (restoreErr) {
+                        console.error(`[Multi-Replace] Lỗi khi khôi phục shadow: ${restoreErr.message}`);
+                    }
+                }
+                throw err;
+            }
         }
     },
 
@@ -486,7 +443,7 @@ export default {
                     const item = {
                         name: entry.name,
                         type: entry.isDirectory() ? 'directory' : 'file',
-                        path: aiVirtualPath(aiSafePath(fullPath))
+                        path: aiSafePath(fullPath)
                     };
 
                     if (entry.isDirectory() && currentDepth < maxDepth) {
@@ -502,8 +459,7 @@ export default {
 
             const files = getFilesRecursive(targetPath, 1);
 
-            // Tự động chuyển đổi sang bảng Markdown trực quan và gọn nhẹ
-            let markdownTable = `### Thư mục: \`${aiVirtualPath(aiSafePath(targetPath))}\`\n\n`;
+            let markdownTable = `### Thư mục: \`${aiSafePath(targetPath)}\`\n\n`;
             markdownTable += `| Tên tệp / Thư mục | Phân loại |\n`;
             markdownTable += `| :--- | :--- |\n`;
 
@@ -529,33 +485,34 @@ export default {
         }
     },
 
-    "replace_by_lines_safe": {
-        description: "[SAFE MODE] Thay thế code theo số dòng với các lớp bảo vệ. Tool chỉ sửa đúng phạm vi dòng được chỉ định, phần còn lại của file tự động được bảo toàn.",
+    "replace_content_safe": {
+        description: "[SAFE MODE] Tìm kiếm và thay thế một đoạn mã nguồn trong khoảng dòng định vị chỉ định bằng thuật toán so khớp bảo vệ ±20 dòng, giúp ngăn ngừa hoàn toàn các lỗi ghi đè nhầm hoặc trùng lặp dữ liệu trên tệp tin.",
         parameters: {
             type: "object",
             properties: {
                 file_path: { type: "string", description: "Đường dẫn tuyệt đối hoặc tương đối đến file cần sửa đổi." },
-                start_line: { type: "number", description: "Dòng bắt đầu cần xóa/thay thế (tính từ 1)." },
-                end_line: { type: "number", description: "Dòng kết thúc cần xóa/thay thế (tính từ 1)." },
-                new_content: { type: "string", description: "Mã nguồn MỚI dạng chuỗi văn bản thường để thay thế vào khoảng dòng đã chọn." },
-                task_description: { type: "string", description: "Mô tả ngắn gọn bạn đang cố làm gì." },
-                skip_logic_review: { type: "boolean", description: "Bỏ qua bước AI review (mặc định: false)." }
+                target_content: { type: "string", description: "Đoạn mã nguồn CŨ chính xác cần thay thế." },
+                replacement_content: { type: "string", description: "Đoạn mã nguồn MỚI sẽ thay thế vào." },
+                start_line: { type: "number", description: "Dòng bắt đầu của đoạn mã cũ trong file (phục vụ khoanh vùng tìm kiếm)." },
+                end_line: { type: "number", description: "Dòng kết thúc của đoạn mã cũ trong file." },
+                task_description: { type: "string", description: "Mô tả ngắn gọn tác vụ bạn đang thực hiện." },
+                skip_logic_review: { type: "boolean", description: "Bỏ qua bước AI review logic (mặc định: false)." }
             },
-            required: ["file_path", "start_line", "end_line", "new_content"]
+            required: ["file_path", "target_content", "replacement_content", "start_line", "end_line"]
         },
         handler: async (args) => {
-            await ensureGitWorktreeSandbox();
-
             const filePath = resolveUserPath(args.file_path);
             if (!fs.existsSync(filePath)) {
                 throw new Error(`File không tồn tại: ${aiSafePath(filePath)}`);
             }
 
             cleanupOldShadows(24);
+            activeShadowRegistry.register(filePath);
+            penultimateShadowRegistry.register(filePath);
 
-            const currentReplaceString = args.new_content;
+            const currentReplaceString = args.replacement_content;
             if (currentReplaceString === undefined) {
-                throw new Error("Thiếu tham số bắt buộc 'new_content'.");
+                throw new Error("Thiếu tham số bắt buộc 'replacement_content'.");
             }
 
             const MAX_RETRIES = 2;
@@ -579,7 +536,7 @@ export default {
 
                 let newContent;
                 try {
-                    newContent = performLineReplacement(originalContent, finalReplaceString, args.start_line, args.end_line);
+                    newContent = performBoundedReplacement(originalContent, args.target_content, finalReplaceString, args.start_line, args.end_line);
                 } catch (err) {
                     shadow.cleanup();
                     throw err;
@@ -607,11 +564,11 @@ export default {
                     return {
                         status: "error",
                         error_message: `Syntax Error sau khi thay thế: ${syntaxResult.error}`,
-                        file: aiVirtualPath(aiSafePath(filePath)),
+                        file: aiSafePath(filePath),
                         rolled_back: true
                     };
                 }
-                console.log(chalk.green(`[Safe-Replace] ✅ Syntax OK (${syntaxResult.language})`));
+                console.log(chalk.green(`[Safe-Replace] ✅ Cú pháp OK (${syntaxResult.language})`));
 
                 if (!args.skip_logic_review && globalThis.activeProvider) {
                     const review = await reviewLogicChange({
@@ -645,7 +602,7 @@ export default {
                             status: "error",
                             error_message: `Logic Error: ${review.issues.join(' | ')}`,
                             suggestion: review.suggestion,
-                            file: aiVirtualPath(aiSafePath(filePath)),
+                            file: aiSafePath(filePath),
                             rolled_back: true
                         };
                     }
@@ -662,9 +619,9 @@ export default {
                     presentApprovalRequest(
                         '⚠️ YÊU CẦU SỬA CODE',
                         {
-                            file_path: aiVirtualPath(args.file_path),
-                            range: `${args.start_line} đến ${args.end_line}`,
-                            functionality: 'Thay thế/Sửa đổi cấu trúc tệp tin'
+                            file_path: args.file_path,
+                            range: `Dòng ${args.start_line} đến ${args.end_line} (Biên tìm kiếm ±20 dòng)`,
+                            functionality: `Chỉnh sửa nội dung tệp tin: ${args.task_description || 'Không có mô tả'}`
                         },
                         { content: finalReplaceString }
                     );
@@ -675,37 +632,29 @@ export default {
 
                 fs.writeFileSync(filePath, newContent, 'utf8');
 
-                let originalPath = null;
-                if (globalThis.isIsolatedWorkspace && globalThis.originalWorkspace) {
-                    originalPath = aiVirtualPath(filePath);
-                    if (originalPath !== filePath) {
-                        try {
-                            const originalParentDir = path.dirname(originalPath);
-                            if (!fs.existsSync(originalParentDir)) {
-                                fs.mkdirSync(originalParentDir, { recursive: true });
-                            }
-                            fs.writeFileSync(originalPath, newContent, 'utf8');
-                            console.log(chalk.green(`[Dual-Write] 🔄 Đã đồng bộ sang thư mục gốc: ${originalPath}`));
-                        } catch (syncErr) {
-                            console.warn(chalk.yellow(`[Dual-Write] ⚠️ Cảnh báo: Không thể đồng bộ sang thư mục gốc: ${syncErr.message}`));
-                        }
-                    }
-                }
+                const oldContent = fs.existsSync(shadow.shadowPath) ? fs.readFileSync(shadow.shadowPath, 'utf8') : '';
+                const incDiff = computeLineDiff(oldContent, newContent);
 
                 shadow.cleanup();
 
                 return {
                     status: "success",
-                    message: `Đã thay thế an toàn từ dòng ${args.start_line} đến ${args.end_line} (sau ${attempt} lần thử)`,
-                    file: aiVirtualPath(aiSafePath(filePath)),
-                    absolute_path: aiVirtualPath(filePath.replace(/\\/g, '/')),
-                    directory: aiVirtualPath(path.dirname(filePath).replace(/\\/g, '/')),
+                    message: `Đã tìm kiếm và thay thế an toàn trong khoảng dòng ${args.start_line} đến ${args.end_line} (sau ${attempt} lần thử)`,
+                    file: aiSafePath(filePath),
+                    absolute_path: filePath.replace(/\\/g, '/'),
+                    directory: path.dirname(filePath).replace(/\\/g, '/'),
                     validations_passed: {
                         syntax: true,
                         logic_review: !args.skip_logic_review,
                         shadow_backup: true
                     },
-                    attempts: attempt
+                    attempts: attempt,
+                    incremental_diff: {
+                        file: aiSafePath(filePath),
+                        additions: incDiff.additions,
+                        deletions: incDiff.deletions,
+                        diff: incDiff.diff
+                    }
                 };
             }
 
@@ -728,7 +677,7 @@ export default {
             const lines = content.split(/\r?\n/);
             const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
 
-            let md = `### 📂 File: \`${aiVirtualPath(aiSafePath(filePath))}\` *(Tổng số dòng: ${lines.length})*\n`;
+            let md = `### 📂 File: \`${aiSafePath(filePath)}\` *(Tổng số dòng: ${lines.length})*\n`;
             md += `\`\`\`text\n${numberedLines}\n\`\`\``;
             return md;
         }
@@ -753,14 +702,14 @@ export default {
                 try {
                     const filePath = resolveUserPath(inputPath);
                     if (!fs.existsSync(filePath)) {
-                        markdownResult += `### ❌ Tệp tin không tồn tại: \`${aiVirtualPath(aiSafePath(filePath))}\`\n\n`;
+                        markdownResult += `### ❌ Tệp tin không tồn tại: \`${aiSafePath(filePath)}\`\n\n`;
                         continue;
                     }
                     const content = fs.readFileSync(filePath, 'utf8');
                     const lines = content.split(/\r?\n/);
                     const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
 
-                    markdownResult += `### 📂 File: \`${aiVirtualPath(aiSafePath(filePath))}\` *(Tổng số dòng: ${lines.length})*\n`;
+                    markdownResult += `### 📂 File: \`${aiSafePath(filePath)}\` *(Tổng số dòng: ${lines.length})*\n`;
                     markdownResult += `\`\`\`text\n${numberedLines}\n\`\`\`\n\n`;
                 } catch (e) {
                     markdownResult += `### ❌ Gặp lỗi khi đọc tệp tin \`${inputPath}\`: ${e.message}\n\n`;
@@ -793,14 +742,14 @@ export default {
             const end = Math.min(lines.length, args.end_line);
             const numberedLines = lines.slice(start, end).map((line, idx) => `${start + idx + 1} | ${line}`).join('\n');
 
-            let md = `### 📂 File: \`${aiVirtualPath(aiSafePath(filePath))}\` *(Dòng ${start + 1} đến ${end} / Tổng số dòng: ${lines.length})*\n`;
+            let md = `### 📂 File: \`${aiSafePath(filePath)}\` *(Dòng ${start + 1} đến ${end} / Tổng số dòng: ${lines.length})*\n`;
             md += `\`\`\`text\n${numberedLines}\n\`\`\``;
             return md;
         }
     },
 
     "write_file": {
-        description: "Tạo file mới hoàn toàn hoặc ghi đè TOÀN BỘ nội dung vào file đã có. Hỗ trợ tự động tạo thư mục cha. Chấp nhận chuỗi thường (content) hoặc chuỗi mã hóa base64 (content_base64) để tránh lỗi unicode/JSON escape.",
+        description: "Tạo file mới hoàn toàn hoặc ghi đè TOÀN BỘ nội dung vào file đã có với cơ chế lưu trữ điểm khôi phục Shadow File. Hỗ trợ tự động tạo thư mục cha. Chấp nhận chuỗi thường (content) hoặc chuỗi mã hóa base64 (content_base64) để tránh lỗi unicode/JSON escape.",
         parameters: {
             type: "object",
             properties: {
@@ -811,9 +760,9 @@ export default {
             required: ["file_path"]
         },
         handler: async (args) => {
-            await ensureGitWorktreeSandbox();
-
             const filePath = resolveUserPath(args.file_path);
+            activeShadowRegistry.register(filePath);
+            penultimateShadowRegistry.register(filePath);
 
             let fileContent = "";
             if (args.content_base64) {
@@ -824,11 +773,16 @@ export default {
                 throw new Error("Thiếu tham số 'content' hoặc 'content_base64'.");
             }
 
+            let oldContent = "";
+            if (fs.existsSync(filePath)) {
+                oldContent = fs.readFileSync(filePath, 'utf8');
+            }
+
             if (!global.isAutoApproveAll) {
                 presentApprovalRequest(
                     '⚠️ YÊU CẦU TẠO / GHI ĐÈ TOÀN BỘ FILE',
                     {
-                        file_path: aiVirtualPath(args.file_path),
+                        file_path: args.file_path,
                         range: 'Toàn bộ file (Ghi mới hoặc ghi đè)',
                         functionality: 'Tạo hoặc ghi đè toàn bộ tệp tin nguồn'
                     },
@@ -847,28 +801,19 @@ export default {
 
             fs.writeFileSync(filePath, fileContent, 'utf8');
 
-            let originalPath = null;
-            if (globalThis.isIsolatedWorkspace && globalThis.originalWorkspace) {
-                originalPath = aiVirtualPath(filePath);
-                if (originalPath !== filePath) {
-                    try {
-                        const originalParentDir = path.dirname(originalPath);
-                        if (!fs.existsSync(originalParentDir)) {
-                            fs.mkdirSync(originalParentDir, { recursive: true });
-                        }
-                        fs.writeFileSync(originalPath, fileContent, 'utf8');
-                        console.log(chalk.green(`[Dual-Write] 🔄 Đã đồng bộ sang thư mục gốc: ${originalPath}`));
-                    } catch (syncErr) {
-                        console.warn(chalk.yellow(`[Dual-Write] ⚠️ Cảnh báo: Không thể đồng bộ sang thư mục gốc: ${syncErr.message}`));
-                    }
-                }
-            }
+            const incDiff = computeLineDiff(oldContent, fileContent);
 
             return {
                 message: `Đã ghi file thành công`,
-                file: aiVirtualPath(aiSafePath(filePath)),
-                absolute_path: aiVirtualPath(filePath.replace(/\\/g, '/')),
-                directory: aiVirtualPath(parentDir.replace(/\\/g, '/'))
+                file: aiSafePath(filePath),
+                absolute_path: filePath.replace(/\\/g, '/'),
+                directory: parentDir.replace(/\\/g, '/'),
+                incremental_diff: {
+                    file: aiSafePath(filePath),
+                    additions: incDiff.additions,
+                    deletions: incDiff.deletions,
+                    diff: incDiff.diff
+                }
             };
         }
     },
@@ -895,7 +840,7 @@ export default {
             const matchedFiles = searchFilesRecursive(basePath, query);
 
             let markdownResult = `### 🔍 Kết quả tìm kiếm cho từ khóa: \`${query}\`\n`;
-            markdownResult += `- **Thư mục quét**: \`${aiVirtualPath(aiSafePath(basePath))}\`\n`;
+            markdownResult += `- **Thư mục quét**: \`${aiSafePath(basePath)}\`\n`;
             markdownResult += `- **Số lượng khớp**: ${matchedFiles.length}\n\n`;
 
             if (matchedFiles.length === 0) {
@@ -903,7 +848,7 @@ export default {
             } else {
                 markdownResult += `**Danh sách tệp tin:**\n`;
                 matchedFiles.forEach(f => {
-                    markdownResult += `- \`${aiVirtualPath(f)}\`\n`;
+                    markdownResult += `- \`${f}\`\n`;
                 });
             }
             return markdownResult;
@@ -936,7 +881,7 @@ export default {
                 const base64Data = fileBuffer.toString('base64');
                 return {
                     status: "success",
-                    file_path: aiVirtualPath(aiSafePath(filePath)),
+                    file_path: aiSafePath(filePath),
                     mime_type: mimeType,
                     image_base64: `data:${mimeType};base64,${base64Data}`,
                     message: "Đã đọc thành công tệp tin hình ảnh. Bạn có thể sử dụng dữ liệu 'image_base64' này để gửi kèm và phục vụ phân tích thị giác."
@@ -976,19 +921,78 @@ export default {
             return {
                 status: "success",
                 message: `Đã thay đổi thư mục làm việc hiện tại thành công sang: ${globalThis.activeWorkspace}`,
-                active_workspace: aiVirtualPath(globalThis.activeWorkspace)
+                active_workspace: globalThis.activeWorkspace
             };
         }
     }
 };
 
-function performLineReplacement(content, replaceStr, startLine, endLine) {
-    const lines = content.split(/\r?\n/);
-    const before = lines.slice(0, startLine - 1);
-    const after = lines.slice(endLine);
+// Hàm tính toán chênh lệch dòng trung gian (Penultimate vs Current)
+function computeLineDiff(oldStr, newStr) {
+    const oldLines = oldStr.split(/\r?\n/);
+    const newLines = newStr.split(/\r?\n/);
 
-    // Đảm bảo không gặp sự cố xuống dòng thừa khi nối chuỗi
-    const newMiddle = replaceStr.replace(/\r?\n$/, '').split(/\r?\n/);
-    const combined = [...before, ...newMiddle, ...after];
-    return combined.join('\n');
+    let additions = 0;
+    let deletions = 0;
+    const diff = [];
+
+    if (oldLines.length * newLines.length > 100000) {
+        let i = 0;
+        let j = 0;
+        while (i < oldLines.length || j < newLines.length) {
+            if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+                diff.push(`  ${oldLines[i]}`);
+                i++;
+                j++;
+            } else {
+                if (i < oldLines.length) {
+                    diff.push(`- ${oldLines[i]}`);
+                    deletions++;
+                    i++;
+                }
+                if (j < newLines.length) {
+                    diff.push(`+ ${newLines[j]}`);
+                    additions++;
+                    j++;
+                }
+            }
+        }
+        return { additions, deletions, diff: diff.join('\n') };
+    }
+
+    const dp = Array(oldLines.length + 1).fill(null).map(() => Array(newLines.length + 1).fill(0));
+    for (let i = 1; i <= oldLines.length; i++) {
+        for (let j = 1; j <= newLines.length; j++) {
+            if (oldLines[i - 1] === newLines[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
+    }
+
+    let i = oldLines.length;
+    let j = newLines.length;
+
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+            diff.unshift(`  ${oldLines[i - 1]}`);
+            i--;
+            j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            diff.unshift(`+ ${newLines[j - 1]}`);
+            additions++;
+            j--;
+        } else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
+            diff.unshift(`- ${oldLines[i - 1]}`);
+            deletions++;
+            i--;
+        }
+    }
+
+    return {
+        additions,
+        deletions,
+        diff: diff.join('\n')
+    };
 }

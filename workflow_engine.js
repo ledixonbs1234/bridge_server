@@ -80,7 +80,7 @@ export default class WorkflowEngine {
         this.circuitBreaker = new CircuitBreaker(5);
         this.currentTraceId = null;
 
-        // 🚀 KHÓA CỨNG WORKSPACE TOÀN CỤC CHO TOÀN BỘ PIPELINE KHI KHỞI CHẠY
+        // Xác định duy nhất 1 thư mục làm việc tuyệt đối cho cả quá trình chạy của Pipeline
         this.pipelineWorkspace = this.resolveGlobalWorkspace();
     }
 
@@ -88,25 +88,9 @@ export default class WorkflowEngine {
      * Xác định một thư mục làm việc duy nhất cho cả quá trình chạy của Pipeline
      */
     resolveGlobalWorkspace() {
-        // Ưu tiên cao nhất cho Workspace làm việc được thiết lập động
-        if (globalThis.activeWorkspace) {
-            return globalThis.activeWorkspace;
-        }
-
         const pathRegex = /(?:[a-zA-Z]:\/|\/)[^\s"']+/g;
 
-        // 1. Kiểm tra trong yêu cầu gốc của người dùng (globalContext)
-        if (this.globalContext) {
-            const matches = this.globalContext.replace(/\\/g, '/').match(pathRegex);
-            if (matches && matches.length > 0) {
-                const ws = path.extname(matches[0]) ? path.dirname(matches[0]) : matches[0];
-                if (!ws.toLowerCase().includes('bridge_server')) {
-                    return ws.replace(/\\/g, '/');
-                }
-            }
-        }
-
-        // 2. Dự phòng: Quét toàn bộ Pipeline để tìm đường dẫn tuyệt đối xuất hiện sớm nhất
+        // ƯU TIÊN 1: Quét toàn bộ Pipeline để tìm đường dẫn tuyệt đối tồn tại thực tế xuất hiện sớm nhất
         try {
             const row = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
             if (row && row.data) {
@@ -116,20 +100,45 @@ export default class WorkflowEngine {
                         const sTask = step.task.replace(/\\/g, '/');
                         const sMatches = sTask.match(pathRegex);
                         if (sMatches && sMatches.length > 0) {
-                            const ws = path.extname(sMatches[0]) ? path.dirname(sMatches[0]) : sMatches[0];
-                            if (!ws.toLowerCase().includes('bridge_server')) {
-                                return ws.replace(/\\/g, '/');
+                            for (const matchedPath of sMatches) {
+                                let resolved = path.extname(matchedPath) ? path.dirname(matchedPath) : matchedPath;
+                                resolved = resolved.replace(/\\/g, '/');
+
+                                // Nếu thư mục tồn tại thực tế và không chứa bridge_server
+                                if (fs.existsSync(resolved) && !resolved.toLowerCase().includes('bridge_server')) {
+                                    return resolved;
+                                }
                             }
                         }
                     }
                 }
             }
         } catch (e) {
-            // Thầm lặng bỏ qua nếu có sự cố DB
+            // Thầm lặng bỏ qua lỗi đọc cơ sở dữ liệu
         }
 
-        // 3. Fallback cuối cùng
-        return (globalThis.activeWorkspace || process.cwd()).replace(/\\/g, '/');
+        // ƯU TIÊN 2: Kiểm tra trong bối cảnh yêu cầu gốc của người dùng (globalContext)
+        if (this.globalContext) {
+            const matches = this.globalContext.replace(/\\/g, '/').match(pathRegex);
+            if (matches && matches.length > 0) {
+                for (const matchedPath of matches) {
+                    let resolved = path.extname(matchedPath) ? path.dirname(matchedPath) : matchedPath;
+                    resolved = resolved.replace(/\\/g, '/');
+
+                    if (fs.existsSync(resolved) && !resolved.toLowerCase().includes('bridge_server')) {
+                        return resolved;
+                    }
+                }
+            }
+        }
+
+        // FALLBACK: Trả về activeWorkspace hiện tại nếu nó tồn tại thực tế trên đĩa
+        if (globalThis.activeWorkspace && fs.existsSync(globalThis.activeWorkspace)) {
+            return globalThis.activeWorkspace;
+        }
+
+        // FALLBACK CUỐI CÙNG: Trả về thư mục chạy Node hiện hành
+        return process.cwd().replace(/\\/g, '/');
     }
 
     // === DB STATE HELPERS ===
@@ -189,7 +198,6 @@ export default class WorkflowEngine {
             extra: extra
         });
 
-        // Đồng bộ hóa ra file vật lý ngay lập tức
         this.syncFileBackedState(pipelineId);
     }
 
@@ -206,41 +214,22 @@ export default class WorkflowEngine {
             error_message: errorMsg,
             retry_count: (current?.retry_count || 0) + 1
         });
-        // Đồng bộ hóa lỗi ra file vật lý
         this.syncFileBackedState(pipelineId);
     }
 
-    // === GIT HELPERS ===
-    getGitStatus() {
+    rollbackChanges() {
+        logMessage(chalk.yellow(`\n↩️ Đang tiến hành rollback mã nguồn thông qua hệ thống Shadow Files...`));
         try {
-            const output = execSync('git status --porcelain', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-            return output.split('\n').map(l => l.trim()).filter(l => l.length > 0)
-                .map(line => { const parts = line.split(/\s+/); return { status: parts[0], file: parts.slice(1).join(' ') }; });
-        } catch { return []; }
-    }
-
-    rollbackChanges(preStepStatus) {
-        logMessage(chalk.yellow(`\n↩️ Rollback mã nguồn...`));
-        const postStepStatus = this.getGitStatus();
-        const preFiles = new Map(preStepStatus.map(item => [item.file, item.status]));
-        for (const item of postStepStatus) {
-            const preStatus = preFiles.get(item.file);
-            if (!preStatus) {
-                try {
-                    if (fs.existsSync(item.file)) {
-                        const stats = fs.statSync(item.file);
-                        if (stats.isDirectory()) fs.rmSync(item.file, { recursive: true, force: true });
-                        else fs.unlinkSync(item.file);
-                    }
-                } catch (err) { logMessage(`Không thể xóa ${item.file}: ${err.message}`, true); }
-            } else if (item.status !== preStatus) {
-                try { execSync(`git checkout -- "${item.file}"`, { stdio: 'ignore' }); }
-                catch (err) { logMessage(`Không thể khôi phục ${item.file}: ${err.message}`, true); }
-            }
+            import('./skills/validators/shadow_file.js').then(({ activeShadowRegistry }) => {
+                activeShadowRegistry.rollbackAll();
+                logMessage(chalk.green(`✅ Đã khôi phục trạng thái mã nguồn an toàn thành công.`));
+            }).catch(err => {
+                logMessage(chalk.red(`❌ Lỗi khôi phục: ${err.message}`), true);
+            });
+        } catch (err) {
+            logMessage(chalk.red(`❌ Lỗi khôi phục: ${err.message}`), true);
         }
     }
-
-
 
     // === PIPELINE PROGRESS OVERVIEW ===
     buildPipelineProgressOverview(pipeline, currentStepKey) {
@@ -257,7 +246,7 @@ export default class WorkflowEngine {
         return overview;
     }
 
-    // === SCAN PROTOCOL — Chống Agent Drift & Thu hẹp kỷ luật ===
+    // === SCAN PROTOCOL — Chống Agent Drift ===
     buildDisciplinedPrompt(step, journalContext, retryCount, errorHistory, detectedWorkspace = "", progressOverview = "") {
         const osPlatform = process.platform;
         let prompt = `Bạn là một AI Worker chuyên biệt, được giao một Nhiệm vụ trong một Hợp đồng thực thi nghiêm ngặt.
@@ -281,8 +270,6 @@ Trước khi gọi bất kỳ công cụ nào để thực hiện, bạn BẮT B
         const lastError = errors[errors.length - 1] || '';
         const isLastSystemError = lastError.startsWith('[SYSTEM_ERROR]');
 
-        // NẾU LÀ LẦN ĐẦU TIÊN HOẶC LẦN THỬ TRƯỚC BỊ LỖI HỆ THỐNG (KHÔNG PHẢI LỖI AI):
-        // Hệ thống sẽ âm thầm thử lại bằng prompt kỷ luật sạch ban đầu
         if (retryCount === 0 || isLastSystemError) {
             prompt += `
 [QUY TẮC KỶ LUẬT]
@@ -290,7 +277,6 @@ Trước khi gọi bất kỳ công cụ nào để thực hiện, bạn BẮT B
 - Tuyệt đối không tự ý phân tích rộng ra ngoài phạm vi hoặc lên kế hoạch lại cho hệ thống.
 `;
         } else {
-            // CHỈ HIỂN THỊ CẢNH BÁO NẾU LỖI DO VALIDATOR TỪ CHỐI (LỖI LOGIC CỦA AI)
             prompt += `
 [⚠️ CẢNH BÁO: LẦN THỬ TRƯỚC BỊ THẤT BẠI]
 Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validator) từ chối vì lý do sau:
@@ -319,7 +305,6 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
 
         const workspace = this.pipelineWorkspace;
 
-        // 1. Xác thực: Kiểm tra sự tồn tại của file
         if (val.type === 'file_exists') {
             const targetPath = path.isAbsolute(val.value.trim())
                 ? val.value.trim()
@@ -331,19 +316,16 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
             };
         }
 
-        // 2. Xác thực: Chạy lệnh kiểm thử terminal (Ví dụ: npx tsc, npm run build, vitest)
         if (val.type === 'command') {
             try {
-                // Sử dụng 'pipe' để hứng toàn bộ luồng xuất bản của Console
                 const stdoutBuffer = execSync(val.value, {
                     cwd: workspace,
                     stdio: ['ignore', 'pipe', 'pipe'],
                     env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
-                    timeout: 30000 // Giới hạn 30 giây tránh đơ luồng
+                    timeout: 30000
                 });
                 return { passed: true, reason: '' };
             } catch (execErr) {
-                // Trích xuất toàn bộ stdout và stderr từ exception của Child Process
                 const stdout = execErr.stdout ? execErr.stdout.toString('utf8') : '';
                 const stderr = execErr.stderr ? execErr.stderr.toString('utf8') : '';
                 const fullConsoleOutput = `${stdout}\n${stderr}`.trim();
@@ -355,7 +337,6 @@ Lần thử trước của bạn đã bị Hệ thống kiểm duyệt (Validato
             }
         }
 
-        // 3. Xác thực: Sử dụng một LLM độc lập để kiểm duyệt logic
         if (val.type === 'llm_check') {
             logMessage(chalk.blue(`🤖 Khởi chạy Validator Agent (Strict Mode)...`));
             const stepState = this.getStepState('CURRENT', step.step_key);
@@ -391,14 +372,13 @@ ${errorCtx}
                 delete workerSkills['create_pipeline_plan'];
                 delete workerSkills['update_pipeline_status'];
 
-                // Lưu giữ mốc neo cũ và thiết lập mốc neo của Validator Worker hiện tại
                 const prevWorkerSpanId = globalThis.activeWorkerSpanId;
                 globalThis.activeWorkerSpanId = parentSpanId;
 
                 try {
                     const resp = await this.provider.chat({
                         messages: [{ role: 'user', content: validationPrompt }],
-                        mode: 'fast', // Validator chạy chế độ nhanh để tiết kiệm token
+                        mode: 'fast',
                         skillRegistry: workerSkills,
                         executeSkill: async (fn, args) => {
                             if (fn === 'execute_terminal_command') {
@@ -417,7 +397,6 @@ ${errorCtx}
                         ? { passed: true, reason: '' }
                         : { passed: false, reason: cleanResp };
                 } finally {
-                    // Khôi phục mốc neo về trạng thái trước đó
                     globalThis.activeWorkerSpanId = prevWorkerSpanId;
                 }
             } catch (e) {
@@ -430,14 +409,6 @@ ${errorCtx}
 
     // === SUMMARY GENERATOR (Journal) ===
     async generateStepSummary(step, executorOutput) {
-        // try {
-        //     const summary = await this.provider.chat({
-        //         messages: [{ role: 'user', content: `Tóm tắt 1 câu kết quả kỹ thuật:\n[TÁC VỤ]: "${step.task}"\n[KẾT QUẢ]: "${executorOutput.substring(0, 500)}"` }],
-        //         skillRegistry: {}, executeSkill: async () => { },
-        //         systemPrompt: "Trả về đúng 1 câu tóm tắt.", maxSteps: 1, isWorker: true, workerType: 'task'
-        //     });
-        //     return summary.trim();
-        // } catch { return `Đã hoàn thành: ${step.task}`; }
         return `Đã hoàn thành: ${step.task}`;
     }
 
@@ -452,7 +423,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
             if (this.skillRegistry['synthesize_skill']) skills['synthesize_skill'] = this.skillRegistry['synthesize_skill'];
             const resp = await this.provider.chat({
                 messages: [{ role: 'user', content: prompt }],
-                mode: 'thinking', // 🧠 REFLECTION CẦN TƯ DUY SÂU
+                mode: 'thinking',
                 skillRegistry: skills,
                 executeSkill: async (fn, args) => { logMessage(chalk.magenta(`💡 Reflection gọi: ${fn}`)); return await this.executeSkillFn(fn, args); },
                 systemPrompt: "Bạn là AI Critic. Trả về cực ngắn.", maxSteps: 2, isWorker: true, workerType: 'task'
@@ -512,14 +483,13 @@ ${error ? `Lỗi: ${error.message}` : ''}
     }
 
     /**
-      * Thực thi một Step trong không gian cát (Sandbox) với vòng lặp tự sửa lỗi cục bộ
+      * Thực thi một Step trong không gian cát với vòng lặp tự sửa lỗi cục bộ
       */
     async executeStep(step, pipeline) {
         const stepKey = step.step_key;
         const maxRetries = (step.validation?.max_retries) || 3;
         const workspace = this.pipelineWorkspace;
 
-        // Kiểm tra sớm circuit breaker từ trạng thái lưu trữ của Orchestrator
         const stepState = this.getStepState('CURRENT', stepKey);
         const breakReason = this.circuitBreaker.shouldBreak(stepState);
         if (breakReason) {
@@ -541,9 +511,6 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
         this.transitionState('CURRENT', stepKey, 'RUNNING');
 
-        // Sao lưu trạng thái Git an toàn tại thời điểm ĐẦU TIÊN của Step (để rollback khi cạn kiệt số lần thử)
-        const preStepStatus = this.getGitStatus();
-
         let localAttempt = 0;
         const maxLocalAttempts = 3; // AI tự chữa lỗi tối đa 3 lần cục bộ cho 1 step trước khi báo lỗi lên Manager
         let lastValidationError = null;
@@ -559,10 +526,8 @@ ${error ? `Lỗi: ${error.message}` : ''}
             const journalContext = this.buildJournalContext(pipeline);
             const progressOverview = this.buildPipelineProgressOverview(pipeline, stepKey);
 
-            // 🚀 TỰ ĐỘNG CHUYỂN SANG THINKING (REASONING MODE) NẾU LÀ LẦN SỬA LỖI
             const runMode = (localAttempt > 1 || currentGlobalRetry > 0) ? 'thinking' : 'fast';
 
-            // Xây dựng prompt kỷ luật
             let promptContext = this.buildDisciplinedPrompt(
                 step,
                 journalContext,
@@ -572,9 +537,8 @@ ${error ? `Lỗi: ${error.message}` : ''}
                 progressOverview
             );
 
-            // NẠP THẲNG CONSOLE ERROR TỪ TERMINAL VÀO PROMPT ĐỂ AI PHÂN TÍCH
             if (lastValidationError) {
-                promptContext += `\n\n🚨 [YÊU CẦU SỬA LỖI BIÊN DỊCH KHẨN CẤP] 🚨\nHành động trước của bạn đã làm phát sinh lỗi biên dịch/logic dưới đây.\n\nLƯU Ý: KHÔNG rollback file, hãy dùng 'read_file_lines' đọc đoạn code bị hỏng, phân tích lỗi dưới đây và dùng 'replace_by_lines_safe' để sửa triệt để:\n${lastValidationError}\n`;
+                promptContext += `\n\n🚨 [YÊU CẦU SỬA LỖI BIÊN DỊCH KHẨN CẤP] 🚨\nHành động trước của bạn đã làm phát sinh lỗi biên dịch/logic dưới đây.\n\nLƯU Ý: KHÔNG rollback file, hãy dùng 'read_file_lines' đọc đoạn code bị hỏng, phân tích lỗi dưới đây và dùng 'replace_content_safe' để sửa triệt để:\n${lastValidationError}\n`;
             }
 
             const stepSpanId = this.currentTraceId ? tracer.startSpan(this.currentTraceId, `${step.task} (Attempt ${localAttempt})`, 'agent', null, { tool: step.tool, step_key: stepKey }) : null;
@@ -583,7 +547,7 @@ ${error ? `Lỗi: ${error.message}` : ''}
 
             try {
                 const workerSkills = {};
-                const vitalSkills = ['read_file', 'read_file_lines', 'replace_by_lines_safe', 'write_file', 'find_files', 'get_os_context', 'execute_terminal_command'];
+                const vitalSkills = ['read_file', 'read_file_lines', 'replace_content_safe', 'write_file', 'find_files', 'get_os_context', 'execute_terminal_command'];
                 if (step.tool && this.skillRegistry[step.tool]) {
                     workerSkills[step.tool] = this.skillRegistry[step.tool];
                 }
@@ -599,17 +563,16 @@ Thư mục dự án đích: ${workspace}
 
 🚨 CHỈ THỊ KHẨN CẤP CHO VÒNG LẶP SỬA LỖI:
 1. Bạn đang chạy trong vòng lặp tự sửa lỗi cục bộ (Self-Healing). Tuyệt đối KHÔNG rollback tệp hay xóa trắng code cũ nếu gặp lỗi biên dịch.
-2. Hãy đọc log lỗi được cung cấp ở prompt của User, tìm đúng tệp và dòng bị lỗi bằng 'read_file_lines', và dùng 'replace_by_lines_safe' sửa lại chính xác.
+2. Hãy đọc log lỗi được cung cấp ở prompt của User, tìm đúng tệp và dòng bị lỗi bằng 'read_file_lines', và dùng 'replace_content_safe' sửa lại chính xác.
 3. LUÔN sử dụng đường dẫn tuyệt đối bắt đầu từ "${workspace}".`;
 
                 response = await this.provider.chat({
                     messages: [{ role: 'user', content: promptContext }],
-                    mode: runMode, // Chạy ở chế độ dynamic (fast / thinking)
+                    mode: runMode,
                     skillRegistry: workerSkills,
                     executeSkill: async (fn, args) => {
                         spinner.stop();
 
-                        // Bộ lọc nắn chỉnh đường dẫn an toàn (Safety Path Rewriter)
                         const correctPath = (filePath) => {
                             if (typeof filePath !== 'string') return filePath;
                             const normalized = filePath.replace(/\\/g, '/');
@@ -655,7 +618,7 @@ Thư mục dự án đích: ${workspace}
                         }
                     },
                     systemPrompt: workerSystemPrompt,
-                    maxSteps: 12, // Tăng giới hạn số bước để AI đủ tài nguyên kiểm tra tệp
+                    maxSteps: 12,
                     isWorker: true,
                     workerType: `task_${stepKey}`
                 });
@@ -673,11 +636,10 @@ Thư mục dự án đích: ${workspace}
                 if (stepSpanId) tracer.endSpan(stepSpanId, 'failed', null, err.message);
             }
 
-            // XÁC THỰC KẾT QUẢ CỤC BỘ (Không rollback vội để giữ hiện trạng file lỗi cho lượt sửa sau)
             if (!execError) {
                 this.transitionState('CURRENT', stepKey, 'VALIDATING');
                 const valSpinner = ora(`Đang kiểm duyệt kết quả (Validator)...`).start();
-                const valResult = await this.validateStep(step, response, stepSpanId); 
+                const valResult = await this.validateStep(step, response, stepSpanId);
 
                 logAgentEvent('VALIDATION_RESULT', {
                     step_key: stepKey,
@@ -690,9 +652,6 @@ Thư mục dự án đích: ${workspace}
                     valSpinner.succeed(chalk.green(`Kiểm duyệt thành công!`));
                     const summary = await this.generateStepSummary(step, response);
 
-                    // =================================================================
-                    // 💥 [FLUXMEM STAGE II] - Tăng cường lực liên kết đồ thị khi chạy PASS
-                    // =================================================================
                     try {
                         const memories = db.prepare('SELECT * FROM memories').all() || [];
                         const taskKeyword = step.task.toLowerCase();
@@ -701,7 +660,6 @@ Thư mục dự án đích: ${workspace}
                             let tags = [];
                             try { tags = JSON.parse(m.tags || '[]'); } catch { }
                             if (tags.some(t => taskKeyword.includes(t.toLowerCase()))) {
-                                // Tăng nhẹ 0.05 điểm và tăng lượt dùng
                                 const currentScore = m.trust_score ?? 0.7;
                                 const newScore = Math.min(1.0, currentScore + 0.05);
                                 const newUseCount = (m.use_count || 0) + 1;
@@ -709,7 +667,6 @@ Thư mục dự án đích: ${workspace}
                                 db.prepare(`UPDATE memories SET trust_score = ?, use_count = ? WHERE id = ?`)
                                     .run(newScore, newUseCount, m.id);
 
-                                // Ghi nhận cạnh liên kết tích cực lên đồ thị
                                 db.prepare(`INSERT INTO memory_edges (source_id, target_id, type, weight) VALUES (?, ?, ?, ?)`)
                                     .run(stepKey, m.id, 'feedback_strengthened', newScore);
                             }
@@ -739,9 +696,6 @@ Thư mục dự án đích: ${workspace}
                     valSpinner.fail(chalk.red(`Kiểm duyệt thất bại: ${valResult.reason}`));
                     lastValidationError = valResult.reason;
 
-                    // =================================================================
-                    // 💥 [FLUXMEM STAGE II] - Cắt tỉa liên kết hỏng (Connection Pruning) khi FAIL
-                    // =================================================================
                     try {
                         const memories = db.prepare('SELECT * FROM memories').all() || [];
                         const taskKeyword = step.task.toLowerCase();
@@ -750,14 +704,12 @@ Thư mục dự án đích: ${workspace}
                             let tags = [];
                             try { tags = JSON.parse(m.tags || '[]'); } catch { }
                             if (tags.some(t => taskKeyword.includes(t.toLowerCase()))) {
-                                // Giảm mạnh 0.15 điểm để cô lập node nhiễu khỏi các lần truy xuất sau
                                 const currentScore = m.trust_score ?? 0.7;
                                 const newScore = Math.max(0.1, currentScore - 0.15);
 
                                 db.prepare(`UPDATE memories SET trust_score = ? WHERE id = ?`)
                                     .run(newScore, m.id);
 
-                                // Ghi nhận cạnh cắt tỉa hỏng lên đồ thị
                                 db.prepare(`INSERT INTO memory_edges (source_id, target_id, type, weight) VALUES (?, ?, ?, ?)`)
                                     .run(stepKey, m.id, 'feedback_pruned', newScore);
                             }
@@ -771,12 +723,11 @@ Thư mục dự án đích: ${workspace}
             }
         }
 
-        // ❌ CHỈ TIẾN HÀNH ROLLBACK KHI CHẠY HẾT 3 LẦN TỰ SỬA CỤC BỘ VẪN THẤT BẠI
         logMessage(chalk.red(`\n❌ Step thất bại sau ${maxLocalAttempts} lần tự sửa cục bộ. Đang tiến hành rollback về trạng thái an toàn gần nhất...`));
 
         const formattedError = lastValidationError.startsWith('[SYSTEM_ERROR]') ? lastValidationError : `[COMPILATION_FAILED] ${lastValidationError}`;
         this.appendError('CURRENT', stepKey, formattedError);
-        this.rollbackChanges(preStepStatus);
+        this.rollbackChanges();
         this.transitionState('CURRENT', stepKey, 'QUEUED');
 
         return { success: false };
@@ -809,7 +760,7 @@ Thư mục dự án đích: ${workspace}
             if (fs.existsSync(configPath)) {
                 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
                 if (config.telegram?.enabled && config.telegram?.notifyOnPipelineFailure) {
-                    const { sendTelegramMessage } = await import('./services/telegramService.js');
+                    const { sendTelegramMessage } = await import('../services/telegramService.js');
                     await sendTelegramMessage(`❌ <b>Pipeline thất bại hoặc bị dừng!</b>\n\n🎯 <i>${pipeline.pipeline_name}</i>\n\n${errorDetail ? `Chi tiết: <code>${errorDetail}</code>` : 'Bị hủy bỏ hoặc gặp lỗi nghiêm trọng.'}`);
                 }
             }
@@ -824,15 +775,8 @@ Thư mục dự án đích: ${workspace}
             return;
         }
 
-        // TỰ ĐỘNG KHỞI TẠO GIT WORKTREE NẾU ĐANG CHẠY PIPELINE SỬA FILE TRÊN GIT REPO
-        try {
-            const { ensureGitWorktreeSandbox } = await import('./skills/file_system.js');
-            await ensureGitWorktreeSandbox();
-            // Cập nhật lại workspace của pipeline sau khi đã cách ly thành công
-            this.pipelineWorkspace = globalThis.activeWorkspace;
-        } catch (e) {
-            logMessage(chalk.yellow(`[Engine] Không thể tự động tạo Git Worktree cách ly: ${e.message}`));
-        }
+        // Cập nhật workspace của pipeline theo môi trường hoạt động hiện hành
+        this.pipelineWorkspace = globalThis.activeWorkspace || process.cwd().replace(/\\/g, '/');
 
         logAgentEvent('PIPELINE_START', {
             pipeline_id: 'CURRENT',
@@ -840,13 +784,12 @@ Thư mục dự án đích: ${workspace}
             stages_count: pipeline.stages.length
         });
 
-        // GỬI TELEGRAM THÔNG BÁO KHỞI CHẠY PIPELINE
         try {
             const configPath = path.join(process.cwd(), 'config.json');
             if (fs.existsSync(configPath)) {
                 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
                 if (config.telegram?.enabled && config.telegram?.notifyOnPipelineStart) {
-                    const { sendTelegramMessage } = await import('./services/telegramService.js');
+                    const { sendTelegramMessage } = await import('../services/telegramService.js');
                     await sendTelegramMessage(`🚀 <b>Khởi chạy Pipeline mới:</b>\n\n🎯 <code>${pipeline.pipeline_name}</code>\n📂 Thư mục: <i>${this.pipelineWorkspace}</i>`);
                 }
             }
@@ -905,8 +848,6 @@ Thư mục dự án đích: ${workspace}
                         stage.status = 'FAILED';
                         this.updatePipelineStatus(pipeline, 'FAILED');
                         await this.triggerReflection(pipeline, 'FAILED', new Error("Hủy bởi User"));
-
-                        // BÁO CÁO THẤT BẠI TELEGRAM
                         await this.sendTelegramPipelineFailure(pipeline, `Dừng khẩn cấp tại bước: ${readySteps[0].task}`);
                         return;
                     }
@@ -948,7 +889,11 @@ Thư mục dự án đích: ${workspace}
         if (this.currentTraceId) tracer.completeTrace(this.currentTraceId, 'completed');
         await this.triggerReflection(pipeline, 'SUCCESS');
 
-        // --- GỬI TELEGRAM KHI PIPELINE THÀNH CÔNG ---
+        try {
+            const { activeShadowRegistry } = await import('./skills/validators/shadow_file.js');
+            activeShadowRegistry.commitAll();
+        } catch (e) { }
+
         try {
             const configPath = path.join(process.cwd(), 'config.json');
             if (fs.existsSync(configPath)) {

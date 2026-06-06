@@ -252,7 +252,18 @@ export default {
             return new Promise((resolve) => {
                 const startTime = Date.now();
                 const timeout = getCommandTimeout(command, false);
+                // Thêm khai báo xác định shell ở đầu hàm handler hoặc ngoài phạm vi xuất khẩu
+                const shellOption = os.platform() === 'win32' ? 'powershell.exe' : true;
 
+                // Đối với tiến trình chạy ngầm (spawn)
+                const child = spawn(command, {
+                    cwd,
+                    shell: shellOption, // Thay thế 'true' bằng shellOption
+                    timeout: getCommandTimeout(command, true),
+                    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
+                });
+
+                // Đối với tiến trình chạy thường (exec)
                 const childProcess = exec(command, {
                     cwd,
                     timeout,

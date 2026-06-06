@@ -8,12 +8,165 @@ import db from '../database.js'; // Import database để truy xuất Memories t
 import { getGitDiffStats } from '../utils/gitStats.js';
 import { consolidateProceduralMemory } from '../services/fluxMemConsolidator.js';
 import { resolveProceduralConflicts } from '../services/fluxMemConflictResolver.js';
+import { activeShadowRegistry, penultimateShadowRegistry } from '../skills/validators/shadow_file.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..'); // Sửa thành '..' để trỏ đúng vào bridge_server
-
 const router = express.Router();
 
+/**
+ * Thuật toán tính toán Line-by-Line Diff (additions/deletions) không phụ thuộc thư viện ngoài.
+ * Sử dụng giải thuật Longest Common Subsequence (LCS) với chốt chặn an toàn cho tệp lớn.
+ */
+function computeLineDiff(oldStr, newStr) {
+    const oldLines = oldStr.split(/\r?\n/);
+    const newLines = newStr.split(/\r?\n/);
+
+    let additions = 0;
+    let deletions = 0;
+    const diff = [];
+
+    // Fallback nếu tệp quá lớn để tránh quá tải CPU (O(N*M))
+    if (oldLines.length * newLines.length > 250000) {
+        let i = 0;
+        let j = 0;
+        while (i < oldLines.length || j < newLines.length) {
+            if (i < oldLines.length && j < newLines.length && oldLines[i] === newLines[j]) {
+                diff.push(`  ${oldLines[i]}`);
+                i++;
+                j++;
+            } else {
+                if (i < oldLines.length) {
+                    diff.push(`- ${oldLines[i]}`);
+                    deletions++;
+                    i++;
+                }
+                if (j < newLines.length) {
+                    diff.push(`+ ${newLines[j]}`);
+                    additions++;
+                    j++;
+                }
+            }
+        }
+        return { additions, deletions, diff: diff.join('\n') };
+    }
+
+    const dp = Array(oldLines.length + 1).fill(null).map(() => Array(newLines.length + 1).fill(0));
+    for (let i = 1; i <= oldLines.length; i++) {
+        for (let j = 1; j <= newLines.length; j++) {
+            if (oldLines[i - 1] === newLines[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
+    }
+
+    let i = oldLines.length;
+    let j = newLines.length;
+
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+            diff.unshift(`  ${oldLines[i - 1]}`);
+            i--;
+            j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            diff.unshift(`+ ${newLines[j - 1]}`);
+            additions++;
+            j--;
+        } else if (i > 0 && (j === 0 || dp[i][j - 1] < dp[i - 1][j])) {
+            diff.unshift(`- ${oldLines[i - 1]}`);
+            deletions++;
+            i--;
+        }
+    }
+
+    return {
+        additions,
+        deletions,
+        diff: diff.join('\n')
+    };
+}
+
+// Endpoint truy xuất các thay đổi từ Shadow Files
+router.get('/shadow-changes', (req, res) => {
+    try {
+        const changes = [];
+        for (const [originalPath, shadow] of activeShadowRegistry.shadows.entries()) {
+            // 1. Lấy dữ liệu phiên bản gốc ban đầu (Trạng thái 0)
+            let oldContent = "";
+            if (shadow.hadOriginal && fs.existsSync(shadow.shadowPath)) {
+                oldContent = fs.readFileSync(shadow.shadowPath, 'utf8');
+            }
+
+            // 2. Lấy dữ liệu phiên bản cận kề trước lần sửa cuối (Trạng thái N-1)
+            let penultimateContent = "";
+            const penultimateShadow = penultimateShadowRegistry.shadows.get(originalPath);
+            if (penultimateShadow && penultimateShadow.hadOriginal && fs.existsSync(penultimateShadow.shadowPath)) {
+                penultimateContent = fs.readFileSync(penultimateShadow.shadowPath, 'utf8');
+            } else {
+                penultimateContent = oldContent; // Fallback nếu chưa có ghi nhận trước đó
+            }
+
+            let newContent = "";
+            if (fs.existsSync(originalPath)) {
+                newContent = fs.readFileSync(originalPath, 'utf8');
+            }
+
+            const diffResult = computeLineDiff(oldContent, newContent); // Lũy kế
+            const latestDiffResult = computeLineDiff(penultimateContent, newContent); // Cận kề gần nhất
+            const relativePath = path.relative(projectRoot, originalPath).replace(/\\/g, '/');
+
+            changes.push({
+                file: relativePath,
+                absolute_path: originalPath,
+                status: shadow.hadOriginal ? (fs.existsSync(originalPath) ? 'modified' : 'deleted') : 'added',
+                additions: diffResult.additions,
+                deletions: diffResult.deletions,
+                diff: diffResult.diff,
+                // Dữ liệu lượt sửa đổi gần nhất
+                latest_additions: latestDiffResult.additions,
+                latest_deletions: latestDiffResult.deletions,
+                latest_diff: latestDiffResult.diff
+            });
+        }
+        res.json({ success: true, changes });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+// POST: Khôi phục (Rollback) tệp nguồn từ Shadow Files
+router.post('/shadow-changes/rollback', (req, res) => {
+    try {
+        const { file } = req.body;
+        if (file) {
+            const normalizedPath = file.replace(/\\/g, '/');
+            let found = false;
+
+            for (const [originalPath, shadow] of activeShadowRegistry.shadows.entries()) {
+                const relativePath = path.relative(projectRoot, originalPath).replace(/\\/g, '/');
+                if (relativePath === normalizedPath || originalPath === normalizedPath) {
+                    shadow.restore();
+                    shadow.cleanup();
+                    activeShadowRegistry.shadows.delete(originalPath);
+                    found = true;
+                    break;
+                }
+            }
+            if (found) {
+                res.json({ success: true, message: `Đã khôi phục hoàn toàn tệp ${file.split('/').pop()} về nguyên trạng!` });
+            } else {
+                res.status(404).json({ success: false, error: `Không tìm thấy bản sao lưu Shadow File của tệp ${file}` });
+            }
+        } else {
+            activeShadowRegistry.rollbackAll();
+            res.json({ success: true, message: "Đã khôi phục toàn bộ mã nguồn về nguyên trạng thành công!" });
+        }
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 // Telemetry endpoint
 router.get('/telemetry', (req, res) => {
     const report = telemetry.getToolReliabilityReport();
@@ -30,53 +183,26 @@ router.get('/code-changes', (req, res) => {
     }
 });
 
-// Simulated table query for Git Sandboxes
+// Trả về danh sách sandbox trống để giữ giao diện UI không bị crash
 router.get('/sandboxes', (req, res) => {
-    try {
-        const sandboxes = db.prepare('SELECT * FROM sandboxes').all() || [];
-        res.json({
-            success: true,
-            sandboxes,
-            active_workspace: globalThis.activeWorkspace,
-            is_isolated: globalThis.isIsolatedWorkspace
-        });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
+    res.json({
+        success: true,
+        sandboxes: [],
+        active_workspace: globalThis.activeWorkspace,
+        is_isolated: false
+    });
 });
 
-router.post('/sandboxes/accept', async (req, res) => {
-    const { taskId } = req.body;
-    if (!taskId) return res.status(400).json({ success: false, error: "Thiếu taskId" });
-    try {
-        const { acceptSandbox } = await import('../skills/file_system.js');
-        const result = await acceptSandbox(taskId);
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
+router.post('/sandboxes/accept', (req, res) => {
+    res.status(400).json({ success: false, error: "Chế độ Git Sandbox đã bị gỡ bỏ." });
 });
 
-router.post('/sandboxes/reject', async (req, res) => {
-    const { taskId } = req.body;
-    if (!taskId) return res.status(400).json({ success: false, error: "Thiếu taskId" });
-    try {
-        const { rejectSandbox } = await import('../skills/file_system.js');
-        const result = await rejectSandbox(taskId);
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
+router.post('/sandboxes/reject', (req, res) => {
+    res.status(400).json({ success: false, error: "Chế độ Git Sandbox đã bị gỡ bỏ." });
 });
 
-router.post('/sandboxes/create', async (req, res) => {
-    try {
-        const { ensureGitWorktreeSandbox } = await import('../skills/file_system.js');
-        const workspace = await ensureGitWorktreeSandbox();
-        res.json({ success: true, active_workspace: workspace });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
+router.post('/sandboxes/create', (req, res) => {
+    res.status(400).json({ success: false, error: "Chế độ Git Sandbox đã bị gỡ bỏ." });
 });
 
 // Memories endpoint - Liên kết thực tế đến mock database
@@ -108,7 +234,7 @@ router.get('/sessions', (req, res) => {
     res.json({ sessions, currentGoal: globalThis.persistentGoal || null });
 });
 
-// GET Telegram Config (với bộ ẩn Token để bảo mật thông tin)
+// GET Telegram Config
 router.get('/telegram', (req, res) => {
     try {
         const configPath = path.join(projectRoot, 'config.json');
@@ -127,7 +253,6 @@ router.get('/telegram', (req, res) => {
             notifyOnPipelineStart: true
         };
 
-        // Tạo bản sao và ẩn một phần Token khi trả về Frontend
         const maskedTg = { ...tg };
         if (maskedTg.botToken && maskedTg.botToken.length > 8) {
             maskedTg.botToken = maskedTg.botToken.substring(0, 4) + '...' + maskedTg.botToken.slice(-4);
@@ -151,7 +276,6 @@ router.post('/telegram', (req, res) => {
         const existingTg = config.telegram || {};
         const newTg = req.body;
 
-        // Nếu nhận token có chứa '...' nghĩa là user không chỉnh sửa ô này, khôi phục lại token cũ
         if (newTg.botToken && newTg.botToken.includes('...')) {
             newTg.botToken = existingTg.botToken || '';
         }
@@ -314,7 +438,6 @@ router.delete('/pipeline-state', (req, res) => {
         db.prepare("DELETE FROM pipelines WHERE id = 'CURRENT'").run();
         db.prepare("DELETE FROM agent_states WHERE pipeline_id = 'CURRENT'").run();
 
-        // Xóa file charter tĩnh trong .agent_memory/state
         const stateDir = path.join(projectRoot, '.agent_memory', 'state');
         const charterPath = path.join(stateDir, 'runtime_charter.json');
         if (fs.existsSync(charterPath)) {
@@ -362,7 +485,6 @@ router.get('/active-workspace', (req, res) => {
             states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
         }
 
-        // Khởi tạo trạng thái mặc định cho các Agent thực tế
         let orchestratorState = 'idle';
         let llmState = 'idle';
         let validatorState = 'idle';
@@ -370,29 +492,28 @@ router.get('/active-workspace', (req, res) => {
         let activeTaskDescription = '';
         let currentStepKey = '';
 
-        // Tìm các bước đang chạy hoặc đang được kiểm thử
         const runningStep = states.find(s => s.state === 'RUNNING');
         const validatingStep = states.find(s => s.state === 'VALIDATING');
         const blockedStep = states.find(s => s.state === 'BLOCKED' || s.state === 'FAILED');
 
         if (runningStep) {
-            orchestratorState = 'idle'; // Đã giao việc, Architect ở trạng thái chờ
-            llmState = 'running';       // LLM Worker đang thực thi code
+            orchestratorState = 'idle';
+            llmState = 'running';
             currentStepKey = runningStep.step_key;
             const stepObj = pipeline?.stages.flatMap(st => st.steps).find(s => s.step_key === runningStep.step_key);
             activeTaskDescription = stepObj ? stepObj.task : '';
         } else if (validatingStep) {
             orchestratorState = 'idle';
-            llmState = 'waiting';       // Chờ kết quả kiểm duyệt
-            validatorState = 'running'; // Validator đang biên dịch, kiểm tra cú pháp
+            llmState = 'waiting';
+            validatorState = 'running';
             currentStepKey = validatingStep.step_key;
             const stepObj = pipeline?.stages.flatMap(st => st.steps).find(s => s.step_key === validatingStep.step_key);
             activeTaskDescription = stepObj ? stepObj.task : '';
         } else if (blockedStep) {
-            orchestratorState = 'waiting'; // Đang chờ con người phê duyệt
-            criticState = 'running';       // Critic Agent đang phân tích log lỗi để rút kinh nghiệm
+            orchestratorState = 'waiting';
+            criticState = 'running';
         } else if (pipeline && pipeline.status === 'IN_PROGRESS') {
-            orchestratorState = 'running'; // Architect đang lập kế hoạch phân rã tác vụ
+            orchestratorState = 'running';
         }
 
         res.json({
@@ -409,7 +530,7 @@ router.get('/active-workspace', (req, res) => {
                     type: 'orchestrator',
                     provider: 'System Host',
                     model: 'Master Engine',
-                    tools: ['create_pipeline_plan', 'update_pipeline_status'],
+                    tools: ['create_pipeline_plan', 'create_pipeline_plan_from_spec', 'update_pipeline_status'],
                     toolCalls: [],
                     status: {
                         state: orchestratorState,
@@ -424,7 +545,7 @@ router.get('/active-workspace', (req, res) => {
                     type: 'specialist',
                     provider: providerKey,
                     model: modelName,
-                    tools: ['read_file', 'write_file', 'replace_by_lines_safe', 'execute_terminal_command'],
+                    tools: ['read_file', 'write_file', 'replace_content_safe', 'execute_terminal_command'],
                     toolCalls: [],
                     status: {
                         state: llmState,
@@ -482,6 +603,15 @@ router.get('/memories/graph', (req, res) => {
         const memories = db.prepare('SELECT * FROM memories').all() || [];
         const edges = db.prepare('SELECT * FROM memory_edges').all() || [];
 
+        // 1. Tạo một tập hợp (Set) chứa các ID tệp bộ nhớ thực sự đang tồn tại
+        const validIds = new Set(memories.map(m => String(m.id)));
+
+        // 2. CHẤT LƯỢNG LỌC: Chỉ giữ lại các liên kết nối giữa 2 bộ nhớ thực tế tồn tại
+        // Lọc sạch toàn bộ các liên kết tạm của step_key và các ID ma đã bị xóa
+        const filteredEdges = edges.filter(e =>
+            validIds.has(String(e.source_id)) && validIds.has(String(e.target_id))
+        );
+
         let mermaidCode = "flowchart TD\n";
         mermaidCode += "  classDef semantic fill:#10b981,stroke:#059669,color:#fff;\n";
         mermaidCode += "  classDef episodic fill:#3b82f6,stroke:#2563eb,color:#fff;\n";
@@ -500,7 +630,8 @@ router.get('/memories/graph', (req, res) => {
                 mermaidCode += `  ${sanitizeId(m.id)}["${cleanLabel} (${Number(m.trust_score ?? 0.7).toFixed(2)})"]:::${type}\n`;
             });
 
-            edges.forEach(e => {
+            // Sử dụng danh sách filteredEdges đã được lọc sạch để dựng sơ đồ
+            filteredEdges.forEach(e => {
                 const isPruned = e.type === 'feedback_pruned';
                 const connector = isPruned ? " -.-x " : " --> ";
                 const label = e.type === 'feedback_strengthened' ? "củng cố" : (isPruned ? "cắt tỉa" : "");

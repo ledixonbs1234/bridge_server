@@ -140,6 +140,16 @@ class QwenWebBot {
 
             try {
                 const parsed = JSON.parse(jsonStr);
+
+                if (parsed.response_id) {
+                    if (this.activeResponseId === null) {
+                        // Khóa chặt vào ID phản hồi đầu tiên thu thập được
+                        this.activeResponseId = parsed.response_id;
+                    } else if (parsed.response_id !== this.activeResponseId) {
+                        // Bỏ qua hoàn toàn dữ liệu của các phản hồi song song khác
+                        continue;
+                    }
+                }
                 const choice = parsed.choices?.[0];
                 if (choice) {
                     const delta = choice.delta;
@@ -220,7 +230,7 @@ class QwenWebBot {
         this.accumulatedAnswer = '';
         this.streamFinished = false;
         this.streamError = null;
-
+        this.activeResponseId = null; 
         console.log(`[Qwen Web] Đang nhập dữ liệu (${promptText.length} ký tự)... (Reasoning: ${useThinking ? 'ON (Think)' : 'OFF (Fast)'})${image ? ' [KÈM HÌNH ẢNH]' : ''}`);
 
         const filled = await this.page.evaluate(async ({ text, useDeepThink, imageBase64 }) => {

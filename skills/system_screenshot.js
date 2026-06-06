@@ -8,7 +8,7 @@ import { validatePath } from './validators/path_guard.js';
 function runPowerShell(script) {
     const buffer = Buffer.from(script, 'utf16le');
     const base64 = buffer.toString('base64');
-    return execSync(`powershell -NoProfile -EncodedCommand ${base64}`, { stdio: 'pipe' });
+    return execSync("powershell -NoProfile -EncodedCommand " + base64, { stdio: 'pipe' });
 }
 
 /**
@@ -24,43 +24,72 @@ async function focusApplication(targetApp) {
     console.log(`[Screenshot Skill] Đang tìm kiếm và đưa ứng dụng lên hàng đầu: "${safeApp}"`);
     try {
         if (platform === 'win32') {
-            // Sử dụng PowerShell để tìm Process có ProcessName hoặc MainWindowTitle chứa chuỗi tìm kiếm (không phân biệt hoa thường với toán tử -like)
+            // Sử dụng các API Win32 chính thức thay vì AppActivate của Wscript.Shell để vượt qua Foreground Lock
             const psFocusScript = `
-            $proc = Get-Process | Where-Object { $_.ProcessName -like "*${safeApp}*" -or $_.MainWindowTitle -like "*${safeApp}*" } | Select-Object -First 1
-            if ($proc) {
-                $wshell = New-Object -ComObject Wscript.Shell;
-                $activated = $wshell.AppActivate($proc.Id)
-                if ($activated) {
-                    Write-Output "SUCCESS"
-                } else {
-                    $activatedTitle = $wshell.AppActivate($proc.MainWindowTitle)
-                    if ($activatedTitle) {
-                        Write-Output "SUCCESS"
-                    } else {
-                        Write-Output "FAILED"
-                    }
-                }
-            } else {
-                $wshell = New-Object -ComObject Wscript.Shell;
-                $activated = $wshell.AppActivate("${safeApp}");
-                if ($activated) {
-                    Write-Output "SUCCESS"
-                } else {
-                    Write-Output "FAILED"
-                }
-            }
-            `;
+$code = @"
+using System;
+using System.Runtime.InteropServices;
+public class FocusHelper {
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, int dwExtraInfo);
+    
+    public static bool ForceForeground(IntPtr hWnd) {
+        if (hWnd == IntPtr.Zero) return false;
+        if (IsIconic(hWnd)) {
+            ShowWindow(hWnd, 9); // SW_RESTORE
+        } else {
+            ShowWindow(hWnd, 5); // SW_SHOW
+        }
+        // Giả lập phím Alt để vượt qua hạn chế Foreground Lock của hệ thống
+        keybd_event(0x12, 0, 0, 0); 
+        keybd_event(0x12, 0, 2, 0); 
+        return SetForegroundWindow(hWnd);
+    }
+}
+"@
+Add-Type -TypeDefinition $code -ErrorAction SilentlyContinue
+
+$proc = Get-Process | Where-Object { ($_.ProcessName -like "*${safeApp}*") -or ($_.MainWindowTitle -like "*${safeApp}*") } | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+if ($proc) {
+    $success = [FocusHelper]::ForceForeground($proc.MainWindowHandle)
+    if ($success) {
+        Write-Output "SUCCESS"
+    } else {
+        Write-Output "FAILED"
+    }
+} else {
+    $procs = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 }
+    $matched = $procs | Where-Object { $_.MainWindowTitle -like "*${safeApp}*" } | Select-Object -First 1
+    if ($matched) {
+        $success = [FocusHelper]::ForceForeground($matched.MainWindowHandle)
+        if ($success) {
+            Write-Output "SUCCESS"
+        } else {
+            Write-Output "FAILED"
+        }
+    } else {
+        Write-Output "FAILED"
+    }
+}
+`;
             const result = runPowerShell(psFocusScript).toString('utf8').trim();
             return result.includes("SUCCESS");
 
         } else if (platform === 'darwin') {
-            // AppleScript mặc định không phân biệt chữ hoa chữ thường khi so sánh chuỗi bằng toán tử 'contains'
+            // AppleScript kết hợp cả 'frontmost' và 'activate' để kích hoạt ứng dụng hiển thị lên trước
             const appleScript = `
             tell application "System Events"
                 set processList to name of every process whose background only is false
                 repeat with procName in processList
                     if (procName as string) contains "${safeApp}" then
                         set frontmost of process procName to true
+                        tell application (procName as string) to activate
                         return "SUCCESS"
                     end if
                 end repeat
@@ -141,7 +170,7 @@ async function getRunningApps() {
 }
 
 /**
- * Hàm thực thi chụp ảnh màn hình chính nằm ngoài phạm vi object export để tránh lỗi scope
+ * Hàm thực thi chụp ảnh màn hình chính
  */
 async function executeScreenshot(args) {
     const platform = os.platform();
@@ -301,7 +330,6 @@ async function executeScreenshot(args) {
         } catch (tgErr) {
             console.error("Không thể tự động gửi ảnh lên Telegram:", tgErr.message);
         }
-        // ----------------------------------------------------
 
         return {
             status: "success",
@@ -316,7 +344,6 @@ async function executeScreenshot(args) {
         if (captureMode === "active_window") {
             console.warn(`[Screenshot Service] Chụp cửa sổ thất bại: ${err.message}. Tự động fallback về toàn màn hình.`);
             try {
-                // Gọi trực tiếp hàm nội bộ executeScreenshot với chế độ fullscreen mà không thông qua "this"
                 return await executeScreenshot({ ...args, capture_mode: "fullscreen" });
             } catch (fallbackErr) {
                 throw new Error(`Lỗi chụp màn hình (kể cả sau khi fallback): ${fallbackErr.message}`);

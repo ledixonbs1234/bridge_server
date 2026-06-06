@@ -32,7 +32,7 @@ export const SKILL_CATEGORIES = {
     COMPLEX: 'complex'
 };
 
-// Skill groups mapping (Added Sandbox skills)
+// Skill groups mapping
 export const SKILL_GROUPS = {
     [SKILL_CATEGORIES.CHAT]: [
         'read_file',
@@ -50,15 +50,15 @@ export const SKILL_GROUPS = {
         'parallel_web_summarizer',
         'capture_system_screenshot',
         'ask_questions_if_underspecified',
-        'change_active_workspace',
-        'create_isolated_workspace',
-        'git_sandbox_status'
+        'replace_content_safe',
+        'replace_multiple_files_safe',
+        'change_active_workspace'
     ],
     [SKILL_CATEGORIES.CODE]: [
         'read_file',
         'read_multiple_files',
         'write_file',
-        'replace_by_lines_safe',
+        'replace_content_safe',
         'read_image_asset',
         'read_file_lines',
         'list_directory',
@@ -67,7 +67,9 @@ export const SKILL_GROUPS = {
         'stop_terminal_process',
         'memorize_rule',
         'create_pipeline_plan',
+        'create_pipeline_plan_from_spec',
         'load_harness_template',
+        'replace_multiple_files_safe',
         'find_files',
         'synthesize_skill',
         'google_search',
@@ -75,11 +77,7 @@ export const SKILL_GROUPS = {
         'parallel_web_summarizer',
         'capture_system_screenshot',
         'ask_questions_if_underspecified',
-        'change_active_workspace',
-        'create_isolated_workspace',
-        'git_sandbox_status',
-        'git_sandbox_accept',
-        'git_sandbox_reject'
+        'change_active_workspace'
     ],
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
@@ -88,6 +86,7 @@ export const SKILL_GROUPS = {
         'create_pipeline_plan',
         'load_harness_template',
         'read_file',
+        'replace_content_safe',
         'read_file_lines',
         'read_image_asset',
         'find_files',
@@ -99,9 +98,7 @@ export const SKILL_GROUPS = {
         'google_search',
         'google_search_and_summarize',
         'ask_questions_if_underspecified',
-        'change_active_workspace',
-        'create_isolated_workspace',
-        'git_sandbox_status'
+        'change_active_workspace'
     ],
     [SKILL_CATEGORIES.COMPLEX]: null
 };

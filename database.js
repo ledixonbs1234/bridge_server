@@ -45,6 +45,13 @@ function loadDb() {
       if (!dbData.memories) dbData.memories = [];
       if (!dbData.sandboxes) dbData.sandboxes = [];
 
+      // TỰ ĐỘNG DỌN DẸP: Lọc bỏ toàn bộ các bản ghi bộ nhớ bị lỗi/rỗng trường thông tin chính
+      dbData.memories = dbData.memories.filter(m => {
+        const hasSituation = m.situation && m.situation !== '—' && m.situation.trim() !== '';
+        const hasSolution = m.solution && m.solution.trim() !== '';
+        return hasSituation && hasSolution;
+      });
+
       for (const table of Object.keys(autoIncrements)) {
         if (Array.isArray(dbData[table]) && dbData[table].length > 0) {
           const maxId = Math.max(...dbData[table]
@@ -55,6 +62,9 @@ function loadDb() {
           }
         }
       }
+
+      // Ghi lại tệp sạch sau khi dọn dẹp
+      saveDb();
     }
   } catch (e) {
     console.warn('[DB] Load error:', e.message);
@@ -228,6 +238,23 @@ const db = {
             } else {
               const changes = dbData.agent_states.length;
               dbData.agent_states = [];
+              if (changes > 0) saveDb();
+              return { changes };
+            }
+          }
+
+          if (sqlLower.startsWith('delete from memories')) {
+            const whereMatch = sqlNorm.match(/where\s+(.+)$/i);
+            if (whereMatch) {
+              const { filter } = parseWhere(whereMatch[1], params, 0);
+              const initialLength = dbData.memories.length;
+              dbData.memories = dbData.memories.filter(row => !filter(row));
+              const changes = initialLength - dbData.memories.length;
+              if (changes > 0) saveDb();
+              return { changes };
+            } else {
+              const changes = dbData.memories.length;
+              dbData.memories = [];
               if (changes > 0) saveDb();
               return { changes };
             }

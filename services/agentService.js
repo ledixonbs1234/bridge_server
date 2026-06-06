@@ -48,33 +48,44 @@ export function updateActiveWorkspaceFromContext(message) {
         return;
     }
 
-    // 2. Tìm đường dẫn tuyệt đối trong tin nhắn
+    // 2. Quét toàn bộ các đường dẫn tuyệt đối xuất hiện trong tin nhắn
     const pathRegex = /(?:[a-zA-Z]:\/|\/)[^\s"']+/g;
     const matches = message.replace(/\\/g, '/').match(pathRegex);
     if (matches && matches.length > 0) {
-        const matchedPath = matches[0];
-        const resolved = path.extname(matchedPath) ? path.dirname(matchedPath) : matchedPath;
-        if (!resolved.toLowerCase().includes('bridge_server') && !resolved.toLowerCase().includes('ridge_server')) {
-            globalThis.activeWorkspace = resolved.replace(/\\/g, '/');
-            console.log(chalk.cyan(`[Context-Switch] 📂 Phát hiện đường dẫn tuyệt đối. Chuyển Workspace mặc định sang: ${globalThis.activeWorkspace}`));
-            return;
+        for (const matchedPath of matches) {
+            try {
+                // Resolve đường dẫn tương đối hoặc tuyệt đối
+                let resolved = path.isAbsolute(matchedPath)
+                    ? matchedPath
+                    : path.resolve(globalThis.activeWorkspace || process.cwd(), matchedPath);
+                resolved = resolved.replace(/\\/g, '/');
+
+                // CHỐT CHẶN XÁC THỰC: Chỉ xử lý nếu đường dẫn thực sự tồn tại trên đĩa cứng
+                if (fs.existsSync(resolved)) {
+                    const stat = fs.statSync(resolved);
+                    let resolvedDir = resolved;
+
+                    // Nếu là tệp tin, trích xuất thư mục cha chứa tệp đó
+                    if (!stat.isDirectory()) {
+                        resolvedDir = path.dirname(resolved).replace(/\\/g, '/');
+                    }
+
+                    // Chặn can thiệp trái phép vào mã nguồn của Bridge Server
+                    const lowerDir = resolvedDir.toLowerCase();
+                    if (lowerDir.includes('bridge_server') || lowerDir.includes('ridge_server')) {
+                        continue; // Bỏ qua đường dẫn này, tiếp tục kiểm tra khớp tiếp theo
+                    }
+
+                    // Cập nhật thư mục làm việc hợp lệ và thoát vòng lặp
+                    globalThis.activeWorkspace = resolvedDir;
+                    console.log(chalk.cyan(`[Context-Switch] 📂 Tự động chuyển Workspace hoạt động sang: ${globalThis.activeWorkspace}`));
+                    return;
+                }
+            } catch (e) {
+                // Thầm lặng bỏ qua lỗi truy cập file của hệ thống
+            }
         }
     }
-
-    // 3. Hỗ trợ các cụm từ chỉ thư mục/folder (VD: "trong thư mục backend", "folder app")
-    // const folderMatch = message.match(/(?:thư mục|folder|thư mục dự án|dự án)\s+([a-zA-Z0-9_\-\/\\:\.]+)/i);
-    // if (folderMatch) {
-    //     const folderName = folderMatch[1].trim();
-    //     if (path.isAbsolute(folderName)) {
-    //         globalThis.activeWorkspace = folderName.replace(/\\/g, '/');
-    //         console.log(chalk.cyan(`[Context-Switch] 📂 Chuyển Workspace mặc định sang thư mục: ${globalThis.activeWorkspace}`));
-    //         return;
-    //     }
-
-    //     const candidatePath = path.resolve(process.cwd(), folderName).replace(/\\/g, '/');
-    //     globalThis.activeWorkspace = candidatePath;
-    //     console.log(chalk.cyan(`[Context-Switch] 📂 Chuyển Workspace mặc định sang thư mục chỉ định: ${globalThis.activeWorkspace}`));
-    // }
 }
 
 
@@ -256,9 +267,21 @@ export async function executeAgentTurn({
             if (tool.includes('bash') || tool.includes('command') || tool.includes('run') || tool.includes('terminal')) {
                 stepType = 'terminal';
                 cleanTitle = `Terminal ${args?.command || 'Command'}`;
-            } else if (tool.includes('read') || tool.includes('view') || tool.includes('file') || tool.includes('list_directory') || tool.includes('dir')) {
+            } else if (tool.includes('list_directory') || tool.includes('dir') || tool === 'ls') {
                 stepType = 'read_file';
-                cleanTitle = `List Directory ${args?.path || 'folder'}`;
+                const target = args?.path || args?.directory_path || 'folder';
+                const displayTarget = typeof target === 'string' && target.length > 40 ? '...' + target.slice(-37) : target;
+                cleanTitle = `📂 List Directory: ${displayTarget}`;
+            } else if (tool === 'write_file' || tool.includes('write') || tool.includes('replace') || tool.includes('edit')) {
+                stepType = 'generic';
+                const target = args?.file_path || args?.file_paths?.[0] || args?.target || 'file';
+                const displayTarget = typeof target === 'string' && target.length > 40 ? '...' + target.slice(-37) : target;
+                cleanTitle = `📝 Modify File: ${displayTarget}`;
+            } else if (tool.includes('read') || tool.includes('view') || tool.includes('file') || tool === 'cat') {
+                stepType = 'read_file';
+                const target = args?.file_path || args?.file_paths?.[0] || 'file';
+                const displayTarget = typeof target === 'string' && target.length > 40 ? '...' + target.slice(-37) : target;
+                cleanTitle = `📄 Read File: ${displayTarget}`;
             } else if (tool.includes('search') || tool.includes('grep') || tool.includes('find')) {
                 stepType = 'search';
                 cleanTitle = `Search ${args?.query || args?.pattern || 'query'}`;
@@ -486,7 +509,7 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
         else if (funcArgs.url) targetDetail = ` 🌐 Link: "${funcArgs.url}"`;
     }
 
-    if (logger) logger(`⚙️ [Tool Call] Kích hoạt: ${functionName}${targetDetail}`);
+    // if (logger) logger(`⚙️ [Tool Call] Kích hoạt: ${functionName}${targetDetail}`);
 
     const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines_safe', 'get_os_context'];
     if (!silentFunctions.includes(functionName) && !functionName.startsWith('workflow_')) {
@@ -535,7 +558,7 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
                     cleanStr = cleanStr.replace(/data:image\/[a-zA-Z]+;base64,[a-zA-Z0-9+/=]+/g, '[Dữ liệu hình ảnh Base64 - Đã ẩn để tối ưu hiệu năng]');
                 }
 
-                logger(`📝 [Tool Output] ${cleanStr}`);
+                // logger(`📝 [Tool Output] ${cleanStr}`);
             }
         };
     }
@@ -550,12 +573,21 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
             tool: functionName, args: funcArgs, success: true, durationMs, timestamp: new Date().toISOString()
         });
 
-        if (functionName === 'create_pipeline_plan') {
+        if (functionName === 'create_pipeline_plan' || functionName === 'create_pipeline_plan_from_spec') {
             console.log(chalk.blue(`\n[Node] ⚙️ Kế hoạch đã được duyệt. Đang đóng luồng Chat để chuyển giao cho Engine...`));
             return "__HANDOVER_TO_ENGINE__";
         }
 
+        // ─── THAY ĐỔI TẠI ĐÂY ──────────────────────────────────────────────────
+        // Nếu kết quả trả về từ handler là một chuỗi văn bản (như cấu trúc Markdown),
+        // trả về trực tiếp để AI đọc hiểu dễ dàng thay vì đóng gói vào JSON.
+        if (typeof result === 'string') {
+            return result;
+        }
+
         return JSON.stringify({ status: "success", data: result });
+        // ──────────────────────────────────────────────────────────────────────
+
     } catch (error) {
         const durationMs = Date.now() - startTime;
 
