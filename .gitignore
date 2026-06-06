@@ -4,5 +4,6 @@ agent_skills
 profile/
 .agents/
 node_modules
-
+**/agent_state.json
 .agent_memory/**
+json_write.json

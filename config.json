@@ -20,7 +20,7 @@
     "openai": {
       "name": "OpenAI",
       "enabled": true,
-      "apiKey": "",
+      "apiKey": "sk-your-openai-key-here",
       "model": "gemini",
       "baseUrl": "http://localhost:20128/v1",
       "maxTokens": 4096,
@@ -31,7 +31,8 @@
       "enabled": false,
       "model": "gemini-2.5-flash",
       "maxTokens": 8192,
-      "temperature": 0.7
+      "temperature": 0.7,
+      "apiKey": "AIza-your-gemini-key-here"
     },
     "claude": {
       "name": "Anthropic Claude",
@@ -39,7 +40,8 @@
       "model": "claude-sonnet-4-20250514",
       "baseUrl": "https://api.anthropic.com",
       "maxTokens": 4096,
-      "temperature": 0.7
+      "temperature": 0.7,
+      "apiKey": "sk-ant-your-claude-key-here"
     },
     "ollama": {
       "name": "Ollama (Local LLM)",
