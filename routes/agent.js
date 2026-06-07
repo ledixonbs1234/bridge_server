@@ -169,7 +169,11 @@ router.post('/chat', async (req, res) => {
             image, // Ảnh đơn để tương thích ngược
             images: images || [], // NÂNG CẤP: Nhận danh sách mảng ảnh mới
             onChunk: stream ? (chunk) => {
-                res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
+                if (typeof chunk === 'object' && chunk !== null) {
+                    res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.text, usage: chunk.usage })}\n\n`);
+                } else {
+                    res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
+                }
             } : null,
             onAction: stream ? (tool, args, stepId) => {
                 const inputVal = args ? (args.command || args.file_path || args.query || args.url || args.pattern || JSON.stringify(args)) : '';

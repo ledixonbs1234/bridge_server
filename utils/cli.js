@@ -117,14 +117,30 @@ export async function startTerminalChatLoop() {
             continue;
         }
 
+        // Thay đổi trong hàm startTerminalChatLoop()
         try {
+            let latestUsage = null;
             const result = await executeAgentTurn({
                 message: text,
                 activeProvider: globalThis.activeProvider,
-                useReformulate: cliUseReformulate, // Sử dụng cấu hình vừa đổi qua slash command
-                onChunk: (chunk) => process.stdout.write(chunk),
+                useReformulate: cliUseReformulate,
+                onChunk: (chunk) => {
+                    if (typeof chunk === 'object' && chunk !== null) {
+                        process.stdout.write(chunk.text);
+                        if (chunk.usage) {
+                            latestUsage = chunk.usage;
+                        }
+                    } else {
+                        process.stdout.write(chunk);
+                    }
+                },
                 onAction: (tool) => console.log(chalk.gray(`\n[Action] Đang kích hoạt: ${tool}`))
             });
+
+            if (latestUsage) {
+                const totalTk = latestUsage.total_tokens || (latestUsage.input_tokens + latestUsage.output_tokens);
+                console.log(chalk.gray(`\n\n[Qwen Web Token Usage] Input: ${latestUsage.input_tokens.toLocaleString()} | Output: ${latestUsage.output_tokens.toLocaleString()} (Total: ${totalTk.toLocaleString()})`));
+            }
             console.log('\n');
         } catch (err) {
             console.error(chalk.red(`\n❌ Error: ${err.message}\n`));

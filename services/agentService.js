@@ -163,18 +163,28 @@ export async function executeAgentTurn({
         }
     };
 
-    const wrappedOnChunk = (chunk) => {
-        if (onChunk) onChunk(chunk);
+    let lastKnownUsage = null;
 
-        // Đồng bộ hóa văn bản trả về vào serverTimeline
+    const wrappedOnChunk = (chunk) => {
+        let text = chunk;
+        if (typeof chunk === 'object' && chunk !== null) {
+            text = chunk.text;
+            if (chunk.usage) {
+                lastKnownUsage = chunk.usage;
+            }
+        }
+
+        if (onChunk) onChunk(chunk); // Gửi nguyên bản sang routes/agent.js
+
+        // Đồng bộ hóa văn bản trả về vào serverTimeline (Sử dụng 'text' thay vì 'chunk')
         const lastItem = serverTimeline[serverTimeline.length - 1];
         if (lastItem && lastItem.type === 'text') {
-            lastItem.content = (lastItem.content || '') + chunk;
+            lastItem.content = (lastItem.content || '') + text;
         } else {
             serverTimeline.push({
                 id: 'text-' + Math.random().toString(36).substring(2, 9),
                 type: 'text',
-                content: chunk
+                content: text
             });
         }
     };
@@ -366,7 +376,8 @@ export async function executeAgentTurn({
                 role: 'assistant',
                 content: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.",
                 steps: serverSteps,
-                timeline: serverTimeline
+                timeline: serverTimeline,
+                usage: lastKnownUsage // Lưu trữ thông tin token
             });
 
             const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
@@ -375,12 +386,12 @@ export async function executeAgentTurn({
 
         const cleanResponse = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
-        // Đồng bộ đính kèm đầy đủ steps và cấu trúc timeline nguyên bản
         currentHistory.push({
             role: 'assistant',
             content: cleanResponse,
             steps: serverSteps,
-            timeline: serverTimeline
+            timeline: serverTimeline,
+            usage: lastKnownUsage // Lưu trữ thông tin token
         });
 
         const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);

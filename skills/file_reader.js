@@ -124,40 +124,40 @@ export default {
         }
     },
 
-    "read_image_asset": {
-        description: "Đọc nội dung của một tệp tin hình ảnh cục bộ (PNG, JPG, JPEG, WEBP) từ Workspace dự án, mã hóa sang định dạng Base64 giúp AI có khả năng xem và đối chiếu thiết kế giao diện trực quan.",
-        parameters: {
-            type: "object",
-            properties: {
-                file_path: { type: "string", description: "Đường dẫn tuyệt đối đến tệp tin hình ảnh cần đọc." }
-            },
-            required: ["file_path"]
-        },
-        handler: async (args) => {
-            const filePath = resolveUserPath(args.file_path);
-            if (!fs.existsSync(filePath)) {
-                throw new Error(`Tệp tin hình ảnh không tồn tại: ${args.file_path}`);
-            }
+    // "read_image_asset": {
+    //     description: "Đọc nội dung của một tệp tin hình ảnh cục bộ (PNG, JPG, JPEG, WEBP) từ Workspace dự án, mã hóa sang định dạng Base64 giúp AI có khả năng xem và đối chiếu thiết kế giao diện trực quan.",
+    //     parameters: {
+    //         type: "object",
+    //         properties: {
+    //             file_path: { type: "string", description: "Đường dẫn tuyệt đối đến tệp tin hình ảnh cần đọc." }
+    //         },
+    //         required: ["file_path"]
+    //     },
+    //     handler: async (args) => {
+    //         const filePath = resolveUserPath(args.file_path);
+    //         if (!fs.existsSync(filePath)) {
+    //             throw new Error(`Tệp tin hình ảnh không tồn tại: ${args.file_path}`);
+    //         }
 
-            const ext = path.extname(filePath).toLowerCase();
-            let mimeType = 'image/png';
-            if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
-            else if (ext === '.gif') mimeType = 'image/gif';
-            else if (ext === '.webp') mimeType = 'image/webp';
+    //         const ext = path.extname(filePath).toLowerCase();
+    //         let mimeType = 'image/png';
+    //         if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
+    //         else if (ext === '.gif') mimeType = 'image/gif';
+    //         else if (ext === '.webp') mimeType = 'image/webp';
 
-            try {
-                const fileBuffer = fs.readFileSync(filePath);
-                const base64Data = fileBuffer.toString('base64');
-                return {
-                    status: "success",
-                    file_path: aiSafePath(filePath),
-                    mime_type: mimeType,
-                    image_base64: `data:${mimeType};base64,${base64Data}`,
-                    message: "Đã đọc thành công tệp tin hình ảnh. Bạn có thể sử dụng dữ liệu 'image_base64' này để gửi kèm và phục vụ phân tích thị giác."
-                };
-            } catch (err) {
-                throw new Error(`Không thể đọc và mã hóa tệp tin hình ảnh: ${err.message}`);
-            }
-        }
-    }
+    //         try {
+    //             const fileBuffer = fs.readFileSync(filePath);
+    //             const base64Data = fileBuffer.toString('base64');
+    //             return {
+    //                 status: "success",
+    //                 file_path: aiSafePath(filePath),
+    //                 mime_type: mimeType,
+    //                 image_base64: `data:${mimeType};base64,${base64Data}`,
+    //                 message: "Đã đọc thành công tệp tin hình ảnh. Bạn có thể sử dụng dữ liệu 'image_base64' này để gửi kèm và phục vụ phân tích thị giác."
+    //             };
+    //         } catch (err) {
+    //             throw new Error(`Không thể đọc và mã hóa tệp tin hình ảnh: ${err.message}`);
+    //         }
+    //     }
+    // }
 };

@@ -77,7 +77,9 @@ class QwenWebBot {
 
         await this.page.waitForFunction(() => {
             return !!(document.querySelector('textarea.message-input-textarea') || document.querySelector('textarea'));
-        }, { timeout: 60000 });
+        }, { timeout: 10000 });
+        await this.page.waitForTimeout(2000);
+        
 
         console.log("[Qwen Web] ✅ Đã vào được màn hình chat Qwen!");
         this.isReady = true;
@@ -159,7 +161,12 @@ class QwenWebBot {
                         if (delta.phase === 'answer' || !delta.phase) {
                             this.accumulatedAnswer += delta.content;
                             if (this.currentStreamCallback) {
-                                this.currentStreamCallback(delta.content);
+                                // Truyền thêm object nếu có dữ liệu usage
+                                if (parsed.usage) {
+                                    this.currentStreamCallback({ text: delta.content, usage: parsed.usage });
+                                } else {
+                                    this.currentStreamCallback(delta.content);
+                                }
                             }
                         }
                     }
@@ -176,6 +183,7 @@ class QwenWebBot {
         }
     }
 
+    // Thay đổi trong hàm processWebSocketFrame(decodedText)
     processWebSocketFrame(decodedText) {
         try {
             const parsed = JSON.parse(decodedText);
@@ -183,7 +191,12 @@ class QwenWebBot {
             if (content) {
                 this.accumulatedAnswer += content;
                 if (this.currentStreamCallback) {
-                    this.currentStreamCallback(content);
+                    const usage = parsed.usage || parsed.data?.usage;
+                    if (usage) {
+                        this.currentStreamCallback({ text: content, usage });
+                    } else {
+                        this.currentStreamCallback(content);
+                    }
                 }
             }
         } catch (e) { }
