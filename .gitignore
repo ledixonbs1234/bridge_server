@@ -5,5 +5,6 @@ profile/
 .agents/
 node_modules
 **/agent_state.json
-.agent_memory/**
+.agent_memory/*
+
 json_write.json
