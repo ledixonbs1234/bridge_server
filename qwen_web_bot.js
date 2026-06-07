@@ -1,3 +1,4 @@
+// filepath: bridge_server/qwen_web_bot.js
 import { launchPersistentContext } from "cloakbrowser";
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -23,17 +24,25 @@ class QwenWebBot {
     }
 
     async init(headless = false) {
-        if (this.isReady) {
+        // Kiểm tra xem phiên trình duyệt cũ còn hoạt động bình thường hay không
+        const isSessionAlive = this.isReady && this.page && !this.page.isClosed() && this.context;
+
+        if (isSessionAlive) {
             if (this.currentHeadless === headless) return;
             console.log(`[Qwen Web] 🔄 Đổi chế độ headless sang: ${headless}. Khởi động lại trình duyệt...`);
-            if (this.client) {
-                try { await this.client.detach(); } catch (e) { }
-            }
-            if (this.context) {
-                try { await this.context.close(); } catch (e) { }
-            }
-            this.isReady = false;
+        } else {
+            console.log(`[Qwen Web] 🔄 Trình duyệt Qwen Web chưa được mở hoặc đã bị đóng ngoài ý muốn. Đang khởi chạy lại...`);
         }
+
+        // Dọn dẹp sạch sẽ tài nguyên cũ trước khi tạo phiên mới
+        this.isReady = false;
+        if (this.client) {
+            try { await this.client.detach(); } catch (e) { }
+        }
+        if (this.context) {
+            try { await this.context.close(); } catch (e) { }
+        }
+
         this.currentHeadless = headless;
         console.log(`[Qwen Web] Đang khởi động CloakBrowser (headless: ${headless})...`);
 
@@ -46,6 +55,16 @@ class QwenWebBot {
         });
 
         this.page = this.context.pages().length > 0 ? this.context.pages()[0] : await this.context.newPage();
+
+        // 🛡️ LẮNG NGHE SỰ KIỆN ĐÓNG ĐỂ TỰ ĐỘNG ĐƯA TRẠNG THÁI VỀ FALSE
+        this.page.on('close', () => {
+            console.log("[Qwen Web] ⚠️ Tab trình duyệt Qwen đã bị đóng!");
+            this.isReady = false;
+        });
+        this.context.on('close', () => {
+            console.log("[Qwen Web] ⚠️ Trình duyệt CloakBrowser đã bị đóng!");
+            this.isReady = false;
+        });
 
         // 🚀 THIẾT LẬP CDP NATIVE CHUYÊN SÂU
         console.log("[Qwen Web] Thiết lập phiên kết nối CDP Native...");
@@ -68,43 +87,33 @@ class QwenWebBot {
      * Đăng ký lắng nghe các sự kiện mạng native thông qua CDP với bộ lọc Request ID nghiêm ngặt
      */
     setupCDPListeners() {
-        // 1. Theo dõi khi nhận phản hồi HTTP Response
         this.client.on('Network.responseReceived', async ({ requestId, response }) => {
             const url = response.url;
 
-            // Chỉ lọc các request completion stream của Qwen
             if (url.includes('/api/v2/chat/completions') || url.includes('/chat/completions')) {
-                // Khóa cứng: Chỉ chấp nhận xử lý duy nhất Request ID mới nhất này
                 this.activeRequestId = requestId;
                 this.streamFinished = false;
                 this.streamError = null;
 
                 try {
-                    // Chỉ kích hoạt stream, KHÔNG xử lý bufferedData ở đây để tránh trùng lặp
                     await this.client.send('Network.streamResourceContent', { requestId });
-                } catch (e) {
-                    // Thầm lặng bỏ qua nếu kết nối đóng sớm
-                }
+                } catch (e) { }
             }
         });
 
-        // 2. Lắng nghe dữ liệu mảnh thô (Data Chunks) truyền về liên tục
         this.client.on('Network.dataReceived', ({ requestId, data }) => {
-            // KIỂM TRA NGHIÊM NGẶT: Chỉ xử lý mảnh dữ liệu của đúng request ID đang hoạt động
             if (this.activeRequestId === requestId && data) {
                 const chunkText = Buffer.from(data, 'base64').toString('utf-8');
                 this.processStreamChunk(chunkText);
             }
         });
 
-        // 3. Lắng nghe tín hiệu kết thúc stream
         this.client.on('Network.loadingFinished', ({ requestId }) => {
             if (this.activeRequestId === requestId) {
                 this.streamFinished = true;
             }
         });
 
-        // 4. Lắng nghe tín hiệu lỗi stream
         this.client.on('Network.loadingFailed', ({ requestId, errorText }) => {
             if (this.activeRequestId === requestId) {
                 this.streamFinished = true;
@@ -112,7 +121,6 @@ class QwenWebBot {
             }
         });
 
-        // 5. Giám sát WebSocket dự phòng
         this.client.on('Network.webSocketFrameReceived', ({ requestId, response }) => {
             const rawPayload = response.payloadData;
             const decoded = this.decodeWebSocketPayload(rawPayload);
@@ -122,9 +130,6 @@ class QwenWebBot {
         });
     }
 
-    /**
-     * Bóc tách các dòng SSE (Server-Sent Events) từ HTTP Stream
-     */
     processStreamChunk(chunkText) {
         const lines = chunkText.split('\n');
         for (const line of lines) {
@@ -142,10 +147,8 @@ class QwenWebBot {
 
                 if (parsed.response_id) {
                     if (this.activeResponseId === null) {
-                        // Khóa chặt vào ID phản hồi đầu tiên thu thập được
                         this.activeResponseId = parsed.response_id;
                     } else if (parsed.response_id !== this.activeResponseId) {
-                        // Bỏ qua hoàn toàn dữ liệu của các phản hồi song song khác
                         continue;
                     }
                 }
@@ -153,7 +156,6 @@ class QwenWebBot {
                 if (choice) {
                     const delta = choice.delta;
                     if (delta && delta.content) {
-                        // Chỉ trích xuất khi phase là 'answer' hoặc không có phase để lấy câu trả lời thô sạch
                         if (delta.phase === 'answer' || !delta.phase) {
                             this.accumulatedAnswer += delta.content;
                             if (this.currentStreamCallback) {
@@ -162,15 +164,10 @@ class QwenWebBot {
                         }
                     }
                 }
-            } catch (e) {
-                // Bỏ qua lỗi cú pháp JSON đối với các dòng bị cắt bớt hoặc chưa hoàn chỉnh giữa các chunk
-            }
+            } catch (e) { }
         }
     }
 
-    /**
-     * Giải mã dữ liệu WebSocket Base64
-     */
     decodeWebSocketPayload(payloadData) {
         try {
             return Buffer.from(payloadData, 'base64').toString('utf8');
@@ -179,9 +176,6 @@ class QwenWebBot {
         }
     }
 
-    /**
-     * Xử lý dữ liệu từ frame WebSocket
-     */
     processWebSocketFrame(decodedText) {
         try {
             const parsed = JSON.parse(decodedText);
@@ -192,20 +186,18 @@ class QwenWebBot {
                     this.currentStreamCallback(content);
                 }
             }
-        } catch (e) {
-            // Tránh vỡ luồng khi parse các cấu trúc WebSocket tùy chỉnh
-        }
+        } catch (e) { }
     }
 
     async clickNewChat() {
-        if (!this.isReady) return;
+        if (!this.isReady || !this.page || this.page.isClosed() || !this.context) {
+            this.isReady = false;
+            await this.init(this.currentHeadless);
+        }
         try {
             console.log("[Qwen Web] 🔄 Đang chuyển hướng trình duyệt về trang chủ để mở phiên New Chat mới...");
-
-            // Điều hướng trực tiếp về địa chỉ gốc để xóa ID cuộc trò chuyện cũ trên URL
             await this.page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded' });
 
-            // Đợi ô nhập liệu xuất hiện để đảm bảo giao diện mới đã sẵn sàng nhận Prompt tiếp theo
             await this.page.waitForFunction(() => {
                 return !!(document.querySelector('textarea.message-input-textarea') || document.querySelector('textarea'));
             }, { timeout: 15000 });
@@ -217,7 +209,11 @@ class QwenWebBot {
     }
 
     async sendPrompt(promptText, useThinking = false, image = null, images = null) {
-        if (!this.isReady) await this.init();
+        // TỰ ĐỘNG KHỞI CHẠY LẠI NẾU PHÁT HIỆN TRÌNH DUYỆT BỊ TẮT
+        if (!this.isReady || !this.page || this.page.isClosed() || !this.context) {
+            this.isReady = false;
+            await this.init(this.currentHeadless);
+        }
 
         await this.page.evaluate(() => {
             document.querySelectorAll('.qwen-chat-message-assistant:not([data-ai-read="true"])').forEach(el => {
@@ -230,7 +226,6 @@ class QwenWebBot {
         this.streamError = null;
         this.activeResponseId = null;
 
-        // NÂNG CẤP: Chuẩn hóa ảnh. Gom cả ảnh đơn (image) và mảng ảnh (images) thành một mảng duy nhất để dán
         let targetImages = [];
         if (Array.isArray(images) && images.length > 0) {
             targetImages = images;
@@ -272,7 +267,6 @@ class QwenWebBot {
                 textarea.blur();
                 textarea.focus();
 
-                // 🚀 NÂNG CẤP: Thực thi dán tuần tự từng ảnh lên khung chat
                 if (targetImages && targetImages.length > 0) {
                     for (let idx = 0; idx < targetImages.length; idx++) {
                         const imgBase64 = targetImages[idx];
@@ -291,7 +285,6 @@ class QwenWebBot {
                             });
 
                             textarea.dispatchEvent(pasteEvent);
-                            // Thời gian trễ để Qwen upload và render preview cho từng ảnh
                             await sleep(2500);
                         } catch (err) {
                             console.error("[Qwen Web Browser Error] Lỗi giả lập paste ảnh:", err);
@@ -311,7 +304,6 @@ class QwenWebBot {
                     return t === 'fast' || t === 'auto';
                 };
 
-                // Tìm nút điều hướng chế độ dựa trên danh sách nhãn thuộc hai nhóm trên
                 const buttons = Array.from(document.querySelectorAll('span'));
                 const modelSelectorBtn = buttons.find(btn => {
                     const btnText = btn.innerText?.trim();
@@ -323,36 +315,29 @@ class QwenWebBot {
                     const currentIsThinking = isThinkingText(currentMode);
                     const targetIsThinking = !!useDeepThink;
 
-                    // Chỉ kích hoạt click chuyển đổi nếu chế độ hiện tại khác biệt với yêu cầu thực tế
                     if (currentIsThinking !== targetIsThinking) {
-                        // Kiểm tra xem danh sách ảo dropdown đã tồn tại sẵn trong DOM chưa
                         let listHolder = document.querySelector(".rc-virtual-list-holder-inner");
                         let openedByUs = false;
 
                         if (!listHolder) {
-                            // Chỉ click mở dropdown khi phần tử danh sách chưa tồn tại
                             simulateClick(modelSelectorBtn);
-                            await sleep(600); // Chờ menu dropdown render xong
+                            await sleep(600);
                             listHolder = document.querySelector(".rc-virtual-list-holder-inner");
-                            openedByUs = true; // Đánh dấu là do chúng ta chủ động mở
+                            openedByUs = true;
                         }
 
                         let targetItem = null;
 
-                        // 1. Dò tìm phần tử mục tiêu bên trong danh sách ảo Ant Design
                         if (listHolder) {
                             if (targetIsThinking) {
-                                // Tìm option có thuộc tính title là "Think" hoặc "Thinking"
                                 targetItem = listHolder.querySelector('[title="Think"]') ||
                                     listHolder.querySelector('[title="Thinking"]');
                             } else {
-                                // Tìm option có thuộc tính title là "Fast" (hoặc "Auto" nếu muốn dự phòng)
                                 targetItem = listHolder.querySelector('[title="Fast"]') ||
                                     listHolder.querySelector('[title="Auto"]');
                             }
                         }
 
-                        // 2. Dự phòng (Fallback) trong trường hợp cấu trúc ảo chưa kịp render
                         if (!targetItem) {
                             const menuItems = Array.from(document.querySelectorAll('.ant-select-item-option, [role="option"]'));
                             targetItem = menuItems.find(item => {
@@ -368,12 +353,10 @@ class QwenWebBot {
                             });
                         }
 
-                        // 3. Kích hoạt click giả lập lên phần tử đích
                         if (targetItem) {
                             simulateClick(targetItem);
                             await sleep(300);
                         } else if (openedByUs) {
-                            // Nếu do chúng ta mở ra nhưng không tìm thấy mục khớp để chọn, click lại nút để đóng menu
                             simulateClick(modelSelectorBtn);
                         }
                     }
@@ -381,7 +364,7 @@ class QwenWebBot {
                 return true;
             }
             return false;
-        }, { text: promptText, useDeepThink: useThinking, targetImages: targetImages }); // <-- ĐÃ SỬA ĐỒNG BỘ KHÓA Ở ĐÂY
+        }, { text: promptText, useDeepThink: useThinking, targetImages: targetImages });
 
         if (!filled) {
             console.error("[Qwen Web Error] Không tìm thấy ô nhập liệu (textarea) trong DOM!");
@@ -416,9 +399,6 @@ class QwenWebBot {
         await this.page.waitForTimeout(500);
     }
 
-    /**
-     * Tạo Tab Worker con độc lập và liên kết CDP riêng biệt
-     */
     async getWorkerBot(workerType = 'default') {
         if (!this.context) await this.init(this.currentHeadless);
 
@@ -460,13 +440,12 @@ class QwenWebBot {
         this.currentStreamCallback = onStreamChunk;
 
         return new Promise((resolve) => {
-            const timeoutLimit = 180000; // 3 phút tối đa
+            const timeoutLimit = 180000;
             const startTime = Date.now();
 
             const pollInterval = setInterval(async () => {
                 const elapsedTime = Date.now() - startTime;
 
-                // --- 1. KIỂM TRA ĐƯỜNG TRUYỀN NETWORK (PHƯƠNG ÁN CHÍNH) ---
                 if (this.streamFinished) {
                     clearInterval(pollInterval);
                     if (this.streamError) {
@@ -476,8 +455,6 @@ class QwenWebBot {
                     return;
                 }
 
-                // --- 2. PHƯƠNG ÁN DỰ PHÒNG (FALLBACK THEO DOM POLLING) ---
-                // Chỉ kích hoạt dự phòng nếu sau 15 giây Network vẫn chưa thu được dữ liệu
                 if (elapsedTime > 15000 && !this.accumulatedAnswer) {
                     try {
                         const domState = await this.page.evaluate(() => {
@@ -499,12 +476,9 @@ class QwenWebBot {
                             resolve({ type: 'text', text: domState.text });
                             return;
                         }
-                    } catch (e) {
-                        // Bỏ qua lỗi DOM tạm thời
-                    }
+                    } catch (e) { }
                 }
 
-                // --- 3. KIỂM TRA TIMEOUT ---
                 if (elapsedTime > timeoutLimit) {
                     clearInterval(pollInterval);
                     resolve({ type: 'text', text: this.accumulatedAnswer || '[Lỗi: Quá thời gian chờ phản hồi]' });

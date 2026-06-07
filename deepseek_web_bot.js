@@ -1,3 +1,4 @@
+// filepath: bridge_server/deepseek_web_bot.js
 import { launchPersistentContext } from "cloakbrowser";
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -13,31 +14,43 @@ class DeepSeekWebBot {
         this.currentHeadless = null;
     }
 
-    // ==========================================
-    // 1. KHỞI TẠO TRÌNH DUYỆT VÀ MỞ CHAT
-    // ==========================================
-    async init(headless = false) { // SỬA: Nhận tham số headless
-        // Nếu đã khởi tạo nhưng người dùng đổi chế độ headless, tắt đi khởi động lại
-        if (this.isReady) {
+    async init(headless = false) {
+        const isSessionAlive = this.isReady && this.page && !this.page.isClosed() && this.context;
+
+        if (isSessionAlive) {
             if (this.currentHeadless === headless) return;
             console.log(`[DeepSeek Web] 🔄 Đổi chế độ headless sang: ${headless}. Khởi động lại trình duyệt...`);
-            if (this.context) {
-                try { await this.context.close(); } catch (e) { }
-            }
-            this.isReady = false;
+        } else {
+            console.log(`[DeepSeek Web] 🔄 Trình duyệt DeepSeek chưa được mở hoặc đã bị đóng ngoài ý muốn. Đang khởi chạy lại...`);
         }
+
+        this.isReady = false;
+        if (this.context) {
+            try { await this.context.close(); } catch (e) { }
+        }
+
         this.currentHeadless = headless;
         console.log(`[DeepSeek Web] Đang khởi động CloakBrowser (headless: ${headless})...`);
 
         const profilePath = path.join(__dirname, 'profile', 'Profile_Xon_Pro_All');
         this.context = await launchPersistentContext({
             userDataDir: profilePath,
-            headless: headless, // SỬA: Gán biến động
+            headless: headless,
             viewport: { width: 1280, height: 720 },
             args: ['--disable-blink-features=AutomationControlled']
         });
 
         this.page = this.context.pages().length > 0 ? this.context.pages()[0] : await this.context.newPage();
+
+        this.page.on('close', () => {
+            console.log("[DeepSeek Web] ⚠️ Tab trình duyệt DeepSeek đã bị đóng!");
+            this.isReady = false;
+        });
+        this.context.on('close', () => {
+            console.log("[DeepSeek Web] ⚠️ Trình duyệt DeepSeek đã bị đóng!");
+            this.isReady = false;
+        });
+
         console.log("[DeepSeek Web] Mở chat.deepseek.com...");
         await this.page.goto('https://chat.deepseek.com/', { waitUntil: 'domcontentloaded' });
 
@@ -49,31 +62,30 @@ class DeepSeekWebBot {
         this.isReady = true;
     }
 
-    // Thay thế hàm clickNewChat() trong ridge_server/deepseek_web_bot.js
-async clickNewChat() {
-    if (!this.isReady) return;
-    try {
-        console.log("[DeepSeek Web] 🔄 Đang chuyển hướng trình duyệt về trang chủ để mở phiên New Chat mới...");
-        
-        // Điều hướng trực tiếp về địa chỉ gốc của DeepSeek
-        await this.page.goto('https://chat.deepseek.com/', { waitUntil: 'domcontentloaded' });
-        
-        // Đợi ô nhập liệu xuất hiện để xác nhận trang mới đã sẵn sàng
-        await this.page.waitForFunction(() => {
-            return !!(document.querySelector('textarea#chat-input') || document.querySelector('textarea'));
-        }, { timeout: 15000 });
-        
-        console.log("[DeepSeek Web] ✅ Đã tải xong trang trắng New Chat!");
-    } catch (e) {
-        console.error("Lỗi khi chuyển hướng về trang chủ DeepSeek:", e.message);
-    }
-}
+    async clickNewChat() {
+        if (!this.isReady || !this.page || this.page.isClosed() || !this.context) {
+            this.isReady = false;
+            await this.init(this.currentHeadless);
+        }
+        try {
+            console.log("[DeepSeek Web] 🔄 Đang chuyển hướng trình duyệt về trang chủ để mở phiên New Chat mới...");
+            await this.page.goto('https://chat.deepseek.com/', { waitUntil: 'domcontentloaded' });
 
-   // ==========================================
-    // 2. GỬI TIN NHẮN (PROMPT INJECTION)
-    // ==========================================
-        async sendPrompt(promptText, useThinking = false) {
-        if (!this.isReady) await this.init();
+            await this.page.waitForFunction(() => {
+                return !!(document.querySelector('textarea#chat-input') || document.querySelector('textarea'));
+            }, { timeout: 15000 });
+
+            console.log("[DeepSeek Web] ✅ Đã tải xong trang trắng New Chat!");
+        } catch (e) {
+            console.error("Lỗi khi chuyển hướng về trang chủ DeepSeek:", e.message);
+        }
+    }
+
+    async sendPrompt(promptText, useThinking = false) {
+        if (!this.isReady || !this.page || this.page.isClosed() || !this.context) {
+            this.isReady = false;
+            await this.init(this.currentHeadless);
+        }
 
         await this.page.evaluate(() => {
             document.querySelectorAll('.ds-assistant-message-main-content:not([data-ai-read="true"])').forEach(el => {
@@ -84,14 +96,13 @@ async clickNewChat() {
         console.log(`[DeepSeek Web] Đang nhập dữ liệu (${promptText.length} ký tự)... (DeepThink: ${useThinking ? 'ON' : 'OFF'})`);
 
         await this.page.evaluate(({ text, useDeepThink }) => {
-            // TỰ ĐỘNG BẬT/TẮT DEEPTHINK TRÊN GIAO DIỆN
             const d = Array.from(document.querySelectorAll('div[role="button"]')).find(e => e.innerText && e.innerText.includes('DeepThink'));
             if (d) {
                 const isPressed = d.getAttribute('aria-pressed') === 'true';
                 if (useDeepThink && !isPressed) {
-                    d.click(); // Bật nếu đang tắt
+                    d.click();
                 } else if (!useDeepThink && isPressed) {
-                    d.click(); // Tắt nếu đang bật
+                    d.click();
                 }
             }
 
@@ -113,14 +124,11 @@ async clickNewChat() {
 
         await this.page.waitForTimeout(500);
 
-        // BƯỚC 2: TÌM VÀ CLICK NÚT GỬI (Quét từ dưới lên để tránh trúng nút Kính lúp ở thanh menu)
         await this.page.evaluate(() => {
-            // Cách 1: Tìm bằng đoạn SVG path đặc trưng của nút "Mũi tên lên" do bạn cung cấp
             let sendBtn = Array.from(document.querySelectorAll('div[role="button"]')).find(el =>
                 el.innerHTML.includes('M8.3125 0.981587') && el.getAttribute('aria-disabled') === 'false'
             );
 
-            // Cách 2: Nếu SVG bị đổi, tìm nút ds-icon-button CUỐI CÙNG trên trang có aria-disabled="false"
             if (!sendBtn) {
                 sendBtn = Array.from(document.querySelectorAll('div[role="button"].ds-icon-button'))
                     .reverse()
@@ -144,15 +152,11 @@ async clickNewChat() {
         await this.page.waitForTimeout(500);
     }
 
-    // ==========================================
-    // TẠO TAB MỚI CHO NHIỆM VỤ CON (WORKER ISOLATION)
-    // ==========================================
     async getWorkerBot(workerType = 'default') {
         if (!this.context) await this.init(this.currentHeadless);
 
         if (!this.workerBots) this.workerBots = {};
 
-        // Nếu Tab Worker cùng loại đã tồn tại và chưa bị đóng -> Tái sử dụng
         if (this.workerBots[workerType] && this.workerBots[workerType].page && !this.workerBots[workerType].page.isClosed()) {
             console.log(`\n[DeepSeek Web] 🌍 Tái sử dụng Tab Worker [${workerType}] đang hoạt động...`);
             return this.workerBots[workerType];
@@ -179,9 +183,6 @@ async clickNewChat() {
         return workerBot;
     }
 
-    // ==========================================
-    // 3. ĐỌC KẾT QUẢ TRẢ VỀ (CHỜ AI SINH TEXT)
-    // ==========================================
     async waitForResponse(onStreamChunk) {
         let lastLength = 0;
         let stableCount = 0;
@@ -191,30 +192,22 @@ async clickNewChat() {
             const pollInterval = setInterval(async () => {
                 try {
                     const state = await this.page.evaluate(() => {
-                        // 1. Kiểm tra xem AI có đang gen chữ không (tìm nút Stop)
                         const isGenerating = !!Array.from(document.querySelectorAll('div[role="button"]')).find(e => e.innerText && e.innerText.includes('Stop'));
-
                         let text = '';
-
-                        // 2. TÌM CHÍNH XÁC TIN NHẮN MỚI NHẤT (Chưa bị hàm sendPrompt đánh dấu là "đã đọc")
                         const chatBlocks = document.querySelectorAll('.ds-assistant-message-main-content:not([data-ai-read="true"])');
 
                         if (chatBlocks.length > 0) {
                             text = chatBlocks[chatBlocks.length - 1].innerText || '';
                             return { type: 'streaming', text, isGenerating };
                         }
-                        
-                        // Nếu mảng chatBlocks = 0, nghĩa là hệ thống Web chưa render kịp tin nhắn mới -> Đợi tiếp
                         return { type: 'waiting', isGenerating };
                     });
 
-                    // Nếu DOM chưa kịp vẽ tin mới, skip không làm gì cả
                     if (state.type === 'waiting') {
                         stableCount = 0;
                         return;
                     }
 
-                    // Nếu tin nhắn mới đã nhú lên, bắt đầu lấy chữ
                     if (state.type === 'streaming') {
                         if (state.text.length > lastLength) {
                             const chunk = state.text.substring(lastLength);
@@ -231,9 +224,7 @@ async clickNewChat() {
                             stableCount = 0;
                         }
                     }
-                } catch (e) {
-                    // Lỗi DOM tạm thời
-                }
+                } catch (e) { }
             }, 300);
         });
     }
