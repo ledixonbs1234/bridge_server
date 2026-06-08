@@ -26,8 +26,8 @@ function detectWorkspace(message) {
 }
 
 router.post('/chat', async (req, res) => {
-    // SỬA ĐỔI: Tiếp nhận thêm tham số 'agent', 'model' và mảng 'images' từ giao diện Web Client
-    const { message, stream, useReformulate, image, images, agent, model, headless } = req.body;
+    // SỬA ĐỔI: Tiếp nhận thêm tham số 'mode' từ body
+    const { message, stream, useReformulate, image, images, agent, model, headless, mode } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
 
     console.log(chalk.magenta(`\n[Web Terminal] 📥 "${message.substring(0, 80)}"${stream ? ' (Stream)' : ''}`));
@@ -160,14 +160,16 @@ router.post('/chat', async (req, res) => {
             globalThis.activeWebHistory = [];
         }
 
+        // SỬA ĐỔI: Truyền tham số 'mode' vào hàm executeAgentTurn
         const result = await executeAgentTurn({
             message,
             history: globalThis.activeWebHistory || [],
             sessionFile: globalThis.activeWebSessionFile,
             useReformulate: useReformulate !== false,
             headless: !!headless,
-            image, // Ảnh đơn để tương thích ngược
-            images: images || [], // NÂNG CẤP: Nhận danh sách mảng ảnh mới
+            image,
+            images: images || [],
+            mode: mode || 'default', // <--- Cập nhật dòng này
             onChunk: stream ? (chunk) => {
                 if (typeof chunk === 'object' && chunk !== null) {
                     res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.text, usage: chunk.usage })}\n\n`);
@@ -189,12 +191,11 @@ router.post('/chat', async (req, res) => {
             onSystem: stream ? (content) => {
                 res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
             } : null,
-            onAskPermission: async (query, detailsOverride = null) => { // Sửa đổi signature
+            onAskPermission: async (query, detailsOverride = null) => {
                 const { randomUUID } = await import('crypto');
                 const permId = 'perm_' + randomUUID();
                 const agentService = await import('../services/agentService.js');
 
-                // Sử dụng bối cảnh được override riêng nếu có sẵn
                 let cleanDetails = detailsOverride;
                 if (!cleanDetails) {
                     cleanDetails = agentService.logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');

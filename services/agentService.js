@@ -110,7 +110,8 @@ export async function executeAgentTurn({
     image = null,
     images = [], // NÂNG CẤP: Thêm mảng hình ảnh
     headless = true,
-    isSimpleChat = false
+    isSimpleChat = false,
+    mode = 'default'
 }) {
     const resolvedProvider = activeProvider || globalThis.activeProvider;
     const traceId = tracer.createTrace(message.substring(0, 80));
@@ -260,7 +261,10 @@ export async function executeAgentTurn({
             : getCompiledSystemPrompt();
         const apiIntent = classifyIntent(message);
         const filteredSkills = isSimpleChat ? {} : filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
-        const runMode = (apiIntent === 'complex' || apiIntent === 'research') ? 'thinking' : 'fast';
+        const runMode = (mode === 'thinking' || mode === 'fast')
+            ? mode
+            : ((apiIntent === 'complex' || apiIntent === 'research') ? 'thinking' : 'fast');
+
         const llmSpanId = traceId ? tracer.startSpan(traceId, `LLM Chat (${runMode.toUpperCase()})`, 'llm', null, {
             system_prompt: systemPrompt,
             messages: enrichedMessages

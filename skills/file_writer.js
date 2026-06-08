@@ -84,7 +84,7 @@ function performBoundedReplacement(originalContent, targetContent, replacementCo
 
     if (!targetContent || targetContent.trim() === '') {
         if (startLine < 1 || startLine > lines.length || endLine < startLine || endLine > lines.length) {
-            throw new Error(`[LINE_OUT_OF_BOUNDS] Khoảng dòng [${startLine}-${endLine}] vượt quá giới hạn file (1-${lines.length}).`);
+            throw new Error(`[LINE_OUT_BOUNDS] Khoảng dòng [${startLine}-${endLine}] vượt quá giới hạn file (1-${lines.length}).`);
         }
         const prefix = lines.slice(0, startLine - 1).join('\n');
         const suffix = lines.slice(endLine).join('\n');
@@ -147,15 +147,62 @@ function performBoundedReplacement(originalContent, targetContent, replacementCo
     const shift = matchedLineNum - startLine;
 
     const actualStartLine = startLine + shift;
-    const actualEndLine = endLine + shift;
+
+    // Tự động tính toán dòng kết thúc
+    let actualEndLine = endLine + shift;
 
     if (bottomLines.length > 0) {
-        const bottomStartLineIdx = actualEndLine - bottomLines.length;
-        for (let k = 0; k < bottomLines.length; k++) {
-            const targetLineIdx = bottomStartLineIdx + k;
-            if (targetLineIdx >= lines.length || !cleanString(lines[targetLineIdx]).includes(cleanString(bottomLines[k]))) {
-                throw new Error(`[VALIDATION_FAILED] Xác thực Neo cuối thất bại tại dòng ${targetLineIdx + 1}.`);
+        const bottomFirstLineClean = cleanString(bottomLines[0]);
+        let bottomMatchedLineIndex = -1;
+        let bottomMatchCount = 0;
+
+        for (let i = actualStartLine + topLines.length - 1; i < searchEnd; i++) {
+            if (i < lines.length && cleanString(lines[i]).includes(bottomFirstLineClean)) {
+                let allMatched = true;
+                for (let k = 1; k < bottomLines.length; k++) {
+                    if (i + k >= lines.length || !cleanString(lines[i + k]).includes(cleanString(bottomLines[k]))) {
+                        allMatched = false;
+                        break;
+                    }
+                }
+                if (allMatched) {
+                    bottomMatchedLineIndex = i;
+                    bottomMatchCount++;
+                }
             }
+        }
+
+        if (bottomMatchCount === 1) {
+            actualEndLine = bottomMatchedLineIndex + bottomLines.length;
+        } else {
+            const bottomStartLineIdx = actualEndLine - bottomLines.length;
+            for (let k = 0; k < bottomLines.length; k++) {
+                const targetLineIdx = bottomStartLineIdx + k;
+                if (targetLineIdx >= lines.length || !cleanString(lines[targetLineIdx]).includes(cleanString(bottomLines[k]))) {
+                    throw new Error(`[VALIDATION_FAILED] Xác thực Neo cuối thất bại tại dòng ${targetLineIdx + 1}.`);
+                }
+            }
+        }
+    } else {
+        actualEndLine = actualStartLine + topLines.length - 1;
+    }
+
+    // ĐỒNG BỘ NỘI DUNG KHOẢNG TRỐNG (GAP PRESERVATION)
+    let finalReplacement = normalizedReplacement;
+    const replacementParts = normalizedReplacement.split(gapRegex);
+
+    if (parts.length === 2 && replacementParts.length === 2) {
+        const gapStartIdx = actualStartLine + topLines.length - 1;
+        const gapEndIdx = actualEndLine - bottomLines.length;
+
+        // Trích xuất các dòng gốc nằm giữa hai mốc neo
+        const originalGapLines = lines.slice(gapStartIdx, gapEndIdx);
+        const originalGapContent = originalGapLines.join('\n');
+
+        if (originalGapContent === '') {
+            finalReplacement = replacementParts[0] + '\n' + replacementParts[1];
+        } else {
+            finalReplacement = replacementParts[0] + '\n' + originalGapContent + '\n' + replacementParts[1];
         }
     }
 
@@ -164,7 +211,7 @@ function performBoundedReplacement(originalContent, targetContent, replacementCo
 
     const finalParts = [];
     if (actualStartLine > 1) finalParts.push(prefix);
-    finalParts.push(normalizedReplacement);
+    finalParts.push(finalReplacement);
     if (actualEndLine < lines.length) finalParts.push(suffix);
     return finalParts.join('\n');
 }

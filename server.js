@@ -50,6 +50,9 @@ app.get('/health', async (req, res) => {
 // =================================================================
 // 🖥️ COMPATIBILITY ENDPOINT FOR WPF DESKTOP ASSISTANT
 // =================================================================
+// =================================================================
+// 🖥️ COMPATIBILITY ENDPOINT FOR WPF DESKTOP ASSISTANT (STREAMING SUPPORTED)
+// =================================================================
 app.post('/ask', async (req, res) => {
     const { question, imageBase64 } = req.body;
     if (!question) {
@@ -76,6 +79,12 @@ app.post('/ask', async (req, res) => {
         formattedImage = `data:image/png;base64,${formattedImage}`;
     }
 
+    // Cấu hình đầy đủ tiêu đề chống đệm trên mọi tầng mạng
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform'); // no-transform ngăn chặn nén đệm
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // Tắt bộ đệm của Nginx proxy nếu có
+
     try {
         const { executeAgentTurn } = await import('./services/agentService.js');
 
@@ -85,6 +94,8 @@ app.post('/ask', async (req, res) => {
             globalThis.activeWebHistory = [];
         }
 
+        const activeModel = globalThis.activeProvider?.model || 'unknown';
+
         const result = await executeAgentTurn({
             message: question,
             history: globalThis.activeWebHistory || [],
@@ -92,24 +103,27 @@ app.post('/ask', async (req, res) => {
             useReformulate: false,
             image: formattedImage,
             headless: true,
-            isSimpleChat: true // <--- KÍCH HOẠT CHẾ ĐỘ CHAT ĐƠN GIẢN CHO DESKTOP APP
+            isSimpleChat: true, // <--- KÍCH HOẠT CHẾ ĐỘ CHAT ĐƠN GIẢN CHO DESKTOP APP
+            onChunk: (chunk) => {
+                let text = "";
+                if (typeof chunk === 'object' && chunk !== null) {
+                    text = chunk.text;
+                } else {
+                    text = chunk;
+                }
+                res.write(`data: ${JSON.stringify({ text, model: activeModel })}\n`);
+            }
         });
 
         globalThis.activeWebHistory = result.history;
         globalThis.activeWebSessionFile = result.sessionFile;
 
-        const activeModel = globalThis.activeProvider?.model || 'unknown';
-        const answerText = result.type === 'handover'
-            ? "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động."
-            : (result.response || "Không có phản hồi từ Agent.");
-
-        res.json({
-            answer: answerText,
-            model: activeModel
-        });
+        res.write('data: [DONE]\n');
+        res.end();
     } catch (err) {
         console.error('[Compatibility Ask API] Lỗi xử lý:', err.message);
-        res.status(500).json({ error: err.message });
+        res.write(`data: ${JSON.stringify({ text: `\n\n[LỖI HỆ THỐNG: ${err.message}]`, model: 'error' })}\n`);
+        res.end();
     }
 });
 // Skills endpoint
