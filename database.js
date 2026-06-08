@@ -1,3 +1,4 @@
+// filepath: bridge_server/database.js
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -423,6 +424,50 @@ const db = {
 
             let changes = 0;
             for (const row of dbData.agent_states) {
+              if (filter(row)) {
+                for (const upd of updates) {
+                  if (upd.type === 'param') row[upd.column] = params[upd.paramIndex];
+                  else if (upd.type === 'literal') row[upd.column] = upd.value;
+                  else if (upd.type === 'increment') row[upd.column] = (row[upd.column] || 0) + upd.delta;
+                }
+                changes++;
+              }
+            }
+            if (changes > 0) saveDb();
+            return { changes };
+          }
+
+          // --- PHÂN HỆ NÂNG CẤP: UPDATE TRACES ---
+          if (sqlLower.startsWith('update traces')) {
+            const setMatch = sqlNorm.match(/set\s+(.+?)\s+where\s+(.+)$/i);
+            if (!setMatch) return { changes: 0 };
+            const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
+            const { filter } = parseWhere(setMatch[2], params, setParamCount);
+
+            let changes = 0;
+            for (const row of dbData.traces) {
+              if (filter(row)) {
+                for (const upd of updates) {
+                  if (upd.type === 'param') row[upd.column] = params[upd.paramIndex];
+                  else if (upd.type === 'literal') row[upd.column] = upd.value;
+                  else if (upd.type === 'increment') row[upd.column] = (row[upd.column] || 0) + upd.delta;
+                }
+                changes++;
+              }
+            }
+            if (changes > 0) saveDb();
+            return { changes };
+          }
+
+          // --- PHÂN HỆ NÂNG CẤP: UPDATE TRACE_SPANS ---
+          if (sqlLower.startsWith('update trace_spans')) {
+            const setMatch = sqlNorm.match(/set\s+(.+?)\s+where\s+(.+)$/i);
+            if (!setMatch) return { changes: 0 };
+            const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
+            const { filter } = parseWhere(setMatch[2], params, setParamCount);
+
+            let changes = 0;
+            for (const row of dbData.trace_spans) {
               if (filter(row)) {
                 for (const upd of updates) {
                   if (upd.type === 'param') row[upd.column] = params[upd.paramIndex];
