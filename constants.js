@@ -35,19 +35,20 @@ export const SKILL_CATEGORIES = {
 // Skill groups mapping
 // Cập nhật phần SKILL_GROUPS trong ridge_server/constants.js
 
+// ridge_server/constants.js
+
 export const SKILL_GROUPS = {
     [SKILL_CATEGORIES.CHAT]: [
         'read_file',
         'read_multiple_files',
         'write_file',
-        // 'read_image_asset',
         'read_file_lines',
         'list_directory',
         'execute_terminal_command',
         'get_os_context',
         'memorize_rule',
         'find_files',
-        'find_content', // Đã đăng ký
+        'find_content',
         'google_search',
         'google_search_and_summarize',
         'parallel_web_summarizer',
@@ -55,14 +56,14 @@ export const SKILL_GROUPS = {
         'ask_questions_if_underspecified',
         'replace_content_safe',
         'replace_multiple_files_safe',
-        'change_active_workspace'
+        'change_active_workspace',
+        'debug_desktop_app' // Thêm kỹ năng
     ],
     [SKILL_CATEGORIES.CODE]: [
         'read_file',
         'read_multiple_files',
         'write_file',
         'replace_content_safe',
-        // 'read_image_asset',
         'read_file_lines',
         'list_directory',
         'execute_terminal_command',
@@ -74,14 +75,15 @@ export const SKILL_GROUPS = {
         'load_harness_template',
         'replace_multiple_files_safe',
         'find_files',
-        'find_content', // Đã đăng ký
+        'find_content',
         'synthesize_skill',
         'google_search',
         'google_search_and_summarize',
         'parallel_web_summarizer',
         'capture_system_screenshot',
         'ask_questions_if_underspecified',
-        'change_active_workspace'
+        'change_active_workspace',
+        'debug_desktop_app' // Thêm kỹ năng
     ],
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
@@ -92,9 +94,8 @@ export const SKILL_GROUPS = {
         'read_file',
         'replace_content_safe',
         'read_file_lines',
-        // 'read_image_asset',
         'find_files',
-        'find_content', // Đã đăng ký
+        'find_content',
         'list_directory',
         'capture_system_screenshot',
         'execute_terminal_command',
@@ -103,7 +104,8 @@ export const SKILL_GROUPS = {
         'google_search',
         'google_search_and_summarize',
         'ask_questions_if_underspecified',
-        'change_active_workspace'
+        'change_active_workspace',
+        'debug_desktop_app' // Thêm kỹ năng
     ],
     [SKILL_CATEGORIES.COMPLEX]: null
 };

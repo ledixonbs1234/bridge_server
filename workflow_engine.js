@@ -807,7 +807,7 @@ Thư mục dự án đích: ${workspace}
                 stage.status = 'FAILED';
                 this.updatePipelineStatus(pipeline, 'FAILED');
                 if (this.currentTraceId) {
-                    tracer.completeTrace(this.currentTraceId, 'failed');
+                    tracer.completeTrace(this.currentTraceId, 'failed', { error: `Stage "${stage.name}" has 0 steps.` });
                 }
                 await this.triggerReflection(pipeline, 'FAILED', new Error(`Stage "${stage.name}" has 0 steps.`));
                 await this.sendTelegramPipelineFailure(pipeline, `Giai đoạn "${stage.name}" không có tác vụ thực thi.`);
@@ -886,7 +886,9 @@ Thư mục dự án đích: ${workspace}
         }
 
         this.updatePipelineStatus(pipeline, 'DONE');
-        if (this.currentTraceId) tracer.completeTrace(this.currentTraceId, 'completed');
+        if (this.currentTraceId) {
+            tracer.completeTrace(this.currentTraceId, 'completed', { response: "Pipeline đã hoàn thành và được xác thực tự động." });
+        }
         await this.triggerReflection(pipeline, 'SUCCESS');
 
         try {

@@ -26,13 +26,16 @@ function createTrace(name, pipelineId = null) {
  * @param {string} traceId
  * @param {string} status - 'completed' | 'failed'
  */
-function completeTrace(traceId, status = 'completed') {
+// filepath: bridge_server/tracer.js
+// Tìm đến hàm completeTrace và thay thế bằng nội dung sau:
+function completeTrace(traceId, status = 'completed', output = null) {
     const trace = db.prepare(`SELECT created_at FROM traces WHERE id = ?`).get(traceId);
     if (!trace) return;
     const now = new Date().toISOString();
     const duration = new Date(now) - new Date(trace.created_at);
-    db.prepare(`UPDATE traces SET status = ?, completed_at = ?, total_duration_ms = ? WHERE id = ?`)
-        .run(status, now, duration, traceId);
+    const outputStr = output ? JSON.stringify(output) : null;
+    db.prepare(`UPDATE traces SET status = ?, completed_at = ?, total_duration_ms = ?, output = ? WHERE id = ?`)
+        .run(status, now, duration, outputStr, traceId);
 }
 
 /**

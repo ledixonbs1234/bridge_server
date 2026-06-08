@@ -107,7 +107,7 @@ function performBoundedReplacement(originalContent, targetContent, replacementCo
         bottomAnchor = parts[1];
     }
 
-    const topLines = topAnchor.split('\n').filter(l => l.trim() !== '');
+    const topLines = topAnchor.split('\n');
     const bottomLines = bottomAnchor ? bottomAnchor.split('\n').filter(l => l.trim() !== '') : [];
 
     const searchStart = Math.max(1, startLine - 20);

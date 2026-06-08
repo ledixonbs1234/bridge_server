@@ -363,7 +363,10 @@ export async function executeAgentTurn({
         if (llmSpanId) {
             tracer.endSpan(llmSpanId, 'completed', { response: result });
         }
-        if (traceId) tracer.completeTrace(traceId, 'completed');
+        if (traceId) {
+            const cleanResult = typeof result === 'string' ? result.replace(/<think>[\s\S]*?<\/think>/g, '').trim() : result;
+            tracer.completeTrace(traceId, 'completed', { response: cleanResult });
+        }
 
         // Xử lý kịch bản handover cho WorkflowEngine
         if (result === "__HANDOVER_TO_ENGINE__" || (typeof result === 'string' && result.includes("__HANDOVER_TO_ENGINE__"))) {
@@ -405,7 +408,7 @@ export async function executeAgentTurn({
         return { type: 'text', response: cleanResponse, history: currentHistory, sessionFile: savedFile };
 
     } catch (err) {
-        if (traceId) tracer.completeTrace(traceId, 'failed');
+        if (traceId) tracer.completeTrace(traceId, 'failed', { error: err.message });
         throw err;
     } finally {
         global.askPermission = originalAskPermission;
