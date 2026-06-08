@@ -109,7 +109,8 @@ export async function executeAgentTurn({
     activeProvider = globalThis.activeProvider,
     image = null,
     images = [], // NÂNG CẤP: Thêm mảng hình ảnh
-    headless = true
+    headless = true,
+    isSimpleChat = false
 }) {
     const resolvedProvider = activeProvider || globalThis.activeProvider;
     const traceId = tracer.createTrace(message.substring(0, 80));
@@ -254,9 +255,11 @@ export async function executeAgentTurn({
             enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
         }
 
-        const systemPrompt = getCompiledSystemPrompt();
+        const systemPrompt = isSimpleChat
+            ? "Bạn là trợ lý ảo AI Desktop Assistant thân thiện, hữu ích và chuyên nghiệp. Hãy trả lời câu hỏi của người dùng một cách trực tiếp, ngắn gọn và rành mạch bằng tiếng Việt dựa trên hình ảnh được cung cấp (nếu có). Bạn không có quyền sử dụng bất kỳ công cụ (tools) nào, hãy thảo luận và trả lời trực tiếp dưới dạng văn bản thông thường, tuyệt đối không định dạng đầu ra thành cấu trúc JSON hay mã gọi công cụ (tool call)."
+            : getCompiledSystemPrompt();
         const apiIntent = classifyIntent(message);
-        const filteredSkills = filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
+        const filteredSkills = isSimpleChat ? {} : filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
         const runMode = (apiIntent === 'complex' || apiIntent === 'research') ? 'thinking' : 'fast';
         const llmSpanId = traceId ? tracer.startSpan(traceId, `LLM Chat (${runMode.toUpperCase()})`, 'llm', null, {
             system_prompt: systemPrompt,

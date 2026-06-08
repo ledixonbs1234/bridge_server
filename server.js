@@ -47,7 +47,71 @@ app.get('/health', async (req, res) => {
     };
     res.json(health);
 });
+// =================================================================
+// 🖥️ COMPATIBILITY ENDPOINT FOR WPF DESKTOP ASSISTANT
+// =================================================================
+app.post('/ask', async (req, res) => {
+    const { question, imageBase64 } = req.body;
+    if (!question) {
+        return res.status(400).json({ error: 'Thiếu tham số question' });
+    }
 
+    // Chỉ thị xóa bối cảnh từ Desktop App khi bị ẩn đi
+    if (question.trim() === '/clear' || question.trim() === '/new') {
+        globalThis.activeWebSessionFile = null;
+        globalThis.activeWebHistory = [];
+        if (typeof globalThis.activeProvider?.resetSession === 'function') {
+            globalThis.activeProvider.resetSession();
+        }
+        globalThis.persistentGoal = null;
+        return res.json({
+            answer: "🧹 Đã xóa sạch bộ nhớ phiên cũ!",
+            model: globalThis.activeProvider?.model || "unknown"
+        });
+    }
+
+    // Tự động thêm tiền tố Data URI nếu ảnh truyền lên là chuỗi Base64 thô
+    let formattedImage = imageBase64;
+    if (formattedImage && !formattedImage.startsWith('data:')) {
+        formattedImage = `data:image/png;base64,${formattedImage}`;
+    }
+
+    try {
+        const { executeAgentTurn } = await import('./services/agentService.js');
+
+        if (!globalThis.activeWebSessionFile) {
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+            globalThis.activeWebSessionFile = `session_${timestamp}.jsonl`;
+            globalThis.activeWebHistory = [];
+        }
+
+        const result = await executeAgentTurn({
+            message: question,
+            history: globalThis.activeWebHistory || [],
+            sessionFile: globalThis.activeWebSessionFile,
+            useReformulate: false,
+            image: formattedImage,
+            headless: true,
+            isSimpleChat: true // <--- KÍCH HOẠT CHẾ ĐỘ CHAT ĐƠN GIẢN CHO DESKTOP APP
+        });
+
+        globalThis.activeWebHistory = result.history;
+        globalThis.activeWebSessionFile = result.sessionFile;
+
+        const activeModel = globalThis.activeProvider?.model || 'unknown';
+        const answerText = result.type === 'handover'
+            ? "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động."
+            : (result.response || "Không có phản hồi từ Agent.");
+
+        res.json({
+            answer: answerText,
+            model: activeModel
+        });
+    } catch (err) {
+        console.error('[Compatibility Ask API] Lỗi xử lý:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
 // Skills endpoint
 app.get('/api/skills', (req, res) => {
     res.json({ skills: Object.keys(SKILL_REGISTRY) });
