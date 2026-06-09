@@ -488,19 +488,33 @@ export default {
     },
 
     "replace_content_safe": {
-        description: "[SAFE MODE] Tìm kiếm và thay thế một đoạn mã nguồn trong khoảng dòng định vị chỉ định.",
+        description: "[SAFE MODE] Tìm kiếm và thay thế một hoặc nhiều đoạn mã nguồn trong khoảng dòng định vị chỉ định trên cùng một file.",
         parameters: {
             type: "object",
             properties: {
                 file_path: { type: "string", description: "Đường dẫn tuyệt đối hoặc tương đối đến file cần sửa đổi." },
-                target_content: { type: "string", description: "Mã nguồn cũ cần thay thế. BẮT BUỘC: Viết dưới dạng neo thu gọn gồm 2-3 dòng đầu và 2-3 dòng cuối, phân tách bởi dòng chứa '...'." },
-                replacement_content: { type: "string", description: "Đoạn mã nguồn MỚI sẽ thay thế vào." },
-                start_line: { type: "number", description: "Dòng bắt đầu của đoạn mã cũ trong file (phục vụ định vị và thay thế dòng)." },
-                end_line: { type: "number", description: "Dòng kết thúc của đoạn mã cũ trong file." },
+                replacements: {
+                    type: "array",
+                    description: "Danh sách các đoạn cần thay thế trên file này. Nếu truyền tham số này, các tham số target_content, replacement_content, start_line, end_line đơn lẻ bên ngoài sẽ bị bỏ qua.",
+                    items: {
+                        type: "object",
+                        properties: {
+                            target_content: { type: "string", description: "Mã nguồn cũ cần thay thế. BẮT BUỘC: Viết dưới dạng neo thu gọn gồm 2-3 dòng đầu và 2-3 dòng cuối, phân tách bởi dòng chứa '...'." },
+                            replacement_content: { type: "string", description: "Đoạn mã nguồn mới sẽ thay thế vào." },
+                            start_line: { type: "number", description: "Dòng bắt đầu của đoạn mã cũ trong file (phục vụ định vị)." },
+                            end_line: { type: "number", description: "Dòng kết thúc của đoạn mã cũ trong file." }
+                        },
+                        required: ["target_content", "replacement_content", "start_line", "end_line"]
+                    }
+                },
+                target_content: { type: "string", description: "Mã nguồn cũ cần thay thế (nếu chỉ sửa đổi một đoạn đơn lẻ)." },
+                replacement_content: { type: "string", description: "Đoạn mã nguồn mới thay thế (nếu chỉ sửa đổi một đoạn đơn lẻ)." },
+                start_line: { type: "number", description: "Dòng bắt đầu của đoạn mã cũ (nếu chỉ sửa đổi một đoạn đơn lẻ)." },
+                end_line: { type: "number", description: "Dòng kết thúc của đoạn mã cũ (nếu chỉ sửa đổi một đoạn đơn lẻ)." },
                 task_description: { type: "string", description: "Mô tả ngắn gọn tác vụ bạn đang thực hiện." },
                 skip_logic_review: { type: "boolean", description: "Bỏ qua bước AI review logic (mặc định: true)." }
             },
-            required: ["file_path", "target_content", "replacement_content", "start_line", "end_line"]
+            required: ["file_path"]
         },
         handler: async (args) => {
             const filePath = resolveUserPath(args.file_path);
@@ -512,38 +526,65 @@ export default {
             activeShadowRegistry.register(filePath);
             penultimateShadowRegistry.register(filePath);
 
-            const currentReplaceString = args.replacement_content;
-            if (currentReplaceString === undefined) {
-                throw new Error("Thiếu tham số bắt buộc 'replacement_content'.");
+            // Gom cụm tham số sửa đổi đơn lẻ hoặc danh sách nhiều đoạn sửa đổi
+            let replacements = args.replacements;
+            if (!replacements || !Array.isArray(replacements)) {
+                if (args.replacement_content === undefined) {
+                    throw new Error("Thiếu tham số 'replacement_content' hoặc danh sách 'replacements'.");
+                }
+                replacements = [{
+                    target_content: args.target_content,
+                    replacement_content: args.replacement_content,
+                    start_line: args.start_line,
+                    end_line: args.end_line
+                }];
             }
 
+            const isSingleEdit = replacements.length === 1;
             const MAX_RETRIES = 2;
             let attempt = 0;
-            let finalReplaceString = currentReplaceString;
 
             while (attempt <= MAX_RETRIES) {
                 attempt++;
-                console.log(chalk.cyan(`\n[Safe-Replace] 🔄 Lần thử ${attempt}/${MAX_RETRIES + 1}`));
+                console.log(chalk.cyan(`\n[Safe-Replace] 🔄 Lần thử ${attempt}/${MAX_RETRIES + 1} cho file ${aiSafePath(filePath)}`));
 
                 const shadow = createShadow(filePath);
                 const originalContent = fs.readFileSync(filePath, 'utf8');
                 const originalLines = originalContent.split(/\r?\n/);
 
-                const contextStart = Math.max(0, args.start_line - 21);
-                const contextEnd = Math.min(originalLines.length, args.end_line + 20);
-                const originalContext = originalLines
-                    .slice(contextStart, contextEnd)
-                    .map((l, i) => `${contextStart + i + 1} | ${l}`)
-                    .join('\n');
+                // Trích xuất ngữ cảnh gốc của các vùng sửa đổi để phục vụ việc kiểm tra logic
+                const originalContexts = [];
+                for (const rep of replacements) {
+                    const contextStart = Math.max(0, rep.start_line - 21);
+                    const contextEnd = Math.min(originalLines.length, rep.end_line + 20);
+                    const originalContext = originalLines
+                        .slice(contextStart, contextEnd)
+                        .map((l, i) => `${contextStart + i + 1} | ${l}`)
+                        .join('\n');
+                    originalContexts.push(originalContext);
+                }
 
-                let newContent;
+                // Sắp xếp các đoạn sửa đổi theo thứ tự dòng từ dưới lên trên (start_line giảm dần)
+                // để bảo toàn tính đúng đắn của số dòng cho các đoạn ở phía trên sau mỗi lần thay thế
+                let sortedReplacements = [...replacements].sort((a, b) => b.start_line - a.start_line);
+
+                let newContent = originalContent;
                 try {
-                    newContent = performBoundedReplacement(originalContent, args.target_content, finalReplaceString, args.start_line, args.end_line);
+                    for (const rep of sortedReplacements) {
+                        newContent = performBoundedReplacement(
+                            newContent,
+                            rep.target_content,
+                            rep.replacement_content,
+                            rep.start_line,
+                            rep.end_line
+                        );
+                    }
                 } catch (err) {
                     shadow.cleanup();
                     throw err;
                 }
 
+                // Thực hiện xác thực cú pháp tĩnh trên file mới được tạo ra
                 const syntaxResult = await validateSyntax(filePath, newContent);
                 if (!syntaxResult.valid) {
                     console.log(chalk.red(`[Safe-Replace] ❌ Syntax Error (${syntaxResult.language}):`));
@@ -552,10 +593,11 @@ export default {
                     shadow.restore();
                     shadow.cleanup();
 
-                    if (attempt <= MAX_RETRIES) {
+                    // Tự sửa cú pháp thông qua AI nếu đây là sửa đổi đơn lẻ
+                    if (attempt <= MAX_RETRIES && isSingleEdit) {
                         console.log(chalk.yellow(`[Safe-Replace] 🤖 Đang nhờ AI tự sửa lỗi cú pháp...`));
-                        finalReplaceString = await autoFixSyntaxError({
-                            originalCode: finalReplaceString,
+                        replacements[0].replacement_content = await autoFixSyntaxError({
+                            originalCode: replacements[0].replacement_content,
                             syntaxError: syntaxResult.error,
                             language: syntaxResult.language,
                             filePath
@@ -572,19 +614,82 @@ export default {
                 }
                 console.log(chalk.green(`[Safe-Replace] ✅ Cú pháp OK (${syntaxResult.language})`));
 
+                // Thực hiện đánh giá logic thông qua Subagent nếu skip_logic_review là false
+                if (!args.skip_logic_review && globalThis.activeProvider) {
+                    const review = await reviewLogicChange({
+                        provider: globalThis.activeProvider,
+                        filePath,
+                        originalContext: originalContexts.join('\n\n---\n\n'),
+                        newCode: replacements.map(r => r.replacement_content).join('\n\n---\n\n'),
+                        fullNewContent: newContent,
+                        taskDescription: args.task_description || ''
+                    });
+
+                    if (review.verdict === 'FAIL') {
+                        console.log(chalk.red(`[Safe-Replace] ❌ Lỗi logic phát hiện trong file ${aiSafePath(filePath)}:`));
+                        review.issues.forEach(issue => console.log(chalk.red(`   • ${issue}`)));
+
+                        shadow.restore();
+                        shadow.cleanup();
+
+                        if (attempt <= MAX_RETRIES && isSingleEdit && review.suggestion) {
+                            console.log(chalk.yellow(`[Safe-Replace] 🤖 Đang sửa lỗi logic theo gợi ý...`));
+                            replacements[0].replacement_content = await applyReviewSuggestion({
+                                originalCode: replacements[0].replacement_content,
+                                issues: review.issues,
+                                suggestion: review.suggestion,
+                                filePath
+                            });
+                            continue;
+                        }
+
+                        return {
+                            status: "error",
+                            error_message: `Logic Error: ${review.issues.join(' | ')}`,
+                            file: aiSafePath(filePath),
+                            rolled_back: true
+                        };
+                    }
+
+                    if (review.verdict === 'WARN') {
+                        console.log(chalk.yellow(`[Safe-Replace] ⚠️ Cảnh báo logic (vẫn tiếp tục):`));
+                        review.issues.forEach(issue => console.log(chalk.yellow(`   • ${issue}`)));
+                    } else {
+                        console.log(chalk.green(`[Safe-Replace] ✅ Logic Review PASS`));
+                    }
+                }
+
+                // Gửi yêu cầu phê duyệt sửa đổi
                 if (!global.isAutoApproveAll) {
-                    presentApprovalRequest(
-                        '⚠️ YÊU CẦU SỬA CODE',
-                        {
-                            file_path: args.file_path,
-                            range: `Dòng ${args.start_line} đến ${args.end_line} (Biên tìm kiếm ±20 dòng)`,
-                            functionality: `Chỉnh sửa nội dung tệp tin: ${args.task_description || 'Không có mô tả'}`
-                        },
-                        { content: finalReplaceString }
-                    );
-                    const answer = await global.askPermission(`👉 Cho phép thay thế vùng code này? [y/a/n] : `);
+                    if (isSingleEdit) {
+                        presentApprovalRequest(
+                            '⚠️ YÊU CẦU SỬA CODE',
+                            {
+                                file_path: args.file_path,
+                                range: `Dòng ${args.start_line} đến ${args.end_line} (Biên tìm kiếm ±20 dòng)`,
+                                functionality: `Chỉnh sửa nội dung tệp tin: ${args.task_description || 'Không có mô tả'}`
+                            },
+                            { content: replacements[0].replacement_content }
+                        );
+                    } else {
+                        presentApprovalRequest(
+                            '⚠️ YÊU CẦU SỬA NHIỀU ĐOẠN TRONG FILE',
+                            {
+                                file_path: args.file_path,
+                                range: replacements.map(r => `Dòng ${r.start_line}-${r.end_line}`).join(', '),
+                                functionality: `Chỉnh sửa ${replacements.length} đoạn trong tệp tin: ${args.task_description || 'Không có mô tả'}`
+                            },
+                            { content: replacements.map(r => `=== Vùng ${r.start_line}-${r.end_line} ===\n${r.replacement_content}`).join('\n\n') }
+                        );
+                    }
+
+                    const answer = await global.askPermission(`👉 Cho phép áp dụng sửa đổi này? [y/a/n] : `);
                     if (answer === 'a') global.isAutoApproveAll = true;
-                    else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
+                    else if (answer !== 'y') {
+                        shadow.restore();
+                        shadow.cleanup();
+                        throw new Error("PERMISSION_DENIED");
+                    }
                 }
 
                 fs.writeFileSync(filePath, newContent, 'utf8');
@@ -596,7 +701,7 @@ export default {
 
                 return {
                     status: "success",
-                    message: `Đã tìm kiếm và thay thế an toàn trong khoảng dòng ${args.start_line} đến ${args.end_line} (sau ${attempt} lần thử)`,
+                    message: `Đã thay thế an toàn ${replacements.length} đoạn trong file (sau ${attempt} lần thử)`,
                     file: aiSafePath(filePath),
                     absolute_path: filePath.replace(/\\/g, '/'),
                     directory: path.dirname(filePath).replace(/\\/g, '/'),
@@ -614,10 +719,9 @@ export default {
                 };
             }
 
-            return { status: "error", error_message: "Đã thử quá số lần cho phép" };
+            return { status: "error", error_message: "Đã thử quá số lần cho phép hoặc gặp sự cố khi lưu file." };
         }
     },
-
     "write_file": {
         description: "Tạo file mới hoàn toàn hoặc ghi đè TOÀN BỘ nội dung vào file đã có với cơ chế lưu trữ điểm khôi phục Shadow File. Hỗ trợ tự động tạo thư mục cha. Chấp nhận chuỗi thường (content) hoặc chuỗi mã hóa base64 (content_base64) để tránh lỗi unicode/JSON escape.",
         parameters: {

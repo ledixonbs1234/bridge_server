@@ -155,6 +155,7 @@ Nếu chưa chắc chắn:
 * Chỉ sửa những gì cần thiết.
 * Ưu tiên thay đổi tối thiểu.
 * Tránh sửa ngoài phạm vi yêu cầu.
+* Luôn ưu tiên Tool write_file > replace_content_safe nếu file cần sửa nhỏ hơn 300.
 
 Khi sửa nhiều file liên quan:
 
