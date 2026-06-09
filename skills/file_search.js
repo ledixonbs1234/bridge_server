@@ -121,7 +121,6 @@ function searchContentRecursive(dir, query, extensions = null, maxFiles = 10) {
 
                 try {
                     const stat = fs.statSync(fullPath);
-                    // Giới hạn tệp tin dưới 5MB để tránh quá tải RAM/CPU khi xử lý
                     if (stat.size > 5 * 1024 * 1024) continue;
 
                     const content = fs.readFileSync(fullPath, 'utf8');
@@ -144,7 +143,7 @@ function searchContentRecursive(dir, query, extensions = null, maxFiles = 10) {
                                     snippet
                                 });
 
-                                if (fileMatches.length >= 3) break; // Giới hạn tối đa 3 cụm kết quả trên một tệp để tránh tràn ngữ cảnh
+                                if (fileMatches.length >= 3) break;
                             }
                         }
 
@@ -156,7 +155,7 @@ function searchContentRecursive(dir, query, extensions = null, maxFiles = 10) {
                         }
                     }
                 } catch (err) {
-                    // Thầm lặng bỏ qua lỗi đọc tệp
+                    // Bỏ qua lỗi đọc
                 }
             }
         }
@@ -295,7 +294,7 @@ export default {
     },
 
     "find_files": {
-        description: "[ƯU TIÊN DÙNG ĐỂ TÌM FILE] Tìm kiếm tệp tin theo từ khóa tên file (case-insensitive) một cách đệ quy. Kết quả trả về dưới dạng danh sách Markdown rút gọn để tối ưu token.",
+        description: "[ƯU TIÊN DÙNG ĐỂ TÌM FILE] Tìm kiếm tệp tin theo từ khóa tên file (case-insensitive) một cách đệ quy. Nếu tìm thấy duy nhất 1 file khớp, hệ thống sẽ tự động đọc luôn nội dung của file đó.",
         parameters: {
             type: "object",
             properties: {
@@ -314,6 +313,25 @@ export default {
             }
 
             const matchedFiles = searchFilesRecursive(basePath, query);
+
+            // NẾU TÌM THẤY DUY NHẤT 1 FILE: Tự động đọc và trả về nội dung trực tiếp
+            if (matchedFiles.length === 1) {
+                const filePath = matchedFiles[0];
+                try {
+                    const stat = fs.statSync(filePath);
+                    if (stat.isFile()) {
+                        const content = fs.readFileSync(filePath, 'utf8');
+                        const lines = content.split(/\r?\n/);
+                        const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
+
+                        let md = `### 🔍 [TÌM THẤY DUY NHẤT 1 KHỚP - ĐỌC TRỰC TIẾP] File: \`${aiSafePath(filePath)}\` *(Tổng số dòng: ${lines.length})*\n`;
+                        md += `\`\`\`text\n${numberedLines}\n\`\`\``;
+                        return md;
+                    }
+                } catch (readErr) {
+                    // Nếu gặp sự cố khi đọc (tệp nhị phân, phân quyền...), fallback về việc hiển thị danh sách như bình thường
+                }
+            }
 
             let markdownResult = `### 🔍 Kết quả tìm kiếm cho từ khóa: \`${query}\`\n`;
             markdownResult += `- **Thư mục quét**: \`${aiSafePath(basePath)}\`\n`;

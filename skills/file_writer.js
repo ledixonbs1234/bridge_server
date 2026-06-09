@@ -77,142 +77,118 @@ async function applyReviewSuggestion({ originalCode, issues, suggestion, filePat
     }
 }
 
-function performBoundedReplacement(originalContent, targetContent, replacementContent, startLine, endLine) {
-    const normalizedContent = originalContent.replace(/\r\n/g, '\n');
-    const normalizedReplacement = replacementContent.replace(/\r\n/g, '\n');
-    const lines = normalizedContent.split('\n');
+/**
+ * Tìm dòng khớp độc nhất bằng cách mở rộng tiền tố ký tự tăng dần (Character-by-character)
+ */
+function findFuzzyLineMatch(targetLine, searchList) {
+    const norm = (s) => s.replace(/[ \t]+/g, ' ').trim();
+    const targetNorm = norm(targetLine);
+    if (!targetNorm) return -1;
 
-    if (!targetContent || targetContent.trim() === '') {
-        if (startLine < 1 || startLine > lines.length || endLine < startLine || endLine > lines.length) {
-            throw new Error(`[LINE_OUT_BOUNDS] Khoảng dòng [${startLine}-${endLine}] vượt quá giới hạn file (1-${lines.length}).`);
-        }
-        const prefix = lines.slice(0, startLine - 1).join('\n');
-        const suffix = lines.slice(endLine).join('\n');
-        const finalParts = [];
-        if (startLine > 1) finalParts.push(prefix);
-        finalParts.push(normalizedReplacement);
-        if (endLine < lines.length) finalParts.push(suffix);
-        return finalParts.join('\n');
-    }
+    let lastSuccessfulIndex = -1;
+    let lastMatchesCount = 0;
 
-    const normalizedTarget = targetContent.replace(/\r\n/g, '\n');
-    const gapRegex = /\n\s*(?:\/\/\/|\/\/|#|;\s*;|\/\*|--)?\s*\.\.\.\s*(?:\*\/)?\s*(?:\n|$)/;
-    const parts = normalizedTarget.split(gapRegex);
+    for (let len = 1; len <= targetNorm.length; len++) {
+        const prefix = targetNorm.substring(0, len);
+        const matches = [];
 
-    let topAnchor = normalizedTarget;
-    let bottomAnchor = null;
-
-    if (parts.length === 2) {
-        topAnchor = parts[0];
-        bottomAnchor = parts[1];
-    }
-
-    const topLines = topAnchor.split('\n');
-    const bottomLines = bottomAnchor ? bottomAnchor.split('\n').filter(l => l.trim() !== '') : [];
-
-    const searchStart = Math.max(1, startLine - 20);
-    const searchEnd = Math.min(lines.length, endLine + 20);
-
-    let matchedLineIndex = -1;
-    let matchCount = 0;
-
-    const cleanString = (str) => str.replace(/[ \t]+/g, ' ').trim();
-    const topFirstLineClean = cleanString(topLines[0]);
-
-    for (let i = searchStart - 1; i < searchEnd; i++) {
-        if (cleanString(lines[i]).includes(topFirstLineClean)) {
-            let allMatched = true;
-            for (let j = 1; j < topLines.length; j++) {
-                if (i + j >= lines.length || !cleanString(lines[i + j]).includes(cleanString(topLines[j]))) {
-                    allMatched = false;
-                    break;
-                }
-            }
-            if (allMatched) {
-                matchedLineIndex = i;
-                matchCount++;
-            }
-        }
-    }
-
-    if (matchCount === 0) {
-        throw new Error(`[TARGET_NOT_FOUND] Không tìm thấy dòng neo đầu tiên "${topLines[0]}" trong phạm vi dòng từ ${searchStart} đến ${searchEnd}.`);
-    }
-
-    if (matchCount > 1) {
-        throw new Error(`[AMBIGUOUS_REPLACEMENT] Tìm thấy nhiều hơn 1 vị trí khớp cho dòng neo đầu tiên "${topLines[0]}" trong phạm vi [${searchStart}-${searchEnd}].`);
-    }
-
-    const matchedLineNum = matchedLineIndex + 1;
-    const shift = matchedLineNum - startLine;
-
-    const actualStartLine = startLine + shift;
-
-    // Tự động tính toán dòng kết thúc
-    let actualEndLine = endLine + shift;
-
-    if (bottomLines.length > 0) {
-        const bottomFirstLineClean = cleanString(bottomLines[0]);
-        let bottomMatchedLineIndex = -1;
-        let bottomMatchCount = 0;
-
-        for (let i = actualStartLine + topLines.length - 1; i < searchEnd; i++) {
-            if (i < lines.length && cleanString(lines[i]).includes(bottomFirstLineClean)) {
-                let allMatched = true;
-                for (let k = 1; k < bottomLines.length; k++) {
-                    if (i + k >= lines.length || !cleanString(lines[i + k]).includes(cleanString(bottomLines[k]))) {
-                        allMatched = false;
-                        break;
-                    }
-                }
-                if (allMatched) {
-                    bottomMatchedLineIndex = i;
-                    bottomMatchCount++;
-                }
+        for (let i = 0; i < searchList.length; i++) {
+            const candidateNorm = norm(searchList[i].line);
+            if (candidateNorm.startsWith(prefix)) {
+                matches.push(i);
             }
         }
 
-        if (bottomMatchCount === 1) {
-            actualEndLine = bottomMatchedLineIndex + bottomLines.length;
+        if (matches.length === 1) {
+            lastSuccessfulIndex = matches[0];
+            lastMatchesCount = 1;
+        } else if (matches.length === 0) {
+            // Dừng lại khi không còn kết quả nào khớp, lấy kết quả độc nhất trước đó
+            break;
         } else {
-            const bottomStartLineIdx = actualEndLine - bottomLines.length;
-            for (let k = 0; k < bottomLines.length; k++) {
-                const targetLineIdx = bottomStartLineIdx + k;
-                if (targetLineIdx >= lines.length || !cleanString(lines[targetLineIdx]).includes(cleanString(bottomLines[k]))) {
-                    throw new Error(`[VALIDATION_FAILED] Xác thực Neo cuối thất bại tại dòng ${targetLineIdx + 1}.`);
-                }
-            }
+            lastMatchesCount = matches.length;
+            lastSuccessfulIndex = -1; // Chưa độc nhất
         }
+    }
+
+    if (lastMatchesCount === 1) {
+        return lastSuccessfulIndex;
+    }
+    return -1;
+}
+
+function performBoundedReplacement(originalContent, replacementContent, startLine, endLine) {
+    const fileContentNormalized = originalContent.replace(/\r\n/g, '\n');
+    const fileLines = fileContentNormalized.split('\n');
+
+    const replacementContentNormalized = replacementContent.replace(/\r\n/g, '\n');
+    const replacementLines = replacementContentNormalized.split('\n');
+
+    // BƯỚC 1: Kiểm tra chính xác phạm vi dòng start_line và end_line trước
+    const exactStartSearchIdx = Math.max(0, startLine - 1);
+    const exactEndSearchIdx = Math.min(fileLines.length, endLine);
+    const exactCodeRounded = fileLines.slice(exactStartSearchIdx, exactEndSearchIdx).map((line, i) => ({
+        line: line,
+        originalIndex: exactStartSearchIdx + i
+    }));
+
+    let matchedStartIdx = findFuzzyLineMatch(replacementLines[0], exactCodeRounded);
+    let matchedEndIdx = -1;
+
+    if (matchedStartIdx !== -1) {
+        const searchListForEnd = exactCodeRounded.slice(matchedStartIdx);
+        matchedEndIdx = findFuzzyLineMatch(replacementLines[replacementLines.length - 1], searchListForEnd);
+        if (matchedEndIdx !== -1) {
+            matchedEndIdx = matchedStartIdx + matchedEndIdx;
+        }
+    }
+
+    let finalStartOriginalIdx = -1;
+    let finalEndOriginalIdx = -1;
+
+    if (matchedStartIdx !== -1 && matchedEndIdx !== -1) {
+        // Khớp thành công ngay tại dòng gốc
+        finalStartOriginalIdx = exactCodeRounded[matchedStartIdx].originalIndex;
+        finalEndOriginalIdx = exactCodeRounded[matchedEndIdx].originalIndex + 1;
     } else {
-        actualEndLine = actualStartLine + topLines.length - 1;
-    }
+        // BƯỚC 2: Nếu không khớp chính xác, mở rộng phạm vi kiểm tra đoạn (-10 dòng đầu, +10 dòng cuối)
+        const expandedStartSearchIdx = Math.max(0, startLine - 1 - 10);
+        const expandedEndSearchIdx = Math.min(fileLines.length, endLine + 10);
+        const expandedCodeRounded = fileLines.slice(expandedStartSearchIdx, expandedEndSearchIdx).map((line, i) => ({
+            line: line,
+            originalIndex: expandedStartSearchIdx + i
+        }));
 
-    // ĐỒNG BỘ NỘI DUNG KHOẢNG TRỐNG (GAP PRESERVATION)
-    let finalReplacement = normalizedReplacement;
-    const replacementParts = normalizedReplacement.split(gapRegex);
+        matchedStartIdx = findFuzzyLineMatch(replacementLines[0], expandedCodeRounded);
+        matchedEndIdx = -1;
 
-    if (parts.length === 2 && replacementParts.length === 2) {
-        const gapStartIdx = actualStartLine + topLines.length - 1;
-        const gapEndIdx = actualEndLine - bottomLines.length;
+        if (matchedStartIdx !== -1) {
+            const searchListForEnd = expandedCodeRounded.slice(matchedStartIdx);
+            matchedEndIdx = findFuzzyLineMatch(replacementLines[replacementLines.length - 1], searchListForEnd);
+            if (matchedEndIdx !== -1) {
+                matchedEndIdx = matchedStartIdx + matchedEndIdx;
+            }
+        }
 
-        // Trích xuất các dòng gốc nằm giữa hai mốc neo
-        const originalGapLines = lines.slice(gapStartIdx, gapEndIdx);
-        const originalGapContent = originalGapLines.join('\n');
-
-        if (originalGapContent === '') {
-            finalReplacement = replacementParts[0] + '\n' + replacementParts[1];
-        } else {
-            finalReplacement = replacementParts[0] + '\n' + originalGapContent + '\n' + replacementParts[1];
+        if (matchedStartIdx !== -1 && matchedEndIdx !== -1) {
+            finalStartOriginalIdx = expandedCodeRounded[matchedStartIdx].originalIndex;
+            finalEndOriginalIdx = expandedCodeRounded[matchedEndIdx].originalIndex + 1;
         }
     }
 
-    const prefix = lines.slice(0, actualStartLine - 1).join('\n');
-    const suffix = lines.slice(actualEndLine).join('\n');
+    // Nếu cả hai bước kiểm tra đều thất bại, trả về lỗi chi tiết cho AI
+    if (finalStartOriginalIdx === -1 || finalEndOriginalIdx === -1) {
+        throw new Error(`[REPLACEMENT_MATCH_FAILED] Sửa đổi thất bại. Đoạn mã đầu tiên '${replacementLines[0].trim()}' hoặc đoạn mã cuối cùng '${replacementLines[replacementLines.length - 1].trim()}' không khớp độc nhất với dòng nào trong file (kể cả khi đã mở rộng phạm vi tìm kiếm ±10 dòng). Vui lòng kiểm tra lại chỉ số dòng start_line/end_line.`);
+    }
+
+    const prefix = fileLines.slice(0, finalStartOriginalIdx).join('\n');
+    const suffix = fileLines.slice(finalEndOriginalIdx).join('\n');
 
     const finalParts = [];
-    if (actualStartLine > 1) finalParts.push(prefix);
-    finalParts.push(finalReplacement);
-    if (actualEndLine < lines.length) finalParts.push(suffix);
+    if (finalStartOriginalIdx > 0) finalParts.push(prefix);
+    finalParts.push(replacementContentNormalized);
+    if (finalEndOriginalIdx < fileLines.length) finalParts.push(suffix);
+
     return finalParts.join('\n');
 }
 
@@ -298,12 +274,11 @@ export default {
                         type: "object",
                         properties: {
                             file_path: { type: "string", description: "Đường dẫn tuyệt đối hoặc tương đối đến file cần sửa đổi." },
-                            target_content: { type: "string", description: "Mã nguồn cũ cần thay thế. BẮT BUỘC: Viết dưới dạng neo thu gọn gồm 1-2 dòng đầu và 1-2 dòng cuối, phân tách bởi dòng chứa '...'." },
                             replacement_content: { type: "string", description: "Nội dung mã nguồn mới sẽ thay thế vào." },
                             start_line: { type: "number", description: "Dòng bắt đầu của vùng code cũ (để giới hạn phạm vi tìm kiếm)." },
                             end_line: { type: "number", description: "Dòng kết thúc của vùng code cũ." }
                         },
-                        required: ["file_path", "target_content", "replacement_content", "start_line", "end_line"]
+                        required: ["file_path", "replacement_content", "start_line", "end_line"]
                     }
                 },
                 task_description: { type: "string", description: "Mô tả ngắn gọn tác vụ tổng thể bạn đang thực hiện." },
@@ -359,7 +334,7 @@ export default {
 
                         let newContent;
                         try {
-                            newContent = performBoundedReplacement(originalContent, edit.target_content, finalReplaceString, edit.start_line, edit.end_line);
+                            newContent = performBoundedReplacement(originalContent, finalReplaceString, edit.start_line, edit.end_line);
                         } catch (err) {
                             throw new Error(`Lỗi so khớp thay thế trên file ${aiSafePath(edit.file_path)}: ${err.message}`);
                         }
@@ -495,19 +470,17 @@ export default {
                 file_path: { type: "string", description: "Đường dẫn tuyệt đối hoặc tương đối đến file cần sửa đổi." },
                 replacements: {
                     type: "array",
-                    description: "Danh sách các đoạn cần thay thế trên file này. Nếu truyền tham số này, các tham số target_content, replacement_content, start_line, end_line đơn lẻ bên ngoài sẽ bị bỏ qua.",
+                    description: "Danh sách các đoạn cần thay thế trên file này. Nếu truyền tham số này, các tham số replacement_content, start_line, end_line đơn lẻ bên ngoài sẽ bị bỏ qua.",
                     items: {
                         type: "object",
                         properties: {
-                            target_content: { type: "string", description: "Mã nguồn cũ cần thay thế. BẮT BUỘC: Viết dưới dạng neo thu gọn gồm 2-3 dòng đầu và 2-3 dòng cuối, phân tách bởi dòng chứa '...'." },
                             replacement_content: { type: "string", description: "Đoạn mã nguồn mới sẽ thay thế vào." },
                             start_line: { type: "number", description: "Dòng bắt đầu của đoạn mã cũ trong file (phục vụ định vị)." },
                             end_line: { type: "number", description: "Dòng kết thúc của đoạn mã cũ trong file." }
                         },
-                        required: ["target_content", "replacement_content", "start_line", "end_line"]
+                        required: ["replacement_content", "start_line", "end_line"]
                     }
                 },
-                target_content: { type: "string", description: "Mã nguồn cũ cần thay thế (nếu chỉ sửa đổi một đoạn đơn lẻ)." },
                 replacement_content: { type: "string", description: "Đoạn mã nguồn mới thay thế (nếu chỉ sửa đổi một đoạn đơn lẻ)." },
                 start_line: { type: "number", description: "Dòng bắt đầu của đoạn mã cũ (nếu chỉ sửa đổi một đoạn đơn lẻ)." },
                 end_line: { type: "number", description: "Dòng kết thúc của đoạn mã cũ (nếu chỉ sửa đổi một đoạn đơn lẻ)." },
@@ -533,7 +506,6 @@ export default {
                     throw new Error("Thiếu tham số 'replacement_content' hoặc danh sách 'replacements'.");
                 }
                 replacements = [{
-                    target_content: args.target_content,
                     replacement_content: args.replacement_content,
                     start_line: args.start_line,
                     end_line: args.end_line
@@ -573,13 +545,13 @@ export default {
                     for (const rep of sortedReplacements) {
                         newContent = performBoundedReplacement(
                             newContent,
-                            rep.target_content,
                             rep.replacement_content,
                             rep.start_line,
                             rep.end_line
                         );
                     }
                 } catch (err) {
+                    shadow.restore();
                     shadow.cleanup();
                     throw err;
                 }
