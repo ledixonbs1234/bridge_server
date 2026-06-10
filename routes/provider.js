@@ -5,11 +5,13 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const projectRoot = path.join(__dirname, '../..');
+
+// SỬA ĐỔI: Thay đổi từ '../..' thành '..' để trỏ chính xác vào Documents/bridge_server
+const projectRoot = path.join(__dirname, '..');
 
 const router = express.Router();
 
-// Get current provider info
+// Lấy thông tin cấu hình hiện tại
 router.get('/', async (req, res) => {
     const configPath = path.join(projectRoot, 'config.json');
     let providerConfig = {};
@@ -20,7 +22,7 @@ router.get('/', async (req, res) => {
     } catch (err) {
         providerConfig = { activeProvider: 'gemini-studio', providers: {} };
     }
-    
+
     res.json({
         active: providerConfig.activeProvider,
         name: globalThis.activeProvider?.getDisplayName?.(),
@@ -29,11 +31,11 @@ router.get('/', async (req, res) => {
     });
 });
 
-// Switch provider
+// Chuyển đổi provider
 router.post('/switch', async (req, res) => {
     const { provider } = req.body;
     if (!provider) return res.status(400).json({ error: 'Thiếu tham số provider' });
-    
+
     const configPath = path.join(projectRoot, 'config.json');
     let providerConfig = {};
     try {
@@ -43,22 +45,22 @@ router.post('/switch', async (req, res) => {
     } catch (err) {
         providerConfig = { activeProvider: 'gemini-studio', providers: {} };
     }
-    
+
     if (!providerConfig.providers?.[provider]) {
         return res.status(400).json({ error: `Provider "${provider}" không tồn tại trong config.json` });
     }
-    
+
     providerConfig.activeProvider = provider;
     fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
-    
-    // Reload provider
+
+    // Nạp lại cấu hình
     const { loadProviderConfig } = await import('../services/providerService.js');
     await loadProviderConfig();
-    
+
     res.json({ success: true, message: `Đã chuyển sang provider: ${globalThis.activeProvider?.getDisplayName?.()}` });
 });
 
-// Get config
+// Lấy toàn bộ config
 router.get('/config', async (req, res) => {
     const configPath = path.join(projectRoot, 'config.json');
     let providerConfig = {};
@@ -72,10 +74,10 @@ router.get('/config', async (req, res) => {
     res.json(providerConfig);
 });
 
-// Update config
+// Cập nhật cấu hình
 router.post('/config', async (req, res) => {
     const { activeProvider: newActive, providers } = req.body;
-    
+
     const configPath = path.join(projectRoot, 'config.json');
     let providerConfig = {};
     try {
@@ -85,7 +87,7 @@ router.post('/config', async (req, res) => {
     } catch (err) {
         providerConfig = { activeProvider: 'gemini-studio', providers: {} };
     }
-    
+
     if (newActive) providerConfig.activeProvider = newActive;
     if (providers) {
         for (const [key, value] of Object.entries(providers)) {
@@ -94,13 +96,13 @@ router.post('/config', async (req, res) => {
             }
         }
     }
-    
+
     fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
-    
-    // Reload provider
+
+    // Nạp lại cấu hình
     const { loadProviderConfig } = await import('../services/providerService.js');
     await loadProviderConfig();
-    
+
     res.json({ success: true, message: 'Cấu hình đã được lưu thành công' });
 });
 
