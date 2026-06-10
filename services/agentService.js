@@ -179,6 +179,7 @@ export async function executeAgentTurn({
             text = chunk.text;
             if (chunk.usage) {
                 lastKnownUsage = chunk.usage;
+                assistantMsgPlaceholder.usage = chunk.usage; // Cập nhật token sử dụng thời gian thực
             }
         }
 
@@ -194,6 +195,13 @@ export async function executeAgentTurn({
                 type: 'text',
                 content: text
             });
+        }
+
+        // Tích lũy trực tiếp nội dung văn bản vào placeholder và lưu trữ lũy tiến
+        assistantMsgPlaceholder.content = (assistantMsgPlaceholder.content || '') + text;
+        if (sessionFile) {
+            globalThis.activeWebHistory = currentHistory;
+            saveSession(currentHistory, persistentGoal, sessionFile);
         }
     };
 
@@ -231,6 +239,22 @@ export async function executeAgentTurn({
         if (image) userMsg.image = image;
         if (images && images.length > 0) userMsg.images = images;
         currentHistory.push(userMsg);
+
+        // Khởi tạo sẵn một tin nhắn Assistant rỗng để ghi nhận tiến trình thời gian thực (Real-time Placeholder)
+        const assistantMsgPlaceholder = {
+            role: 'assistant',
+            content: '',
+            steps: serverSteps,
+            timeline: serverTimeline,
+            usage: null
+        };
+        currentHistory.push(assistantMsgPlaceholder);
+
+        // Đồng bộ hóa ngay lập tức lên bộ nhớ đệm toàn cục và ghi xuống đĩa cứng để bảo toàn bối cảnh khi F5
+        if (sessionFile) {
+            globalThis.activeWebHistory = currentHistory;
+            saveSession(currentHistory, persistentGoal, sessionFile);
+        }
 
         // Nén ngữ cảnh nếu chat history quá dài
         if (currentHistory.length > 15 && resolvedProvider?.chat) {
@@ -327,6 +351,12 @@ export async function executeAgentTurn({
                 });
             }
 
+            // Đồng bộ trạng thái khởi chạy Tool lên tệp tin thời gian thực
+            if (sessionFile) {
+                globalThis.activeWebHistory = currentHistory;
+                saveSession(currentHistory, persistentGoal, sessionFile);
+            }
+
             const parentSpanId = globalThis.activeWorkerSpanId || llmSpanId;
             const toolSpanId = traceId ? tracer.startSpan(traceId, funcName, 'tool', parentSpanId, args) : null;
 
@@ -339,6 +369,12 @@ export async function executeAgentTurn({
 
                 if (onToolOutput) {
                     onToolOutput(toolResult, stepId);
+                }
+
+                // Đồng bộ kết quả trả về của Tool lên tệp tin thời gian thực
+                if (sessionFile) {
+                    globalThis.activeWebHistory = currentHistory;
+                    saveSession(currentHistory, persistentGoal, sessionFile);
                 }
 
                 if (toolSpanId) {
@@ -385,30 +421,27 @@ export async function executeAgentTurn({
             const engine = new WorkflowEngine(resolvedProvider, SKILL_REGISTRY, wrappedExecuteSkill, message);
             await engine.run();
 
-            // Đính kèm kết quả pipeline vào lịch sử trước khi lưu
-            currentHistory.push({
-                role: 'assistant',
-                content: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.",
-                steps: serverSteps,
-                timeline: serverTimeline,
-                usage: lastKnownUsage
-            });
+            // Ghi nhận trạng thái hoàn tất cuối cùng vào placeholder đã tạo
+            assistantMsgPlaceholder.content = "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.";
+            assistantMsgPlaceholder.steps = serverSteps;
+            assistantMsgPlaceholder.timeline = serverTimeline;
+            assistantMsgPlaceholder.usage = lastKnownUsage;
 
             const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
+            globalThis.activeWebHistory = currentHistory; // Đồng bộ hóa lên biến bộ nhớ toàn cục
             return { type: 'handover', history: currentHistory, sessionFile: savedFile };
         }
 
         const cleanResponse = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
-        currentHistory.push({
-            role: 'assistant',
-            content: cleanResponse,
-            steps: serverSteps,
-            timeline: serverTimeline,
-            usage: lastKnownUsage
-        });
+        // Ghi nhận phản hồi cuối cùng vào placeholder đã tạo
+        assistantMsgPlaceholder.content = cleanResponse;
+        assistantMsgPlaceholder.steps = serverSteps;
+        assistantMsgPlaceholder.timeline = serverTimeline;
+        assistantMsgPlaceholder.usage = lastKnownUsage;
 
         const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
+        globalThis.activeWebHistory = currentHistory; // Đồng bộ hóa lên biến bộ nhớ toàn cục
 
         if (currentSessionLog.some(entry => !entry.success)) {
             runCriticAgent([...currentSessionLog], wrappedOnLog).catch(() => { });
