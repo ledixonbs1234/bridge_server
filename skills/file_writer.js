@@ -81,9 +81,12 @@ async function applyReviewSuggestion({ originalCode, issues, suggestion, filePat
  * Tìm dòng khớp độc nhất bằng cách mở rộng tiền tố ký tự tăng dần (Character-by-character)
  */
 function findFuzzyLineMatch(targetLine, searchList) {
-    const norm = (s) => s.replace(/[ \t]+/g, ' ').trim();
+    // Không dùng trim() hay replace khoảng trắng để bảo toàn thụt lề cấu trúc của mã nguồn
+    const norm = (s) => s;
     const targetNorm = norm(targetLine);
-    if (!targetNorm) return -1;
+
+    // Chốt chặn: Không dùng dòng trống hoặc chỉ có khoảng trắng làm điểm neo định vị
+    if (targetNorm.trim() === '') return -1;
 
     let lastSuccessfulIndex = -1;
     let lastMatchesCount = 0;
