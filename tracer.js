@@ -1,3 +1,4 @@
+// filepath: bridge_server/tracer.js
 import db from './database.js';
 import { randomUUID } from 'crypto';
 
@@ -26,8 +27,6 @@ function createTrace(name, pipelineId = null) {
  * @param {string} traceId
  * @param {string} status - 'completed' | 'failed'
  */
-// filepath: bridge_server/tracer.js
-// Tìm đến hàm completeTrace và thay thế bằng nội dung sau:
 function completeTrace(traceId, status = 'completed', output = null) {
     const trace = db.prepare(`SELECT created_at FROM traces WHERE id = ?`).get(traceId);
     if (!trace) return;
@@ -131,6 +130,42 @@ function wrapProviderWithTracing(provider) {
             const parentSpanId = globalThis.activeWorkerSpanId || null;
             const lastMsg = options.messages?.[options.messages.length - 1]?.content || '';
 
+            if (global.logToWebChat) {
+                global.logToWebChat(`🤖 [Sub-Agent Status] Spawning Worker Agent: ${workerType.toUpperCase()}...`);
+            }
+
+            // TỰ ĐỘNG KHỞI TẠO BƯỚC XỬ LÝ WORKER AGENT TRÊN FLOW
+            let workerStepId = null;
+            if (globalThis.activeServerSteps) {
+                workerStepId = 'worker_' + Math.random().toString(36).substring(2, 9);
+                const newWorkerStep = {
+                    id: workerStepId,
+                    type: 'agent', // Định nghĩa bước này là node CyberAgent trong VisualFlow
+                    title: `🤖 Sub-Agent: ${workerType.toUpperCase()}`,
+                    toolName: workerType,
+                    input: `Task Prompt: ${lastMsg.substring(0, 1500)}`
+                };
+                globalThis.activeServerSteps.push(newWorkerStep);
+
+                if (globalThis.activeServerTimeline) {
+                    const lastItem = globalThis.activeServerTimeline[globalThis.activeServerTimeline.length - 1];
+                    if (lastItem && lastItem.type === 'steps' && lastItem.steps) {
+                        lastItem.steps.push(newWorkerStep);
+                    } else {
+                        globalThis.activeServerTimeline.push({
+                            id: 'steps-' + Math.random().toString(36).substring(2, 9),
+                            type: 'steps',
+                            steps: [newWorkerStep]
+                        });
+                    }
+                }
+
+                // Gửi sự kiện khởi tạo node ngay qua SSE
+                if (globalThis.activeOnActionCallback) {
+                    globalThis.activeOnActionCallback(workerType, { status: "spawning", prompt: lastMsg.substring(0, 300) }, workerStepId);
+                }
+            }
+
             return await traceWorker(
                 `[Worker: ${workerType.toUpperCase()}]`,
                 'agent',
@@ -140,7 +175,33 @@ function wrapProviderWithTracing(provider) {
                 },
                 parentSpanId,
                 async (spanId) => {
-                    return await originalChat(options);
+                    try {
+                        const result = await originalChat(options);
+
+                        // Đồng bộ ghi nhận kết quả đầu ra khi Worker thành công
+                        if (workerStepId && globalThis.activeServerSteps) {
+                            const targetStep = globalThis.activeServerSteps.find(s => s.id === workerStepId);
+                            if (targetStep) {
+                                targetStep.output = typeof result === 'string' ? result : JSON.stringify(result);
+                            }
+                            if (globalThis.activeOnToolOutputCallback) {
+                                globalThis.activeOnToolOutputCallback(typeof result === 'string' ? result : JSON.stringify(result), workerStepId);
+                            }
+                        }
+                        return result;
+                    } catch (err) {
+                        // Đồng bộ ghi nhận lỗi khi Worker thất bại
+                        if (workerStepId && globalThis.activeServerSteps) {
+                            const targetStep = globalThis.activeServerSteps.find(s => s.id === workerStepId);
+                            if (targetStep) {
+                                targetStep.output = `ERROR: ${err.message}`;
+                            }
+                            if (globalThis.activeOnToolOutputCallback) {
+                                globalThis.activeOnToolOutputCallback(`ERROR: ${err.message}`, workerStepId);
+                            }
+                        }
+                        throw err;
+                    }
                 }
             );
         }

@@ -108,7 +108,7 @@ export async function executeAgentTurn({
     onLog = null,
     activeProvider = globalThis.activeProvider,
     image = null,
-    images = [], // NÂNG CẤP: Thêm mảng hình ảnh
+    images = [],
     headless = true,
     isSimpleChat = false,
     mode = 'default'
@@ -122,6 +122,12 @@ export async function executeAgentTurn({
 
     const serverSteps = [];
     const serverTimeline = [];
+
+    // ĐĂNG KÝ THAM CHIẾU LÊN TOÀN CỤC ĐỂ BẮT SPANS WORKER AGENT
+    globalThis.activeServerSteps = serverSteps;
+    globalThis.activeServerTimeline = serverTimeline;
+    globalThis.activeOnActionCallback = onAction;
+    globalThis.activeOnToolOutputCallback = onToolOutput;
 
     const wrappedOnLog = (text) => {
         if (onLog) onLog(text);
@@ -176,7 +182,7 @@ export async function executeAgentTurn({
             }
         }
 
-        if (onChunk) onChunk(chunk); // Gửi nguyên bản sang routes/agent.js
+        if (onChunk) onChunk(chunk);
 
         // Đồng bộ hóa văn bản trả về vào serverTimeline (Sử dụng 'text' thay vì 'chunk')
         const lastItem = serverTimeline[serverTimeline.length - 1];
@@ -191,7 +197,6 @@ export async function executeAgentTurn({
         }
     };
 
-    // KHẮC PHỤC LỖI: Liên kết chặt chẽ askPermission lên phạm vi toàn cục ngay khi nhận lượt chat
     const originalAskPermission = global.askPermission;
     if (onAskPermission) {
         global.askPermission = (query, detailsOverride = null) => onAskPermission(query, detailsOverride);
@@ -224,7 +229,7 @@ export async function executeAgentTurn({
         const currentHistory = [...history];
         const userMsg = { role: 'user', content: reformulatedText };
         if (image) userMsg.image = image;
-        if (images && images.length > 0) userMsg.images = images; // Ghi nhận mảng ảnh
+        if (images && images.length > 0) userMsg.images = images;
         currentHistory.push(userMsg);
 
         // Nén ngữ cảnh nếu chat history quá dài
@@ -358,8 +363,8 @@ export async function executeAgentTurn({
             systemPrompt,
             maxSteps: 25,
             onStreamChunk: wrappedOnChunk,
-            image, // Cho tương thích cũ
-            images, // NÂNG CẤP: Truyền danh sách ảnh mới sang failover chain
+            image,
+            images: images || [],
             headless,
             executeSkill: wrappedExecuteSkill
         });
@@ -377,7 +382,6 @@ export async function executeAgentTurn({
             if (onSystem) onSystem("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
             if (onLog) onLog("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
 
-            // Truyền wrappedExecuteSkill vào Engine để lưu vết steps/timeline trong suốt quá trình chạy pipeline
             const engine = new WorkflowEngine(resolvedProvider, SKILL_REGISTRY, wrappedExecuteSkill, message);
             await engine.run();
 
@@ -387,7 +391,7 @@ export async function executeAgentTurn({
                 content: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.",
                 steps: serverSteps,
                 timeline: serverTimeline,
-                usage: lastKnownUsage // Lưu trữ thông tin token
+                usage: lastKnownUsage
             });
 
             const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
@@ -401,7 +405,7 @@ export async function executeAgentTurn({
             content: cleanResponse,
             steps: serverSteps,
             timeline: serverTimeline,
-            usage: lastKnownUsage // Lưu trữ thông tin token
+            usage: lastKnownUsage
         });
 
         const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
@@ -417,6 +421,12 @@ export async function executeAgentTurn({
     } finally {
         global.askPermission = originalAskPermission;
         global.logToWebChat = null;
+
+        // DỌN DẸP THAM CHIẾU SAU PHIÊN CHẠY
+        delete globalThis.activeServerSteps;
+        delete globalThis.activeServerTimeline;
+        delete globalThis.activeOnActionCallback;
+        delete globalThis.activeOnToolOutputCallback;
     }
 }
 
