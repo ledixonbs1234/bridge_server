@@ -6,5 +6,5 @@ profile/
 node_modules
 **/agent_state.json
 .agent_memory/*
-public
+public/*
 json_write.json
