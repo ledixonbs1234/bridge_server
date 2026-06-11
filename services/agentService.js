@@ -23,6 +23,12 @@ export const activeWebSession = { res: null };
 export const pendingPermissions = new Map();
 export let logBuffer = [];
 export let persistentGoal = null;
+
+// --- THÊM HAI DÒNG NÀY ---
+export let activePermissionData = null;
+export function setActivePermissionData(data) {
+    activePermissionData = data;
+}
 export let activeWebSessionFile = null;
 export let activeWebHistory = [];
 let currentSessionLog = [];

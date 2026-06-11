@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import db from '../database.js';
-import { pendingPermissions } from './agentService.js'; // Import tĩnh để đồng bộ Map bộ nhớ
+import { pendingPermissions, setActivePermissionData } from './agentService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -264,6 +264,11 @@ async function handleIncomingUpdate(update) {
             if (pendingPermissions.has(permId)) {
                 const resolve = pendingPermissions.get(permId);
                 pendingPermissions.delete(permId);
+
+                // --- THÊM DÒNG NÀY ---
+                setActivePermissionData(null);
+                // ---------------------
+
                 resolve(action);
 
                 const actionLabel = action === 'y' ? 'ĐỒNG Ý' : action === 'a' ? 'ĐỒNG Ý TẤT CẢ' : 'TỪ CHỐI';

@@ -128,6 +128,12 @@ router.post('/chat', async (req, res) => {
             }
             globalThis.persistentGoal = null;
 
+            // --- THÊM ĐOẠN NÀY ---
+            const agentService = await import('../services/agentService.js');
+            agentService.setActivePermissionData(null);
+            agentService.pendingPermissions.clear();
+        // ---------------------
+
             try {
                 const dbModule = await import('../database.js');
                 const db = dbModule.default;
@@ -209,6 +215,13 @@ router.post('/chat', async (req, res) => {
 
                 return new Promise((resolve) => {
                     pendingPermissions.set(permId, resolve);
+
+                    // --- THÊM DÒNG NÀY ---
+                    agentService.setActivePermissionData({
+                        id: permId,
+                        query: query.replace(/\x1b\[[0-9;]*m/g, ''),
+                        details: cleanDetails
+                    });
 
                     (async () => {
                         try {

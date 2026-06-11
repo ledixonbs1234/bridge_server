@@ -423,6 +423,9 @@ router.post('/permission/respond', async (req, res) => {
         const resolve = agentService.pendingPermissions.get(id);
         agentService.pendingPermissions.delete(id);
 
+        // --- THÊM DÒNG NÀY ---
+        agentService.setActivePermissionData(null);
+
         const finalResponse = (typeof response === 'string' && response.trim().startsWith('{'))
             ? response.trim()
             : response.toLowerCase().trim();
@@ -432,6 +435,14 @@ router.post('/permission/respond', async (req, res) => {
     } else {
         res.status(404).json({ error: 'Phiên yêu cầu cấp quyền không tồn tại hoặc đã hết hạn.' });
     }
+});
+// GET: Lấy thông tin yêu cầu phê duyệt đang chờ hoạt động gần nhất
+router.get('/permission/active', (req, res) => {
+    import('../services/agentService.js').then((service) => {
+        res.json({ success: true, permission: service.activePermissionData });
+    }).catch(err => {
+        res.status(500).json({ success: false, error: err.message });
+    });
 });
 router.delete('/pipeline-state', (req, res) => {
     try {
