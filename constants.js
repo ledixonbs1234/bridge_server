@@ -33,10 +33,6 @@ export const SKILL_CATEGORIES = {
 };
 
 // Skill groups mapping
-// Cập nhật phần SKILL_GROUPS trong ridge_server/constants.js
-
-// ridge_server/constants.js
-
 export const SKILL_GROUPS = {
     [SKILL_CATEGORIES.CHAT]: [
         'read_file',
@@ -57,7 +53,7 @@ export const SKILL_GROUPS = {
         'replace_content_safe',
         'replace_multiple_files_safe',
         'change_active_workspace',
-        'debug_desktop_app' // Thêm kỹ năng
+        'debug_desktop_app'
     ],
     [SKILL_CATEGORIES.CODE]: [
         'read_file',
@@ -70,9 +66,6 @@ export const SKILL_GROUPS = {
         'get_os_context',
         'stop_terminal_process',
         'memorize_rule',
-        'create_pipeline_plan',
-        'create_pipeline_plan_from_spec',
-        'load_harness_template',
         'replace_multiple_files_safe',
         'find_files',
         'find_content',
@@ -83,14 +76,12 @@ export const SKILL_GROUPS = {
         'capture_system_screenshot',
         'ask_questions_if_underspecified',
         'change_active_workspace',
-        'debug_desktop_app' // Thêm kỹ năng
+        'debug_desktop_app'
     ],
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
         'parallel_web_summarizer',
         'dynamic_browser_controller',
-        'create_pipeline_plan',
-        'load_harness_template',
         'read_file',
         'replace_content_safe',
         'read_file_lines',
@@ -105,7 +96,7 @@ export const SKILL_GROUPS = {
         'google_search_and_summarize',
         'ask_questions_if_underspecified',
         'change_active_workspace',
-        'debug_desktop_app' // Thêm kỹ năng
+        'debug_desktop_app'
     ],
     [SKILL_CATEGORIES.COMPLEX]: null
 };

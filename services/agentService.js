@@ -1,13 +1,14 @@
+// filepath: bridge_server/services/agentService.js
 import path from 'path';
 import fs from 'fs';
-import os from 'os'; // Đã import thêm os
+import os from 'os';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import tracer from '../tracer.js';
 import telemetry from '../telemetry.js';
 import { SKILL_REGISTRY } from './skillLoader.js';
 import WorkflowEngine from '../workflow_engine.js';
-import { SKILL_GROUPS } from '../constants.js'
+import { SKILL_GROUPS } from '../constants.js';
 import db from '../database.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,7 +25,6 @@ export const pendingPermissions = new Map();
 export let logBuffer = [];
 export let persistentGoal = null;
 
-// --- THÊM HAI DÒNG NÀY ---
 export let activePermissionData = null;
 export function setActivePermissionData(data) {
     activePermissionData = data;
@@ -60,44 +60,35 @@ export function updateActiveWorkspaceFromContext(message) {
     if (matches && matches.length > 0) {
         for (const matchedPath of matches) {
             try {
-                // Resolve đường dẫn tương đối hoặc tuyệt đối
                 let resolved = path.isAbsolute(matchedPath)
                     ? matchedPath
                     : path.resolve(globalThis.activeWorkspace || process.cwd(), matchedPath);
                 resolved = resolved.replace(/\\/g, '/');
 
-                // CHỐT CHẶN XÁC THỰC: Chỉ xử lý nếu đường dẫn thực sự tồn tại trên đĩa cứng
                 if (fs.existsSync(resolved)) {
                     const stat = fs.statSync(resolved);
                     let resolvedDir = resolved;
 
-                    // Nếu là tệp tin, trích xuất thư mục cha chứa tệp đó
                     if (!stat.isDirectory()) {
                         resolvedDir = path.dirname(resolved).replace(/\\/g, '/');
                     }
 
-                    // Chặn can thiệp trái phép vào mã nguồn của Bridge Server
                     const lowerDir = resolvedDir.toLowerCase();
                     if (lowerDir.includes('bridge_server') || lowerDir.includes('ridge_server')) {
-                        continue; // Bỏ qua đường dẫn này, tiếp tục kiểm tra khớp tiếp theo
+                        continue;
                     }
 
-                    // Cập nhật thư mục làm việc hợp lệ và thoát vòng lặp
                     globalThis.activeWorkspace = resolvedDir;
                     console.log(chalk.cyan(`[Context-Switch] 📂 Tự động chuyển Workspace hoạt động sang: ${globalThis.activeWorkspace}`));
                     return;
                 }
             } catch (e) {
-                // Thầm lặng bỏ qua lỗi truy cập file của hệ thống
+                // Thầm lặng bỏ qua lỗi truy cập file
             }
         }
     }
 }
 
-
-/**
- * Hàm điều phối trung tâm thực hiện một lượt xử lý (turn) của Agent.
- */
 /**
  * Hàm điều phối trung tâm thực hiện một lượt xử lý (turn) của Agent.
  */
@@ -129,7 +120,6 @@ export async function executeAgentTurn({
     const serverSteps = [];
     const serverTimeline = [];
 
-    // ĐĂNG KÝ THAM CHIẾU LÊN TOÀN CỤC ĐỂ BẮT SPANS WORKER AGENT
     globalThis.activeServerSteps = serverSteps;
     globalThis.activeServerTimeline = serverTimeline;
     globalThis.activeOnActionCallback = onAction;
@@ -149,7 +139,6 @@ export async function executeAgentTurn({
             });
         }
 
-        // Đồng bộ hóa trạng thái suy nghĩ vào serverTimeline
         const lastItem = serverTimeline[serverTimeline.length - 1];
         if (lastItem && lastItem.type === 'steps' && lastItem.steps) {
             const lastTStep = lastItem.steps[lastItem.steps.length - 1];
@@ -185,13 +174,12 @@ export async function executeAgentTurn({
             text = chunk.text;
             if (chunk.usage) {
                 lastKnownUsage = chunk.usage;
-                assistantMsgPlaceholder.usage = chunk.usage; // Cập nhật token sử dụng thời gian thực
+                assistantMsgPlaceholder.usage = chunk.usage;
             }
         }
 
         if (onChunk) onChunk(chunk);
 
-        // Đồng bộ hóa văn bản trả về vào serverTimeline (Sử dụng 'text' thay vì 'chunk')
         const lastItem = serverTimeline[serverTimeline.length - 1];
         if (lastItem && lastItem.type === 'text') {
             lastItem.content = (lastItem.content || '') + text;
@@ -203,7 +191,6 @@ export async function executeAgentTurn({
             });
         }
 
-        // Tích lũy trực tiếp nội dung văn bản vào placeholder và lưu trữ lũy tiến
         assistantMsgPlaceholder.content = (assistantMsgPlaceholder.content || '') + text;
         if (sessionFile) {
             globalThis.activeWebHistory = currentHistory;
@@ -246,7 +233,6 @@ export async function executeAgentTurn({
         if (images && images.length > 0) userMsg.images = images;
         currentHistory.push(userMsg);
 
-        // Khởi tạo sẵn một tin nhắn Assistant rỗng để ghi nhận tiến trình thời gian thực (Real-time Placeholder)
         const assistantMsgPlaceholder = {
             role: 'assistant',
             content: '',
@@ -256,13 +242,11 @@ export async function executeAgentTurn({
         };
         currentHistory.push(assistantMsgPlaceholder);
 
-        // Đồng bộ hóa ngay lập tức lên bộ nhớ đệm toàn cục và ghi xuống đĩa cứng để bảo toàn bối cảnh khi F5
         if (sessionFile) {
             globalThis.activeWebHistory = currentHistory;
             saveSession(currentHistory, persistentGoal, sessionFile);
         }
 
-        // Nén ngữ cảnh nếu chat history quá dài
         if (currentHistory.length > 15 && resolvedProvider?.chat) {
             if (onSystem) onSystem("⚙️ Lịch sử hội thoại quá dài, đang nén ngữ cảnh...");
             if (onLog) onLog("⚙️ Lịch sử hội thoại quá dài, đang nén ngữ cảnh...");
@@ -344,7 +328,6 @@ export async function executeAgentTurn({
             };
             serverSteps.push(currentStep);
 
-            // Đồng bộ bước thực thi này sang serverTimeline
             let timelineStep = { ...currentStep };
             const lastItem = serverTimeline[serverTimeline.length - 1];
             if (lastItem && lastItem.type === 'steps' && lastItem.steps) {
@@ -357,7 +340,6 @@ export async function executeAgentTurn({
                 });
             }
 
-            // Đồng bộ trạng thái khởi chạy Tool lên tệp tin thời gian thực
             if (sessionFile) {
                 globalThis.activeWebHistory = currentHistory;
                 saveSession(currentHistory, persistentGoal, sessionFile);
@@ -369,7 +351,6 @@ export async function executeAgentTurn({
             try {
                 const toolResult = await executeSkillForProvider(funcName, args, resolvedProvider, wrappedOnLog);
 
-                // Ghi nhận Output vào cả mảng steps phẳng và mảng timeline
                 currentStep.output = toolResult;
                 timelineStep.output = toolResult;
 
@@ -377,7 +358,6 @@ export async function executeAgentTurn({
                     onToolOutput(toolResult, stepId);
                 }
 
-                // Đồng bộ kết quả trả về của Tool lên tệp tin thời gian thực
                 if (sessionFile) {
                     globalThis.activeWebHistory = currentHistory;
                     saveSession(currentHistory, persistentGoal, sessionFile);
@@ -419,7 +399,6 @@ export async function executeAgentTurn({
             tracer.completeTrace(traceId, 'completed', { response: cleanResult });
         }
 
-        // Xử lý kịch bản handover cho WorkflowEngine
         if (result === "__HANDOVER_TO_ENGINE__" || (typeof result === 'string' && result.includes("__HANDOVER_TO_ENGINE__"))) {
             if (onSystem) onSystem("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
             if (onLog) onLog("🔄 Đang chuyển giao quyền điều khiển cho Workflow Engine để chạy Pipeline...");
@@ -427,27 +406,25 @@ export async function executeAgentTurn({
             const engine = new WorkflowEngine(resolvedProvider, SKILL_REGISTRY, wrappedExecuteSkill, message);
             await engine.run();
 
-            // Ghi nhận trạng thái hoàn tất cuối cùng vào placeholder đã tạo
             assistantMsgPlaceholder.content = "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.";
             assistantMsgPlaceholder.steps = serverSteps;
             assistantMsgPlaceholder.timeline = serverTimeline;
             assistantMsgPlaceholder.usage = lastKnownUsage;
 
             const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
-            globalThis.activeWebHistory = currentHistory; // Đồng bộ hóa lên biến bộ nhớ toàn cục
+            globalThis.activeWebHistory = currentHistory;
             return { type: 'handover', history: currentHistory, sessionFile: savedFile };
         }
 
         const cleanResponse = result.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
-        // Ghi nhận phản hồi cuối cùng vào placeholder đã tạo
         assistantMsgPlaceholder.content = cleanResponse;
         assistantMsgPlaceholder.steps = serverSteps;
         assistantMsgPlaceholder.timeline = serverTimeline;
         assistantMsgPlaceholder.usage = lastKnownUsage;
 
         const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
-        globalThis.activeWebHistory = currentHistory; // Đồng bộ hóa lên biến bộ nhớ toàn cục
+        globalThis.activeWebHistory = currentHistory;
 
         if (currentSessionLog.some(entry => !entry.success)) {
             runCriticAgent([...currentSessionLog], wrappedOnLog).catch(() => { });
@@ -461,7 +438,6 @@ export async function executeAgentTurn({
         global.askPermission = originalAskPermission;
         global.logToWebChat = null;
 
-        // DỌN DẸP THAM CHIẾU SAU PHIÊN CHẠY
         delete globalThis.activeServerSteps;
         delete globalThis.activeServerTimeline;
         delete globalThis.activeOnActionCallback;
@@ -476,13 +452,12 @@ async function getOllamaEmbedding(text) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model: 'qwen3-embedding:0.6b', // Thay bằng 'qwen3-embedding:0.6b' nếu dùng bản nhẹ
+                model: 'qwen3-embedding:0.6b',
                 input: text
             })
         });
         if (!response.ok) return null;
         const data = await response.json();
-        // Lấy vector đầu tiên trong danh sách embeddings trả về
         return data.embeddings?.[0] || null;
     } catch (err) {
         console.warn('[Ollama Embedding] Lỗi kết nối tới Ollama:', err.message);
@@ -512,10 +487,8 @@ export function getCompiledSystemPrompt() {
         systemPrompt = fs.readFileSync(promptPath, 'utf8');
     }
 
-    // Lấy thư mục hoạt động hiện hành (ưu tiên activeWorkspace động, fallback về process.cwd)
     const activeWS = globalThis.activeWorkspace || process.cwd().replace(/\\/g, '/');
 
-    // Bổ sung thêm dòng thông tin thư mục hiện hành vào Ngữ cảnh hệ thống gửi cho AI
     const systemContext = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]
 - OS Platform: ${process.platform}
 - OS Arch: ${process.arch}
@@ -534,7 +507,6 @@ export function getCompiledSystemPrompt() {
 export function classifyIntent(userMessage) {
     const msg = userMessage.toLowerCase();
 
-    // Đưa kiểm tra liên kết hoặc yêu cầu đọc trang lên hàng đầu
     if (msg.match(/(đọc trang|đọc link|url:|http:|https:|crawl|scrape)/)) {
         return 'research';
     }
@@ -550,10 +522,8 @@ export function classifyIntent(userMessage) {
     return 'chat';
 }
 
-// 2. Chỉnh sửa hàm filterSkillsByIntent trong cùng file
 export function filterSkillsByIntent(intent, fullRegistry) {
     if (intent === 'complex' || !SKILL_GROUPS[intent]) return fullRegistry;
-
 
     const allowedNames = SKILL_GROUPS[intent];
     const filtered = {};
@@ -577,8 +547,6 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
         else if (funcArgs.url) targetDetail = ` 🌐 Link: "${funcArgs.url}"`;
     }
 
-    // if (logger) logger(`⚙️ [Tool Call] Kích hoạt: ${functionName}${targetDetail}`);
-
     const silentFunctions = ['execute_terminal_command', 'write_file', 'replace_by_lines_safe', 'get_os_context'];
     if (!silentFunctions.includes(functionName) && !functionName.startsWith('workflow_')) {
         console.log(chalk.gray(`[Node] 📦 Tham số:`), funcArgs);
@@ -597,7 +565,6 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
     if (isWebSessionActive) {
         logBuffer = [];
         console.log = (...args) => {
-            // In ra Terminal hệ thống bằng hàm nguyên bản
             if (global.originalConsoleLog) {
                 global.originalConsoleLog(...args);
             } else {
@@ -607,26 +574,20 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
             const str = args.map(arg => typeof arg === 'string' ? arg : JSON.stringify(arg)).join(' ');
             const trimmedStr = str.trim();
 
-            // 🛡️ BỘ LỌC CHỐNG TRÀN KHUNG: 
-            // Bỏ qua các chuỗi là đường viền khung vẽ thô của boxen
             const isBoxenBorder = /^[┌┐└┘├┤┬┴┼═║─│╘╛╒╕╓╖╙╜╛╞╡╟╢╠╣╦╩╬]/.test(trimmedStr);
-            // Bỏ qua chuỗi JSON thô chứa gói tin phê duyệt trực quan (đã được display.js gửi riêng)
             const isStructuredApproval = trimmedStr.startsWith('{"type":"APPROVAL_REQUEST"');
 
             if (isBoxenBorder || isStructuredApproval) {
-                return; // Ngăn không cho đẩy dòng này lên Web UI
+                return;
             }
 
             logBuffer.push(str);
             if (logger) {
-                let cleanStr = str.replace(/\x1b\[[0-9;]*m/g, ''); // Xóa mã màu ANSI
+                let cleanStr = str.replace(/\x1b\[[0-9;]*m/g, '');
 
-                // 🛡️ BỘ LỌC CHỐNG TRÀN CHUỖI BASE64 RA LOGS HIỂN THỊ
                 if (cleanStr.includes('data:image/') && cleanStr.includes('base64,')) {
                     cleanStr = cleanStr.replace(/data:image\/[a-zA-Z]+;base64,[a-zA-Z0-9+/=]+/g, '[Dữ liệu hình ảnh Base64 - Đã ẩn để tối ưu hiệu năng]');
                 }
-
-                // logger(`📝 [Tool Output] ${cleanStr}`);
             }
         };
     }
@@ -646,15 +607,11 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
             return "__HANDOVER_TO_ENGINE__";
         }
 
-        // ─── THAY ĐỔI TẠI ĐÂY ──────────────────────────────────────────────────
-        // Nếu kết quả trả về từ handler là một chuỗi văn bản (như cấu trúc Markdown),
-        // trả về trực tiếp để AI đọc hiểu dễ dàng thay vì đóng gói vào JSON.
         if (typeof result === 'string') {
             return result;
         }
 
         return JSON.stringify({ status: "success", data: result });
-        // ──────────────────────────────────────────────────────────────────────
 
     } catch (error) {
         const durationMs = Date.now() - startTime;
@@ -711,7 +668,7 @@ Chỉ trả lời cực ngắn gọn (1-2 câu).`;
 
         const response = await activeProvider.chat({
             messages: [{ role: 'user', content: criticPrompt }],
-            mode: 'thinking', // 🧠 BẬT TƯ DUY SÂU CHO CRITIC
+            mode: 'thinking',
             skillRegistry: skills,
             executeSkill: async (funcName, args) => {
                 console.log(chalk.magenta(`[Critic Agent] 💡 Tự động gọi: ${funcName}`));
@@ -733,29 +690,27 @@ Chỉ trả lời cực ngắn gọn (1-2 câu).`;
         console.warn(chalk.yellow(`[Critic Agent] Lỗi khi chạy Critic: ${e.message}`));
     }
 }
+
 /**
  * Trích xuất ngưỡng lọc bộ nhớ thích ứng động (Dynamic Gating) dựa trên ngữ cảnh tin nhắn
  */
 function getDynamicGatingThresholds(message) {
     const msg = (message || "").toLowerCase();
 
-    // Nhóm tác vụ có độ rủi ro cao (Cần bảo vệ nghiêm ngặt)
     if (msg.match(/(deploy|delete|remove|drop|truncate|overwrite|reset|revert|force|production|prod|accept|sửa|thay thế)/)) {
         return {
-            minTrustScore: 0.80, // Chỉ chấp nhận các node cực kỳ uy tín và chín muồi
-            minSimilarity: 0.65  // Yêu cầu độ tương đồng cao tránh lấy nhầm bối cảnh khác
+            minTrustScore: 0.80,
+            minSimilarity: 0.65
         };
     }
 
-    // Nhóm tác vụ nghiên cứu, tìm kiếm thông tin (Nới lỏng để AI thoải mái tiếp cận kiến thức rộng)
     if (msg.match(/(search|find|google|explain|what is|summarize|research|crawl|read|link|giải thích|là gì|tìm kiếm|tin tức)/)) {
         return {
-            minTrustScore: 0.15, // Chấp nhận cả các trải nghiệm sơ khai hoặc trust score thấp
-            minSimilarity: 0.45  // Nới lỏng độ tương đồng để lấy được nhiều góc nhìn đa dạng
+            minTrustScore: 0.15,
+            minSimilarity: 0.45
         };
     }
 
-    // Mặc định cho các tác vụ phát triển/lập trình tiêu chuẩn
     return {
         minTrustScore: 0.40,
         minSimilarity: 0.55
@@ -769,7 +724,6 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
 
     const msgLower = lastUserMessage.toLowerCase().trim();
 
-    // Loại trừ các câu lệnh điều hành cực ngắn để tránh truy vấn thừa
     const isContinuationOrSimpleCmd = msgLower.length < 40 && (
         /^(tiếp tục|chạy tiếp|chạy nữa|tiếp|tiếp đi|continue|go on|next|chạy đi)$/.test(msgLower) ||
         /^(ok|được|được rồi|yes|y|no|n|sure|đồng ý|hủy)$/.test(msgLower)
@@ -785,7 +739,6 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
     let injectedContext = "\n\n[FLUXMEM - HỆ THỐNG TRÍ NHỚ ĐỒ THỊ TỰ TIẾN HÓA]:\n";
     let hasMemory = false;
 
-    // 1. LỚP TRI THỨC NGỮ NGHĨA (𝒱_sem) - Đọc các tệp quy tắc chung tĩnh
     const globalFile = path.join(memoryDir, 'rules', 'rules_global.md');
     if (fs.existsSync(globalFile)) {
         injectedContext += `\n--- QUY TẮC CHUNG (𝒱_sem) ---\n${fs.readFileSync(globalFile, 'utf8')}\n`;
@@ -795,25 +748,21 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
     try {
         const memories = db.prepare('SELECT * FROM memories').all() || [];
 
-        // 🧬 BƯỚC A: Lazy-Caching - Tự động sinh và lưu vector cho các bản ghi chưa có
         for (const m of memories) {
             if (!m.embedding && m.situation) {
                 if (logger) logger(`🧬 [FluxMem] Đang khởi tạo vector offline cho Memory ID: ${m.id}...`);
                 const vector = await getOllamaEmbedding(m.situation);
                 if (vector) {
                     m.embedding = JSON.stringify(vector);
-                    // Lưu lại cấu trúc vector vào tệp SQLite-mock
                     db.prepare(`UPDATE memories SET embedding = ? WHERE id = ?`).run(m.embedding, m.id);
                 }
             }
         }
 
-        // Sinh vector đại diện cho câu hỏi hiện hành của người dùng
         const searchSpace = lastUserMessage + " " + allMessagesContext;
         const queryVector = await getOllamaEmbedding(searchSpace);
 
         if (queryVector) {
-            // Chuyển đổi và chấm điểm tương đồng ngữ nghĩa
             const scoredMemories = memories.map(m => {
                 let vector = null;
                 try {
@@ -824,18 +773,15 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
                 return { ...m, similarity };
             });
 
-            // 🧬 ĐIỀU CHỈNH NGƯỠNG LỌC ĐỘNG (DYNAMIC GATING)
             const thresholds = getDynamicGatingThresholds(lastUserMessage);
             if (logger) {
                 logger(`🧬 [FluxMem I] Dynamic Gating kích hoạt [Ngưỡng Trust: ${thresholds.minTrustScore} | Ngưỡng Similar: ${thresholds.minSimilarity}]`);
             }
 
-            // 2. LỚP TRẢI NGHIỆM SỰ KIỆN (𝒱_epi) - Ngưỡng động thích ứng
             const relevantEpisodes = scoredMemories.filter(m => {
                 const memoryType = m.memory_type || m.type || 'episodic';
                 if (memoryType !== 'episodic') return false;
 
-                // Episodic được nới nhẹ hơn 0.1 so với ngưỡng cơ sở để tận dụng được nhiều kinh nghiệm thực tế
                 const targetTrustThreshold = Math.max(0.1, thresholds.minTrustScore - 0.1);
                 const isReliable = (m.trust_score ?? 0.7) >= targetTrustThreshold;
                 const isSimilar = m.similarity >= thresholds.minSimilarity;
@@ -851,7 +797,6 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
                 if (logger) logger(`📖 [FluxMem I] Tìm thấy ${relevantEpisodes.length} node Episodic phù hợp bằng Vector Search.`);
             }
 
-            // 3. LỚP KỸ NĂNG QUY TRÌNH (𝒱_proc) - Ngưỡng động thích ứng (Sửa lỗi kiểm tra type)
             const relevantProcedures = scoredMemories.filter(m => {
                 const memoryType = m.memory_type || m.type || 'episodic';
                 if (memoryType !== 'procedural') return false;
@@ -862,7 +807,7 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
             }).sort((a, b) => b.similarity - a.similarity);
 
             if (relevantProcedures.length > 0) {
-                injectedContext += `\n--- QUY TRÌNH THỰC THI MẪU CHUẨN ĐÃ CHƯNG CẤT (𝒱_proc) ---\n`;
+                injectedContext += `\n--- QUY TẦM THỰC THI MẪU CHUẨN ĐÃ CHƯNG CẤT (𝒱_proc) ---\n`;
                 relevantProcedures.slice(0, 2).forEach((proc, idx) => {
                     injectedContext += `Quy trình #${idx + 1} [Độ tương đồng: ${proc.similarity.toFixed(2)} | Maturity: ${(proc.trust_score ?? 0.7).toFixed(2)}]:\n- Mục tiêu: ${proc.situation}\n- Kịch bản các bước: ${proc.solution}\n\n`;
                 });
@@ -871,9 +816,6 @@ export async function recallMemory(lastUserMessage, allMessagesContext = "", onL
             }
 
         } else {
-            // BƯỚC DỰ PHÒNG (FALLBACK): Nếu Ollama tắt hoặc quá tải, chuyển về cơ chế so khớp từ khóa cũ
-            if (logger) logger(`⚠️ [FluxMem I] Không thể trích xuất vector, đang tự động chuyển sang cơ chế so khớp từ khóa tĩnh...`);
-
             const searchSpaceLower = searchSpace.toLowerCase();
             const fallbackEpisodes = memories.filter(m => {
                 const memoryType = m.memory_type || m.type || 'episodic';
@@ -926,7 +868,7 @@ export async function reformulateQuery(userMessage, activeProvider, onLog) {
     try {
         let optimizedMessage = await resolvedProvider.chat({
             messages: [{ role: 'user', content: prompt }],
-            mode: 'fast', // 🚀 TẮT TƯ DUY ĐỂ XỬ LÝ NHANH
+            mode: 'fast',
             skillRegistry: {},
             executeSkill: async () => { },
             systemPrompt: systemPrompt,
@@ -972,7 +914,6 @@ export function saveSession(chatHistory, goalText, customFileName = null) {
     return fileName;
 }
 
-// Failover chain functions
 const loadedProviders = {};
 
 async function getProviderInstance(providerName) {
@@ -1009,7 +950,6 @@ async function getProviderInstance(providerName) {
         const ProviderClass = module.default;
         const instance = new ProviderClass(settings);
 
-        // Proxy hóa tự động
         const wrappedInstance = tracer.wrapProviderWithTracing(instance);
         loadedProviders[providerName] = wrappedInstance;
         return wrappedInstance;

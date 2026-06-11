@@ -21,8 +21,7 @@ let dbData = {
   agent_states: [],
   traces: [],
   trace_spans: [],
-  tool_telemetry: [],
-  sandboxes: [] // Bổ sung cấu trúc lưu trữ Sandbox Metadata
+  tool_telemetry: []
 };
 
 // Đếm ID tự tăng
@@ -33,8 +32,7 @@ let autoIncrements = {
   agent_states: 1,
   traces: 1,
   trace_spans: 1,
-  tool_telemetry: 1,
-  sandboxes: 1
+  tool_telemetry: 1
 };
 
 function loadDb() {
@@ -44,7 +42,6 @@ function loadDb() {
       dbData = { ...dbData, ...loaded };
       if (!dbData.memory_edges) dbData.memory_edges = [];
       if (!dbData.memories) dbData.memories = [];
-      if (!dbData.sandboxes) dbData.sandboxes = [];
 
       // TỰ ĐỘNG DỌN DẸP: Lọc bỏ toàn bộ các bản ghi bộ nhớ bị lỗi/rỗng trường thông tin chính
       dbData.memories = dbData.memories.filter(m => {
@@ -323,27 +320,6 @@ const db = {
             return { changes: 1, lastInsertRowid: dbData.memories.length };
           }
 
-          if (sqlLower.startsWith('insert into sandboxes') || sqlLower.includes('insert or replace into sandboxes')) {
-            const [id, taskId, branch, worktree, status, parentBranch, createdAt] = params;
-            const existingIdx = dbData.sandboxes.findIndex(s => s.task_id === taskId);
-            const record = {
-              id: id || autoIncrements.sandboxes++,
-              task_id: taskId,
-              branch,
-              worktree,
-              status,
-              parent_branch: parentBranch,
-              created_at: createdAt
-            };
-            if (existingIdx >= 0) {
-              dbData.sandboxes[existingIdx] = { ...dbData.sandboxes[existingIdx], ...record };
-            } else {
-              dbData.sandboxes.push(record);
-            }
-            saveDb();
-            return { changes: 1 };
-          }
-
           if (sqlLower.startsWith('insert into tool_telemetry')) {
             const [tool_name, timestamp, success, duration_ms, error_message] = params;
             dbData.tool_telemetry.push({
@@ -367,26 +343,6 @@ const db = {
                   if (upd.type === 'param') row[upd.column] = params[upd.paramIndex];
                   else if (upd.type === 'literal') row[upd.column] = upd.value;
                   else if (upd.type === 'increment') row[upd.column] = (row[upd.column] || 0) + upd.delta;
-                }
-                changes++;
-              }
-            }
-            if (changes > 0) saveDb();
-            return { changes };
-          }
-
-          if (sqlLower.startsWith('update sandboxes')) {
-            const setMatch = sqlNorm.match(/set\s+(.+?)\s+where\s+(.+)$/i);
-            if (!setMatch) return { changes: 0 };
-            const { updates, paramCount: setParamCount } = parseSet(setMatch[1], params, 0);
-            const { filter } = parseWhere(setMatch[2], params, setParamCount);
-
-            let changes = 0;
-            for (const row of dbData.sandboxes) {
-              if (filter(row)) {
-                for (const upd of updates) {
-                  if (upd.type === 'param') row[upd.column] = params[upd.paramIndex];
-                  else if (upd.type === 'literal') row[upd.column] = upd.value;
                 }
                 changes++;
               }
@@ -437,7 +393,6 @@ const db = {
             return { changes };
           }
 
-          // --- PHÂN HỆ NÂNG CẤP: UPDATE TRACES ---
           if (sqlLower.startsWith('update traces')) {
             const setMatch = sqlNorm.match(/set\s+(.+?)\s+where\s+(.+)$/i);
             if (!setMatch) return { changes: 0 };
@@ -459,7 +414,6 @@ const db = {
             return { changes };
           }
 
-          // --- PHÂN HỆ NÂNG CẤP: UPDATE TRACE_SPANS ---
           if (sqlLower.startsWith('update trace_spans')) {
             const setMatch = sqlNorm.match(/set\s+(.+?)\s+where\s+(.+)$/i);
             if (!setMatch) return { changes: 0 };
@@ -511,13 +465,6 @@ const db = {
             return dbData.pipelines.find(filter);
           }
 
-          if (sqlLower.includes('from sandboxes') && sqlLower.includes('where')) {
-            const whereMatch = sqlNorm.match(/where\s+(.+)$/i);
-            if (!whereMatch) return undefined;
-            const { filter } = parseWhere(whereMatch[1], params, 0);
-            return dbData.sandboxes.find(filter);
-          }
-
           if (sqlLower.includes('from traces') && !sqlLower.includes('trace_spans') && sqlLower.includes('id =')) {
             const traceId = params[0];
             const found = dbData.traces.find(t => t.id === traceId);
@@ -549,10 +496,6 @@ const db = {
         try {
           if (sqlLower.includes('from memory_edges')) {
             return dbData.memory_edges;
-          }
-
-          if (sqlLower.includes('from sandboxes')) {
-            return dbData.sandboxes;
           }
 
           if (sqlLower.includes('from traces') && sqlLower.includes('order by') && sqlLower.includes('limit')) {

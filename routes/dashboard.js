@@ -1,18 +1,21 @@
+// filepath: bridge_server/routes/dashboard.js
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import telemetry from '../telemetry.js';
 import tracer from '../tracer.js';
-import db from '../database.js'; // Import database để truy xuất Memories thực tế
+import db from '../database.js';
 import { getGitDiffStats } from '../utils/gitStats.js';
 import { consolidateProceduralMemory } from '../services/fluxMemConsolidator.js';
 import { resolveProceduralConflicts } from '../services/fluxMemConflictResolver.js';
 import { activeShadowRegistry, penultimateShadowRegistry } from '../skills/validators/shadow_file.js';
+import { harnessRegistry } from '../graphs/registry.js';
+import chalk from 'chalk';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const projectRoot = path.join(__dirname, '..'); // Sửa thành '..' để trỏ đúng vào bridge_server
+const projectRoot = path.join(__dirname, '..');
 const router = express.Router();
 
 /**
@@ -94,19 +97,17 @@ router.get('/shadow-changes', (req, res) => {
     try {
         const changes = [];
         for (const [originalPath, shadow] of activeShadowRegistry.shadows.entries()) {
-            // 1. Lấy dữ liệu phiên bản gốc ban đầu (Trạng thái 0)
             let oldContent = "";
             if (shadow.hadOriginal && fs.existsSync(shadow.shadowPath)) {
                 oldContent = fs.readFileSync(shadow.shadowPath, 'utf8');
             }
 
-            // 2. Lấy dữ liệu phiên bản cận kề trước lần sửa cuối (Trạng thái N-1)
             let penultimateContent = "";
             const penultimateShadow = penultimateShadowRegistry.shadows.get(originalPath);
             if (penultimateShadow && penultimateShadow.hadOriginal && fs.existsSync(penultimateShadow.shadowPath)) {
                 penultimateContent = fs.readFileSync(penultimateShadow.shadowPath, 'utf8');
             } else {
-                penultimateContent = oldContent; // Fallback nếu chưa có ghi nhận trước đó
+                penultimateContent = oldContent;
             }
 
             let newContent = "";
@@ -114,8 +115,8 @@ router.get('/shadow-changes', (req, res) => {
                 newContent = fs.readFileSync(originalPath, 'utf8');
             }
 
-            const diffResult = computeLineDiff(oldContent, newContent); // Lũy kế
-            const latestDiffResult = computeLineDiff(penultimateContent, newContent); // Cận kề gần nhất
+            const diffResult = computeLineDiff(oldContent, newContent);
+            const latestDiffResult = computeLineDiff(penultimateContent, newContent);
             const relativePath = path.relative(projectRoot, originalPath).replace(/\\/g, '/');
 
             changes.push({
@@ -125,7 +126,6 @@ router.get('/shadow-changes', (req, res) => {
                 additions: diffResult.additions,
                 deletions: diffResult.deletions,
                 diff: diffResult.diff,
-                // Dữ liệu lượt sửa đổi gần nhất
                 latest_additions: latestDiffResult.additions,
                 latest_deletions: latestDiffResult.deletions,
                 latest_diff: latestDiffResult.diff
@@ -136,6 +136,7 @@ router.get('/shadow-changes', (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
+
 // POST: Khôi phục (Rollback) tệp nguồn từ Shadow Files
 router.post('/shadow-changes/rollback', (req, res) => {
     try {
@@ -167,6 +168,7 @@ router.post('/shadow-changes/rollback', (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
+
 // Telemetry endpoint
 router.get('/telemetry', (req, res) => {
     const report = telemetry.getToolReliabilityReport();
@@ -183,29 +185,7 @@ router.get('/code-changes', (req, res) => {
     }
 });
 
-// Trả về danh sách sandbox trống để giữ giao diện UI không bị crash
-router.get('/sandboxes', (req, res) => {
-    res.json({
-        success: true,
-        sandboxes: [],
-        active_workspace: globalThis.activeWorkspace,
-        is_isolated: false
-    });
-});
-
-router.post('/sandboxes/accept', (req, res) => {
-    res.status(400).json({ success: false, error: "Chế độ Git Sandbox đã bị gỡ bỏ." });
-});
-
-router.post('/sandboxes/reject', (req, res) => {
-    res.status(400).json({ success: false, error: "Chế độ Git Sandbox đã bị gỡ bỏ." });
-});
-
-router.post('/sandboxes/create', (req, res) => {
-    res.status(400).json({ success: false, error: "Chế độ Git Sandbox đã bị gỡ bỏ." });
-});
-
-// Memories endpoint - Liên kết thực tế đến mock database
+// Memories endpoint - Liên kết thực tế đến database
 router.get('/memories', (req, res) => {
     try {
         const memories = db.prepare('SELECT * FROM memories').all() || [];
@@ -423,7 +403,6 @@ router.post('/permission/respond', async (req, res) => {
         const resolve = agentService.pendingPermissions.get(id);
         agentService.pendingPermissions.delete(id);
 
-        // --- THÊM DÒNG NÀY ---
         agentService.setActivePermissionData(null);
 
         const finalResponse = (typeof response === 'string' && response.trim().startsWith('{'))
@@ -436,6 +415,7 @@ router.post('/permission/respond', async (req, res) => {
         res.status(404).json({ error: 'Phiên yêu cầu cấp quyền không tồn tại hoặc đã hết hạn.' });
     }
 });
+
 // GET: Lấy thông tin yêu cầu phê duyệt đang chờ hoạt động gần nhất
 router.get('/permission/active', (req, res) => {
     import('../services/agentService.js').then((service) => {
@@ -444,6 +424,7 @@ router.get('/permission/active', (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     });
 });
+
 router.delete('/pipeline-state', (req, res) => {
     try {
         db.prepare("DELETE FROM pipelines WHERE id = 'CURRENT'").run();
@@ -486,8 +467,8 @@ router.get('/active-workspace', (req, res) => {
     try {
         const pipelineRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
         const providerName = globalThis.activeProvider ? (globalThis.activeProvider.getDisplayName?.() || globalThis.activeProvider.name) : 'None';
-        const providerKey = globalThis.providerConfig?.activeProvider || 'none';
         const modelName = globalThis.activeProvider?.model || 'unknown';
+        const providerKey = globalThis.providerConfig?.activeProvider || 'unknown';
 
         let pipeline = null;
         let states = [];
@@ -496,36 +477,33 @@ router.get('/active-workspace', (req, res) => {
             states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
         }
 
-        let orchestratorState = 'idle';
-        let llmState = 'idle';
-        let validatorState = 'idle';
-        let criticState = 'idle';
-        let activeTaskDescription = '';
-        let currentStepKey = '';
+        const harnessName = pipeline?.harness_type || 'developer_workflow';
+        const rawConfig = harnessRegistry.getRawConfig(harnessName);
 
-        const runningStep = states.find(s => s.state === 'RUNNING');
-        const validatingStep = states.find(s => s.state === 'VALIDATING');
-        const blockedStep = states.find(s => s.state === 'BLOCKED' || s.state === 'FAILED');
+        const dynamicAgents = rawConfig ? Object.entries(rawConfig.nodes).map(([nodeName, nodeVal]) => {
+            const dbState = states.find(s => s.step_key === nodeName);
+            return {
+                id: nodeName,
+                name: nodeName.toUpperCase(),
+                type: nodeVal.type === 'validator' ? 'worker' : 'specialist',
+                provider: 'Harness Node',
+                model: nodeVal.type === 'validator' ? 'Compiler Engine' : modelName,
+                tools: nodeVal.tools || [],
+                toolCalls: [],
+                status: {
+                    state: dbState ? dbState.state.toLowerCase() : 'idle',
+                    currentTask: dbState && dbState.state === 'RUNNING' ? `Thực thi tác vụ ${nodeName}` : undefined,
+                    progress: dbState && dbState.state === 'RUNNING' ? 50 : 0
+                }
+            };
+        }) : [];
 
-        if (runningStep) {
-            orchestratorState = 'idle';
-            llmState = 'running';
-            currentStepKey = runningStep.step_key;
-            const stepObj = pipeline?.stages.flatMap(st => st.steps).find(s => s.step_key === runningStep.step_key);
-            activeTaskDescription = stepObj ? stepObj.task : '';
-        } else if (validatingStep) {
-            orchestratorState = 'idle';
-            llmState = 'waiting';
-            validatorState = 'running';
-            currentStepKey = validatingStep.step_key;
-            const stepObj = pipeline?.stages.flatMap(st => st.steps).find(s => s.step_key === validatingStep.step_key);
-            activeTaskDescription = stepObj ? stepObj.task : '';
-        } else if (blockedStep) {
-            orchestratorState = 'waiting';
-            criticState = 'running';
-        } else if (pipeline && pipeline.status === 'IN_PROGRESS') {
-            orchestratorState = 'running';
-        }
+        const runningState = states.find(s => s.state === 'RUNNING');
+        const activeTask = runningState ? {
+            step_key: runningState.step_key,
+            description: `Thực thi trạng thái node ${runningState.step_key}`,
+            tool: 'Harness Node'
+        } : null;
 
         res.json({
             success: true,
@@ -534,74 +512,25 @@ router.get('/active-workspace', (req, res) => {
                 name: providerName,
                 model: modelName
             },
-            agents: [
-                {
-                    id: 'orchestrator',
-                    name: 'Lead Technical Architect',
-                    type: 'orchestrator',
-                    provider: 'System Host',
-                    model: 'Master Engine',
-                    tools: ['create_pipeline_plan', 'create_pipeline_plan_from_spec', 'update_pipeline_status'],
-                    toolCalls: [],
-                    status: {
-                        state: orchestratorState,
-                        currentTask: orchestratorState === 'running' ? 'Planning next Stage...' : (orchestratorState === 'waiting' ? 'Waiting for human feedback...' : 'Delegating tasks'),
-                        progress: orchestratorState === 'running' ? 50 : 0,
-                        lastUpdate: Date.now()
+            agents: dynamicAgents,
+            pipeline: {
+                pipeline_name: rawConfig?.description || "Harness Graph Execution",
+                status: pipeline?.status || "PENDING",
+                stages: [
+                    {
+                        name: "Harness Flow Checkpoint",
+                        status: pipeline?.status || "PENDING",
+                        steps: states.map(s => ({
+                            step_key: s.step_key,
+                            task: `Thực thi trạng thái node ${s.step_key}`,
+                            tool: 'Harness Node'
+                        }))
                     }
-                },
-                {
-                    id: 'llm_worker',
-                    name: providerName,
-                    type: 'specialist',
-                    provider: providerKey,
-                    model: modelName,
-                    tools: ['read_file', 'write_file', 'replace_content_safe', 'execute_terminal_command'],
-                    toolCalls: [],
-                    status: {
-                        state: llmState,
-                        currentTask: llmState === 'running' ? activeTaskDescription : undefined,
-                        progress: llmState === 'running' ? 50 : 0,
-                        lastUpdate: Date.now()
-                    }
-                },
-                {
-                    id: 'validator',
-                    name: 'Syntax & Logic Validator',
-                    type: 'worker',
-                    provider: 'Local Compiler',
-                    model: 'PathGuard & AST',
-                    tools: ['npx tsc', 'syntax_validator'],
-                    toolCalls: [],
-                    status: {
-                        state: validatorState,
-                        currentTask: validatorState === 'running' ? 'Compiling & checking Logic...' : undefined,
-                        progress: validatorState === 'running' ? 50 : 0,
-                        lastUpdate: Date.now()
-                    }
-                },
-                {
-                    id: 'critic',
-                    name: 'Quality Critic Agent',
-                    type: 'worker',
-                    provider: 'Self-Learning System',
-                    model: 'Reflection Engine',
-                    tools: ['memorize_lesson', 'memorize_rule'],
-                    toolCalls: [],
-                    status: {
-                        state: criticState,
-                        currentTask: criticState === 'running' ? 'Analyzing failure logs...' : undefined,
-                        progress: criticState === 'running' ? 50 : 0,
-                        lastUpdate: Date.now()
-                    }
-                }
-            ],
-            pipeline,
+                ]
+            },
             states,
-            activeTask: {
-                step_key: currentStepKey,
-                description: activeTaskDescription
-            }
+            activeTask,
+            harness_config: rawConfig
         });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
@@ -614,11 +543,7 @@ router.get('/memories/graph', (req, res) => {
         const memories = db.prepare('SELECT * FROM memories').all() || [];
         const edges = db.prepare('SELECT * FROM memory_edges').all() || [];
 
-        // 1. Tạo một tập hợp (Set) chứa các ID tệp bộ nhớ thực sự đang tồn tại
         const validIds = new Set(memories.map(m => String(m.id)));
-
-        // 2. CHẤT LƯỢNG LỌC: Chỉ giữ lại các liên kết nối giữa 2 bộ nhớ thực tế tồn tại
-        // Lọc sạch toàn bộ các liên kết tạm của step_key và các ID ma đã bị xóa
         const filteredEdges = edges.filter(e =>
             validIds.has(String(e.source_id)) && validIds.has(String(e.target_id))
         );
@@ -641,7 +566,6 @@ router.get('/memories/graph', (req, res) => {
                 mermaidCode += `  ${sanitizeId(m.id)}["${cleanLabel} (${Number(m.trust_score ?? 0.7).toFixed(2)})"]:::${type}\n`;
             });
 
-            // Sử dụng danh sách filteredEdges đã được lọc sạch để dựng sơ đồ
             filteredEdges.forEach(e => {
                 const isPruned = e.type === 'feedback_pruned';
                 const connector = isPruned ? " -.-x " : " --> ";
@@ -778,5 +702,192 @@ function getLatestSession(sessionDir) {
     }
     return { file: latestFile, messages, meta, ageMinutes: Math.round(ageMinutes) };
 }
+
+// API: Lưu cấu hình Harness mới được tạo từ giao diện UI của Client
+router.post('/harnesses', (req, res) => {
+    try {
+        const config = req.body;
+        if (!config.harness_name) {
+            return res.status(400).json({ success: false, error: "Thiếu thuộc tính tên cấu hình (harness_name)" });
+        }
+
+        const safeName = config.harness_name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const harnessesDir = path.join(projectRoot, 'harnesses');
+
+        if (!fs.existsSync(harnessesDir)) {
+            fs.mkdirSync(harnessesDir, { recursive: true });
+        }
+
+        const filePath = path.join(harnessesDir, `${safeName}.json`);
+        fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf8');
+
+        console.log(chalk.green(`[Harness Registry] 📥 Đã lưu và Hot-Deploy thành công Harness từ UI: ${safeName}.json`));
+        res.json({
+            success: true,
+            message: `Lưu và kích hoạt nóng quy trình '${config.harness_name}' thành công!`,
+            safe_name: safeName
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+router.get('/harnesses', (req, res) => {
+    try {
+        const harnessesDir = path.join(projectRoot, 'harnesses');
+        if (!fs.existsSync(harnessesDir)) {
+            return res.json({ success: true, harnesses: [] });
+        }
+
+        const files = fs.readdirSync(harnessesDir).filter(f => f.endsWith('.json'));
+        const list = files.map(file => {
+            const content = fs.readFileSync(path.join(harnessesDir, file), 'utf8');
+            const config = JSON.parse(content);
+            return {
+                id: path.basename(file, '.json'),
+                harness_name: config.harness_name || file,
+                description: config.description || "Quy trình thiết kế chưa có mô tả kỹ thuật.",
+                initial_node: config.initial_node || "planner",
+                nodes_count: Object.keys(config.nodes || {}).length
+            };
+        });
+
+        res.json({ success: true, harnesses: list });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// API: Khởi tạo Pipeline và kích hoạt chạy ngầm đồ thị FSM được chọn
+router.post('/harnesses/run', async (req, res) => {
+    const { harness_id, task } = req.body;
+    if (!harness_id) {
+        return res.status(400).json({ success: false, error: "Thiếu thuộc tính định danh harness_id" });
+    }
+
+    try {
+        const harnessesDir = path.join(projectRoot, 'harnesses');
+        const filePath = path.join(harnessesDir, `${harness_id}.json`);
+
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ success: false, error: "Không tìm thấy sơ đồ cấu hình yêu cầu." });
+        }
+
+        const config = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+        const memoryDir = path.join(projectRoot, '.agent_memory');
+        const stateDir = path.join(memoryDir, 'state');
+        const contractsDir = path.join(stateDir, 'contracts');
+        const artifactsDir = path.join(stateDir, 'artifacts');
+
+        if (!fs.existsSync(contractsDir)) fs.mkdirSync(contractsDir, { recursive: true });
+        if (!fs.existsSync(artifactsDir)) fs.mkdirSync(artifactsDir, { recursive: true });
+
+        config.stages = [
+            {
+                name: "Thực thi đồ thị FSM",
+                status: "IN_PROGRESS",
+                steps: Object.keys(config.nodes).map(node => ({
+                    step_key: node,
+                    task: `Thực thi trạng thái node ${node}`,
+                    tool: "Harness Programmatic Node"
+                }))
+            }
+        ];
+
+        config.stages[0].steps.forEach(step => {
+            step.status = "PENDING";
+            step.parallel_group = null;
+            step.depends_on = [];
+        });
+
+        db.prepare(`INSERT OR REPLACE INTO pipelines (id, name, status, data) VALUES (?, ?, ?, ?)`)
+            .run('CURRENT', config.harness_name, 'IN_PROGRESS', JSON.stringify({ ...config, harness_type: harness_id }));
+
+        const stateStmt = db.prepare(`INSERT OR REPLACE INTO agent_states (pipeline_id, step_key, state, retry_count, error_history, updated_at) VALUES (?, ?, ?, ?, ?, ?)`);
+        const now = new Date().toISOString();
+
+        for (const nodeName of Object.keys(config.nodes)) {
+            stateStmt.run('CURRENT', nodeName, 'PENDING', 0, '[]', now);
+
+            const contract = {
+                step_key: nodeName,
+                task_description: `Thực thi node ${nodeName}`,
+                target_tool: "Harness Node",
+                parallel_group: null,
+                dependencies: [],
+                budget: { max_retries: 3, allocated_tokens: 8192 },
+                completion_criteria: { type: "llm_check", value: `Verify ${nodeName}` },
+                output_artifact_path: path.join(artifactsDir, `${nodeName}_artifact.json`).replace(/\\/g, '/')
+            };
+            fs.writeFileSync(path.join(contractsDir, `${nodeName}.json`), JSON.stringify(contract, null, 2), 'utf8');
+        }
+
+        if (task) {
+            globalThis.persistentGoal = task;
+        }
+
+        res.json({
+            success: true,
+            message: `Nạp sơ đồ '${config.harness_name}' thành công! Trình chạy ngầm đang bắt đầu khởi chạy...`
+        });
+
+        (async () => {
+            const { default: WorkflowEngine } = await import('../workflow_engine.js');
+            const { SKILL_REGISTRY } = await import('../services/skillLoader.js');
+            const { executeSkillForProvider } = await import('../services/agentService.js');
+
+            const executeSkillFn = async (name, args) => {
+                return await executeSkillForProvider(name, args, globalThis.activeProvider, null);
+            };
+
+            const engine = new WorkflowEngine(globalThis.activeProvider, SKILL_REGISTRY, executeSkillFn, task || "Thực hiện tác vụ thiết kế");
+            await engine.run();
+        })();
+
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// API: Xóa vĩnh viễn tệp tin cấu hình sơ đồ FSM khỏi thư mục harnesses/
+router.delete('/harnesses/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!id) {
+            return res.status(400).json({ success: false, error: "Thiếu mã định danh sơ đồ (harness_id)" });
+        }
+
+        const safeName = id.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const filePath = path.join(projectRoot, 'harnesses', `${safeName}.json`);
+
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            console.log(chalk.red(`[Harness Registry] 🗑️ Đã xóa tệp cấu hình FSM từ UI: ${safeName}.json`));
+            return res.json({ success: true, message: `Đã xóa thành công sơ đồ quy trình '${id}'!` });
+        }
+
+        return res.status(404).json({ success: false, error: `Không tìm thấy cấu hình sơ đồ mang khóa '${id}'` });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+router.get('/harnesses/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        const safeName = id.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const filePath = path.join(projectRoot, 'harnesses', `${safeName}.json`);
+
+        if (fs.existsSync(filePath)) {
+            const content = fs.readFileSync(filePath, 'utf8');
+            const config = JSON.parse(content);
+            return res.json({ success: true, config });
+        }
+        return res.status(404).json({ success: false, error: `Không tìm thấy cấu hình sơ đồ mang khóa '${id}'` });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 
 export default router;
