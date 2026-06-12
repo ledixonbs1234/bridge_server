@@ -128,26 +128,39 @@ router.post('/chat', async (req, res) => {
             }
             globalThis.persistentGoal = null;
 
-            // --- THÊM ĐOẠN NÀY ---
             const agentService = await import('../services/agentService.js');
             agentService.setActivePermissionData(null);
             agentService.pendingPermissions.clear();
-        // ---------------------
 
             try {
                 const dbModule = await import('../database.js');
                 const db = dbModule.default;
-                db.prepare("DELETE FROM pipelines WHERE id = 'CURRENT'").run();
-                db.prepare("DELETE FROM agent_states WHERE pipeline_id = 'CURRENT'").run();
+
+                // Kiểm tra xem hiện tại có sơ đồ nào đang hiển thị hay không
+                const pipelineRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
+                if (pipelineRow && pipelineRow.data) {
+                    // Nếu có, đưa trạng thái sơ đồ về PENDING (Không xóa sơ đồ khỏi màn hình)
+                    const pipeline = JSON.parse(pipelineRow.data);
+                    pipeline.status = 'PENDING';
+                    db.prepare(`UPDATE pipelines SET status = ?, data = ? WHERE id = 'CURRENT'`)
+                        .run('PENDING', JSON.stringify(pipeline));
+
+                    // Reset toàn bộ trạng thái chạy của các Node về PENDING (màu xám / IDLE)
+                    db.prepare(`UPDATE agent_states SET state = 'PENDING', retry_count = 0, error_history = '[]' WHERE pipeline_id = 'CURRENT'`).run();
+                    console.log(chalk.green('[Database] Đã làm mới trạng thái các Node về PENDING.'));
+                } else {
+                    // Nếu không có sơ đồ nào hoạt động, tiến hành dọn dẹp trống bình thường
+                    db.prepare("DELETE FROM pipelines WHERE id = 'CURRENT'").run();
+                    db.prepare("DELETE FROM agent_states WHERE pipeline_id = 'CURRENT'").run();
+                }
 
                 const stateDir = path.join(projectRoot, '.agent_memory', 'state');
                 const charterPath = path.join(stateDir, 'runtime_charter.json');
                 if (fs.existsSync(charterPath)) {
                     fs.unlinkSync(charterPath);
                 }
-                console.log(chalk.green('[Database] Đã dọn dẹp cấu trúc Pipeline cũ khỏi SQLite.'));
             } catch (dbErr) {
-                console.error("Lỗi dọn dẹp SQLite Pipeline:", dbErr.message);
+                console.error("Lỗi làm mới SQLite Pipeline:", dbErr.message);
             }
 
             const respMsg = "✅ Đã xóa bộ nhớ và pipeline hiện hành. Phiên chat tiếp theo sẽ bắt đầu một cuộc hội thoại mới!";

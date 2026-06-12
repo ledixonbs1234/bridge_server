@@ -21,7 +21,8 @@ let dbData = {
   agent_states: [],
   traces: [],
   trace_spans: [],
-  tool_telemetry: []
+  tool_telemetry: [],
+  agent_templates: [] // Thêm thực thể lưu trữ Agent mẫu
 };
 
 // Đếm ID tự tăng
@@ -32,7 +33,8 @@ let autoIncrements = {
   agent_states: 1,
   traces: 1,
   trace_spans: 1,
-  tool_telemetry: 1
+  tool_telemetry: 1,
+  agent_templates: 1 // Khởi tạo ID tự tăng cho template
 };
 
 function loadDb() {
@@ -42,6 +44,7 @@ function loadDb() {
       dbData = { ...dbData, ...loaded };
       if (!dbData.memory_edges) dbData.memory_edges = [];
       if (!dbData.memories) dbData.memories = [];
+      if (!dbData.agent_templates) dbData.agent_templates = [];
 
       // TỰ ĐỘNG DỌN DẸP: Lọc bỏ toàn bộ các bản ghi bộ nhớ bị lỗi/rỗng trường thông tin chính
       dbData.memories = dbData.memories.filter(m => {
@@ -258,6 +261,24 @@ const db = {
             }
           }
 
+          // SQLite Simulator: Xử lý xóa mẫu Agent
+          if (sqlLower.startsWith('delete from agent_templates')) {
+            const whereMatch = sqlNorm.match(/where\s+(.+)$/i);
+            if (whereMatch) {
+              const { filter } = parseWhere(whereMatch[1], params, 0);
+              const initialLength = dbData.agent_templates.length;
+              dbData.agent_templates = dbData.agent_templates.filter(row => !filter(row));
+              const changes = initialLength - dbData.agent_templates.length;
+              if (changes > 0) saveDb();
+              return { changes };
+            } else {
+              const changes = dbData.agent_templates.length;
+              dbData.agent_templates = [];
+              if (changes > 0) saveDb();
+              return { changes };
+            }
+          }
+
           if (sqlLower.includes('insert or replace into pipelines')) {
             const [id, name, status, data] = params;
             const existingIdx = dbData.pipelines.findIndex(p => p.id === id);
@@ -290,6 +311,26 @@ const db = {
             } else {
               record.id = autoIncrements.agent_states++;
               dbData.agent_states.push(record);
+            }
+            saveDb();
+            return { changes: 1 };
+          }
+
+          // SQLite Simulator: Xử lý thêm/ghi đè mẫu Agent
+          if (sqlLower.includes('insert or replace into agent_templates')) {
+            const [name, system_prompt, tools, model_mode] = params;
+            const existingIdx = dbData.agent_templates.findIndex(t => t.name.toLowerCase() === name.toLowerCase());
+            const record = {
+              name, system_prompt,
+              tools: typeof tools === 'string' ? JSON.parse(tools) : tools,
+              model_mode,
+              updated_at: new Date().toISOString()
+            };
+            if (existingIdx >= 0) {
+              dbData.agent_templates[existingIdx] = { ...dbData.agent_templates[existingIdx], ...record, id: dbData.agent_templates[existingIdx].id };
+            } else {
+              record.id = autoIncrements.agent_templates++;
+              dbData.agent_templates.push(record);
             }
             saveDb();
             return { changes: 1 };
@@ -496,6 +537,11 @@ const db = {
         try {
           if (sqlLower.includes('from memory_edges')) {
             return dbData.memory_edges;
+          }
+
+          // SQLite Simulator: Truy xuất tất cả Agent templates
+          if (sqlLower.includes('from agent_templates')) {
+            return dbData.agent_templates;
           }
 
           if (sqlLower.includes('from traces') && sqlLower.includes('order by') && sqlLower.includes('limit')) {

@@ -849,7 +849,64 @@ router.post('/harnesses/run', async (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
+// API: Chỉ kích hoạt sơ đồ FSM được chọn lên Canvas và lưu bối cảnh vào SQLite (Không chạy tác vụ ngầm)
+router.post('/harnesses/activate', (req, res) => {
+    const { harness_id } = req.body;
+    if (!harness_id) {
+        return res.status(400).json({ success: false, error: "Thiếu mã định danh sơ đồ (harness_id)" });
+    }
 
+    try {
+        const harnessesDir = path.join(projectRoot, 'harnesses');
+        const filePath = path.join(harnessesDir, `${harness_id}.json`);
+
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ success: false, error: "Không tìm thấy sơ đồ cấu hình yêu cầu." });
+        }
+
+        const config = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+        config.stages = [
+            {
+                name: "Thực thi đồ thị FSM",
+                status: "PENDING",
+                steps: Object.keys(config.nodes).map(node => ({
+                    step_key: node,
+                    task: `Thực thi trạng thái node ${node}`,
+                    tool: "Harness Programmatic Node"
+                }))
+            }
+        ];
+
+        config.stages[0].steps.forEach(step => {
+            step.status = "PENDING";
+            step.parallel_group = null;
+            step.depends_on = [];
+        });
+
+        // Đánh dấu trạng thái ban đầu là PENDING (chờ lệnh chat kích hoạt)
+        db.prepare(`INSERT OR REPLACE INTO pipelines (id, name, status, data) VALUES (?, ?, ?, ?)`)
+            .run('CURRENT', config.harness_name, 'PENDING', JSON.stringify({ ...config, harness_type: harness_id }));
+
+        // Xóa sạch trạng thái cũ của các bước
+        db.prepare("DELETE FROM agent_states WHERE pipeline_id = 'CURRENT'").run();
+
+        const stateStmt = db.prepare(`INSERT OR REPLACE INTO agent_states (pipeline_id, step_key, state, retry_count, error_history, updated_at) VALUES (?, ?, ?, ?, ?, ?)`);
+        const now = new Date().toISOString();
+
+        for (const nodeName of Object.keys(config.nodes)) {
+            stateStmt.run('CURRENT', nodeName, 'PENDING', 0, '[]', now);
+        }
+
+        res.json({
+            success: true,
+            message: `Kích hoạt sơ đồ '${config.harness_name}' thành công!`
+        });
+
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 // API: Xóa vĩnh viễn tệp tin cấu hình sơ đồ FSM khỏi thư mục harnesses/
 router.delete('/harnesses/:id', (req, res) => {
     try {
@@ -889,5 +946,47 @@ router.get('/harnesses/:id', (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
+// =================================================================
+// 🧠 AGENT TEMPLATE LIBRARY ENDPOINTS (PROPOSER PERSONA LIBRARY)
+// =================================================================
 
+// GET: Lấy danh sách các Agent mẫu đã lưu
+router.get('/agent-templates', (req, res) => {
+    try {
+        const templates = db.prepare("SELECT * FROM agent_templates").all();
+        res.json({ success: true, templates });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// POST: Lưu hoặc cập nhật cấu hình một Agent mẫu
+router.post('/agent-templates', (req, res) => {
+    try {
+        const { name, system_prompt, tools, model_mode } = req.body;
+        if (!name) {
+            return res.status(400).json({ success: false, error: "Thiếu tên Agent mẫu (name)" });
+        }
+
+        db.prepare(`
+            INSERT OR REPLACE INTO agent_templates (name, system_prompt, tools, model_mode)
+            VALUES (?, ?, ?, ?)
+        `).run(name, system_prompt, JSON.stringify(tools || []), model_mode || "fast");
+
+        res.json({ success: true, message: `Lưu mẫu Agent "${name}" thành công!` });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// DELETE: Xóa một Agent mẫu theo ID
+router.delete('/agent-templates/:id', (req, res) => {
+    try {
+        const { id } = req.params;
+        db.prepare("DELETE FROM agent_templates WHERE id = ?").run(parseInt(id, 10));
+        res.json({ success: true, message: "Đã xóa mẫu Agent thành công!" });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 export default router;
