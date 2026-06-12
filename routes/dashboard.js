@@ -18,6 +18,18 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
 const router = express.Router();
 
+// Định nghĩa hàm toSafeId để xử lý chuẩn hóa tên tiếng Việt trên backend
+export function toSafeId(text) {
+    if (!text) return "";
+    return text
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "") // Loại bỏ các dấu thanh tiếng Việt
+        .replace(/[đĐ]/g, m => m === 'đ' ? 'd' : 'D') // Chuyển đ, Đ -> d, D
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '_') // Thay thế ký tự đặc biệt còn lại thành _
+        .replace(/_+/g, '_') // Gom các dấu gạch dưới lặp lại
+        .trim();
+}
 /**
  * Thuật toán tính toán Line-by-Line Diff (additions/deletions) không phụ thuộc thư viện ngoài.
  * Sử dụng giải thuật Longest Common Subsequence (LCS) với chốt chặn an toàn cho tệp lớn.
@@ -54,6 +66,7 @@ function computeLineDiff(oldStr, newStr) {
         }
         return { additions, deletions, diff: diff.join('\n') };
     }
+
 
     const dp = Array(oldLines.length + 1).fill(null).map(() => Array(newLines.length + 1).fill(0));
     for (let i = 1; i <= oldLines.length; i++) {
@@ -711,7 +724,7 @@ router.post('/harnesses', (req, res) => {
             return res.status(400).json({ success: false, error: "Thiếu thuộc tính tên cấu hình (harness_name)" });
         }
 
-        const safeName = config.harness_name.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const safeName = toSafeId(config.harness_name);
         const harnessesDir = path.join(projectRoot, 'harnesses');
 
         if (!fs.existsSync(harnessesDir)) {
@@ -915,7 +928,7 @@ router.delete('/harnesses/:id', (req, res) => {
             return res.status(400).json({ success: false, error: "Thiếu mã định danh sơ đồ (harness_id)" });
         }
 
-        const safeName = id.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const safeName = toSafeId(id);
         const filePath = path.join(projectRoot, 'harnesses', `${safeName}.json`);
 
         if (fs.existsSync(filePath)) {
@@ -933,7 +946,7 @@ router.delete('/harnesses/:id', (req, res) => {
 router.get('/harnesses/:id', (req, res) => {
     try {
         const { id } = req.params;
-        const safeName = id.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+        const safeName = toSafeId(id);
         const filePath = path.join(projectRoot, 'harnesses', `${safeName}.json`);
 
         if (fs.existsSync(filePath)) {

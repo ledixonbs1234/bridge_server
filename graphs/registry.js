@@ -34,7 +34,7 @@ class HarnessRegistry {
             }
         });
     }
-    
+
 
     loadAllHarnesses() {
         const files = fs.readdirSync(harnessesDir).filter(f => f.endsWith('.json'));
@@ -48,7 +48,9 @@ class HarnessRegistry {
             const filePath = path.join(harnessesDir, filename);
             const content = fs.readFileSync(filePath, 'utf8');
             const config = JSON.parse(content);
-            const name = config.harness_name || path.basename(filename, '.json');
+
+            // SỬA ĐỔI QUAN TRỌNG: Đồng bộ khóa ID sơ đồ tìm kiếm bám sát theo tên tệp vật lý (safe ID)
+            const name = path.basename(filename, '.json');
 
             const compiled = DeclarativeGraphCompiler.compile(config);
 
@@ -83,7 +85,6 @@ class HarnessRegistry {
         if (rawConfig) {
             this.rawConfigs.set(name, rawConfig);
         } else {
-            // Tự động chuyển đổi các Node của đồ thị code sang cấu trúc JSON giả lập để client vẽ graph
             const nodes = {};
             for (const [nodeName] of compiledGraph.nodes.entries()) {
                 const isValidator = nodeName.toLowerCase().includes('validator');

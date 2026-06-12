@@ -1,11 +1,14 @@
+// bridge_server/routes/agent.js
 import express from 'express';
 import chalk from 'chalk';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import db from '../database.js';
 import { getGitDiffStats } from '../utils/gitStats.js';
 import { switchProvider, getProviderConfig } from '../services/providerService.js';
 import { executeAgentTurn, activeWebSession, pendingPermissions } from '../services/agentService.js';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, '..');
@@ -26,7 +29,6 @@ function detectWorkspace(message) {
 }
 
 router.post('/chat', async (req, res) => {
-    // SỬA ĐỔI: Tiếp nhận thêm tham số 'mode' từ body
     const { message, stream, useReformulate, image, images, agent, model, headless, mode } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
 
@@ -57,11 +59,48 @@ router.post('/chat', async (req, res) => {
 
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Cache-Control', 'no-cache, no-transform'); // Ngăn chặn nén đệm của Vite/Middleware
         res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no'); // Vô hiệu hóa bộ đệm của Nginx/Vite proxy
+        res.flushHeaders(); // Gửi headers ngay lập tức để thiết lập kết nối SSE
         activeWebSession.res = res;
     } else {
         activeWebSession.res = null;
+    }
+    // 1. Tự động chuyển đổi trạng thái của Node FSM hiện hành sang RUNNING trong cơ sở dữ liệu
+    let activeNodeName = null;
+    let pipelineRow = null;
+    try {
+        pipelineRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
+    } catch (dbErr) {
+        console.warn(`[Agent Route] Lỗi đọc SQLite Pipeline: ${dbErr.message}`);
+    }
+
+    if (pipelineRow && pipelineRow.data) {
+        try {
+            const pipeline = JSON.parse(pipelineRow.data);
+            if (pipeline.status === 'PENDING' || pipeline.status === 'DONE' || pipeline.status === 'FAILED') {
+                pipeline.status = 'IN_PROGRESS';
+                db.prepare(`UPDATE pipelines SET status = ?, data = ? WHERE id = 'CURRENT'`)
+                    .run('IN_PROGRESS', JSON.stringify(pipeline));
+            }
+
+            const states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
+            const runningNode = states.find(s => s.state === 'RUNNING');
+            if (runningNode) {
+                activeNodeName = runningNode.step_key;
+            } else {
+                const firstPending = states.find(s => s.state === 'PENDING');
+                activeNodeName = firstPending ? firstPending.step_key : pipeline.initial_node;
+            }
+
+            if (activeNodeName) {
+                db.prepare(`UPDATE agent_states SET state = 'RUNNING', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
+                    .run(new Date().toISOString(), activeNodeName);
+            }
+        } catch (dbErr) {
+            console.warn(`[Agent Route] Lỗi cập nhật trạng thái RUNNING: ${dbErr.message}`);
+        }
     }
 
     try {
@@ -136,20 +175,16 @@ router.post('/chat', async (req, res) => {
                 const dbModule = await import('../database.js');
                 const db = dbModule.default;
 
-                // Kiểm tra xem hiện tại có sơ đồ nào đang hiển thị hay không
                 const pipelineRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
                 if (pipelineRow && pipelineRow.data) {
-                    // Nếu có, đưa trạng thái sơ đồ về PENDING (Không xóa sơ đồ khỏi màn hình)
                     const pipeline = JSON.parse(pipelineRow.data);
                     pipeline.status = 'PENDING';
                     db.prepare(`UPDATE pipelines SET status = ?, data = ? WHERE id = 'CURRENT'`)
                         .run('PENDING', JSON.stringify(pipeline));
 
-                    // Reset toàn bộ trạng thái chạy của các Node về PENDING (màu xám / IDLE)
                     db.prepare(`UPDATE agent_states SET state = 'PENDING', retry_count = 0, error_history = '[]' WHERE pipeline_id = 'CURRENT'`).run();
                     console.log(chalk.green('[Database] Đã làm mới trạng thái các Node về PENDING.'));
                 } else {
-                    // Nếu không có sơ đồ nào hoạt động, tiến hành dọn dẹp trống bình thường
                     db.prepare("DELETE FROM pipelines WHERE id = 'CURRENT'").run();
                     db.prepare("DELETE FROM agent_states WHERE pipeline_id = 'CURRENT'").run();
                 }
@@ -179,7 +214,6 @@ router.post('/chat', async (req, res) => {
             globalThis.activeWebHistory = [];
         }
 
-        // SỬA ĐỔI: Truyền tham số 'mode' vào hàm executeAgentTurn
         const result = await executeAgentTurn({
             message,
             history: globalThis.activeWebHistory || [],
@@ -188,7 +222,7 @@ router.post('/chat', async (req, res) => {
             headless: !!headless,
             image,
             images: images || [],
-            mode: mode || 'default', // <--- Cập nhật dòng này
+            mode: mode || 'default',
             onChunk: stream ? (chunk) => {
                 if (typeof chunk === 'object' && chunk !== null) {
                     res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.text, usage: chunk.usage })}\n\n`);
@@ -229,7 +263,6 @@ router.post('/chat', async (req, res) => {
                 return new Promise((resolve) => {
                     pendingPermissions.set(permId, resolve);
 
-                    // --- THÊM DÒNG NÀY ---
                     agentService.setActivePermissionData({
                         id: permId,
                         query: query.replace(/\x1b\[[0-9;]*m/g, ''),
@@ -277,6 +310,28 @@ router.post('/chat', async (req, res) => {
         globalThis.activeWebHistory = result.history;
         globalThis.activeWebSessionFile = result.sessionFile;
 
+        // 2. Chuyển trạng thái Node hoàn thành sang DONE trong DB khi kết thúc phiên thành công
+        if (activeNodeName) {
+            try {
+                db.prepare(`UPDATE agent_states SET state = 'DONE', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
+                    .run(new Date().toISOString(), activeNodeName);
+
+                const allStates = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
+                const allDone = allStates.every(s => s.state === 'DONE');
+                if (allDone) {
+                    const pRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
+                    if (pRow && pRow.data) {
+                        const pipeline = JSON.parse(pRow.data);
+                        pipeline.status = 'DONE';
+                        db.prepare(`UPDATE pipelines SET status = ?, data = ? WHERE id = 'CURRENT'`)
+                            .run('DONE', JSON.stringify(pipeline));
+                    }
+                }
+            } catch (dbErr) {
+                console.warn(`[Agent Route] Lỗi cập nhật trạng thái DONE: ${dbErr.message}`);
+            }
+        }
+
         if (result.type === 'handover') {
             if (stream) {
                 res.write(`data: ${JSON.stringify({ type: 'system', content: "✅ Workflow Engine đã xử lý thành công toàn bộ Pipeline!" })}\n\n`);
@@ -300,6 +355,25 @@ router.post('/chat', async (req, res) => {
 
     } catch (err) {
         console.error(chalk.red(`[Web Terminal] ❌ Lỗi xử lý:`), err.message);
+
+        // 3. Chuyển trạng thái Node hoàn thành sang FAILED trong DB khi kết thúc phiên gặp sự cố
+        if (activeNodeName) {
+            try {
+                db.prepare(`UPDATE agent_states SET state = 'FAILED', error_history = ?, updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
+                    .run(JSON.stringify([err.message]), new Date().toISOString(), activeNodeName);
+
+                const pRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
+                if (pRow && pRow.data) {
+                    const pipeline = JSON.parse(pRow.data);
+                    pipeline.status = 'FAILED';
+                    db.prepare(`UPDATE pipelines SET status = ?, data = ? WHERE id = 'CURRENT'`)
+                        .run('FAILED', JSON.stringify(pipeline));
+                }
+            } catch (dbErr) {
+                console.warn(`[Agent Route] Lỗi cập nhật trạng thái FAILED: ${dbErr.message}`);
+            }
+        }
+
         if (stream) {
             res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
             res.end();
@@ -369,7 +443,7 @@ router.post('/v1/chat/completions', async (req, res) => {
     } catch (error) {
         console.error(chalk.red(`[Node] ❌ Lỗi xử lý:`), error.message);
         if (stream) {
-            res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[LỖI: ${error.message}]` }, finish_reason: "stop" }] })}\n\n`);
+            res.write(`data: ${JSON.stringify({ id: "chatcmpl-" + taskId, object: "chat.completion.chunk", choices: [{ delta: { content: `\n\n[LỖI HỆ THỐNG: ${error.message}]` }, finish_reason: "stop" }] })}\n\n`);
             res.write('data: [DONE]\n\n');
             res.end();
         } else {

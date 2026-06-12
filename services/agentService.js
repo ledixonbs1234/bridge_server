@@ -166,13 +166,14 @@ export async function executeAgentTurn({
         }
     };
 
+    let assistantMsgPlaceholder = null; // Đưa khai báo lên phạm vi ngoài
     let lastKnownUsage = null;
 
     const wrappedOnChunk = (chunk) => {
         let text = chunk;
         if (typeof chunk === 'object' && chunk !== null) {
             text = chunk.text;
-            if (chunk.usage) {
+            if (chunk.usage && assistantMsgPlaceholder) {
                 lastKnownUsage = chunk.usage;
                 assistantMsgPlaceholder.usage = chunk.usage;
             }
@@ -233,7 +234,7 @@ export async function executeAgentTurn({
         if (images && images.length > 0) userMsg.images = images;
         currentHistory.push(userMsg);
 
-        const assistantMsgPlaceholder = {
+        assistantMsgPlaceholder = {
             role: 'assistant',
             content: '',
             steps: serverSteps,

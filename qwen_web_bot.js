@@ -79,7 +79,7 @@ class QwenWebBot {
             return !!(document.querySelector('textarea.message-input-textarea') || document.querySelector('textarea'));
         }, { timeout: 10000 });
         await this.page.waitForTimeout(2000);
-        
+
 
         console.log("[Qwen Web] ✅ Đã vào được màn hình chat Qwen!");
         this.isReady = true;
@@ -105,6 +105,9 @@ class QwenWebBot {
 
         this.client.on('Network.dataReceived', ({ requestId, data }) => {
             if (this.activeRequestId === requestId && data) {
+                // --- THÊM DÒNG LOG NÀY ĐỂ XÁC NHẬN CÓ NHẬN ĐƯỢC CHUNK HAY KHÔNG ---
+                console.log(`[CDP DEBUG] [${new Date().toISOString()}] 📥 Nhận chunk thô từ Qwen!`);
+
                 const chunkText = Buffer.from(data, 'base64').toString('utf-8');
                 this.processStreamChunk(chunkText);
             }
@@ -161,7 +164,6 @@ class QwenWebBot {
                         if (delta.phase === 'answer' || !delta.phase) {
                             this.accumulatedAnswer += delta.content;
                             if (this.currentStreamCallback) {
-                                // Truyền thêm object nếu có dữ liệu usage
                                 if (parsed.usage) {
                                     this.currentStreamCallback({ text: delta.content, usage: parsed.usage });
                                 } else {

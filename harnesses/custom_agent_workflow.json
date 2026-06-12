@@ -1,6 +1,6 @@
 {
-  "harness_name": "empty_workflow1",
-  "description": "",
+  "harness_name": "custom_agent_workflow",
+  "description": "Mô tả quy trình tự động hóa...",
   "initial_node": "agent_start",
   "state_schema": {
     "task": "",

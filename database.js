@@ -569,7 +569,8 @@ const db = {
 
           if (sqlLower.includes('from agent_states') && sqlLower.includes('where pipeline_id')) {
             const [pipelineId] = params;
-            return dbData.agent_states.filter(s => s.pipeline_id === pipelineId);
+            const idToFilter = pipelineId || (sqlLower.includes("'current'") ? 'CURRENT' : undefined);
+            return dbData.agent_states.filter(s => s.pipeline_id === idToFilter);
           }
 
           if (sqlLower.includes('from memories')) {

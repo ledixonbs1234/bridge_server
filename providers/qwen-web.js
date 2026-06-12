@@ -6,6 +6,7 @@ class QwenWebProvider extends BaseProvider {
     constructor(config) {
         super(config);
         this.name = config.name || 'Qwen Web (CloakBrowser)';
+        this.model = config.model || 'qwen-plus'; // Khai báo rõ thuộc tính model tránh lỗi 'unknown'
         this.isExtensionBased = false;
         this.hasInitializedChat = false;
     }
@@ -15,8 +16,6 @@ class QwenWebProvider extends BaseProvider {
         console.log(`\n[Qwen Web] 🧹 Đã xóa trạng thái. Tin nhắn tiếp theo sẽ bắt đầu một phiên New Chat!`);
     }
 
-    // Thiết lập hướng dẫn gọi Tool bằng định dạng JSON
-    // Thiết lập hướng dẫn gọi Tool bằng định dạng JSON
     _buildToolInstructions(skillRegistry) {
         let toolText = "Bạn CÓ THỂ SỬ DỤNG CÁC CÔNG CỤ (TOOLS) sau đây để trợ giúp người dùng:\n";
         for (const [key, skill] of Object.entries(skillRegistry)) {
@@ -50,9 +49,9 @@ QUAN TRỌNG:
 
         await qwenBot.init(headless);
 
-        let bot = qwenBot;
+        let border = qwenBot;
         if (isWorker) {
-            bot = await qwenBot.getWorkerBot(workerType);
+            border = await qwenBot.getWorkerBot(workerType);
         }
 
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
@@ -62,7 +61,7 @@ QUAN TRỌNG:
         let finalPrompt = "";
 
         if (isFirstTurn && !isWorker) {
-            await bot.clickNewChat();
+            await border.clickNewChat();
             console.log(`[Qwen Web] 🆕 Bắt đầu phiên chat mới, đang thiết lập System Prompt & Tools...`);
             const toolInstructions = this._buildToolInstructions(skillRegistry);
             finalPrompt = `[SYSTEM INSTRUCTION]\n${systemPrompt}\n\n`;
@@ -79,18 +78,16 @@ QUAN TRỌNG:
         }
 
         const isThinkingMode = (mode === 'thinking');
-        // NÂNG CẤP: Truyền thêm mảng images
-        await bot.sendPrompt(finalPrompt, isThinkingMode, image, images);
+        await border.sendPrompt(finalPrompt, isThinkingMode, image, images);
 
         let stepCount = 0;
 
         while (stepCount <= maxSteps) {
             stepCount++;
 
-            const response = await bot.waitForResponse(onStreamChunk);
+            const response = await border.waitForResponse(onStreamChunk);
             const content = response.text;
 
-            // Tìm kiếm khối lệnh gọi công cụ dạng JSON
             const jsonBlockRegex = /```json\s*([\s\S]*?)\s*```/i;
             const jsonMatch = content.match(jsonBlockRegex);
             let parsedTool = null;
@@ -109,7 +106,6 @@ QUAN TRỌNG:
                 }
             }
 
-            // Fallback: Tìm ngoặc nhọn đầu tiên và cuối cùng nếu không tìm thấy block markdown ```json
             if (!isToolCall) {
                 const firstBrace = content.indexOf('{');
                 const lastBrace = content.lastIndexOf('}');
@@ -122,9 +118,7 @@ QUAN TRỌNG:
                             parsedTool = parsed;
                             isToolCall = true;
                         }
-                    } catch (e) {
-                        // Bỏ qua lỗi fallback
-                    }
+                    } catch (e) { }
                 }
             }
 
@@ -182,26 +176,26 @@ QUAN TRỌNG:
 
                     const feedbackPrompt = `[KẾT QUẢ TỪ HỆ THỐNG CHO LỆNH ${toolName}]\n${resultString}\n\nDựa vào kết quả này, hãy phân tích và đưa ra câu trả lời cuối cùng, HOẶC tiếp tục gọi công cụ (JSON tool_call) nếu cần thêm thông tin.`;
 
-                    await bot.sendPrompt(feedbackPrompt, isThinkingMode, feedbackImage);
+                    await border.sendPrompt(feedbackPrompt, isThinkingMode, feedbackImage);
                     continue;
 
                 } catch (e) {
                     console.error(`[Qwen Web] ❌ Cú pháp JSON không hợp lệ hoặc lỗi phân tích: ${e.message}`);
-                    await bot.sendPrompt(`Hệ thống báo lỗi: Thao tác JSON của bạn không chính xác hoặc thiếu các cặp ngoặc hoặc thuộc tính cần thiết. Chi tiết lỗi: ${e.message}. Vui lòng viết lại toàn bộ cấu trúc JSON theo đúng chuẩn.`);
+                    await border.sendPrompt(`Hệ thống báo lỗi: Thao tác JSON của bạn không chính xác hoặc thiếu các cặp ngoặc hoặc thuộc tính cần thiết. Chi tiết lỗi: ${e.message}. Vui lòng viết lại toàn bộ cấu trúc JSON theo đúng chuẩn.`);
                     continue;
                 }
             }
 
             console.log(`[Qwen Web] ✅ Hoàn thành sau ${stepCount} bước.`);
 
-            if (isWorker && typeof bot.closeWorker === 'function') {
-                await bot.closeWorker();
+            if (isWorker && typeof border.closeWorker === 'function') {
+                await border.closeWorker();
             }
             return content;
         }
 
-        if (isWorker && typeof bot.closeWorker === 'function') {
-            await bot.closeWorker();
+        if (isWorker && typeof border.closeWorker === 'function') {
+            await border.closeWorker();
         }
 
         return '[Lỗi: Quá giới hạn vòng lặp Function Calling]';
