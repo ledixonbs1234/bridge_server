@@ -1,3 +1,4 @@
+// filepath: ridge_server/providers/qwen-web.js
 import BaseProvider from './base-provider.js';
 import qwenBot from '../qwen_web_bot.js';
 import { jsonrepair } from 'jsonrepair';
@@ -45,9 +46,13 @@ QUAN TRỌNG:
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image, images, headless = false } = options;
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image, images, headless = null } = options;
 
-        await qwenBot.init(headless);
+        let targetHeadless = headless;
+        if (targetHeadless === null) {
+            targetHeadless = qwenBot.currentHeadless !== null ? qwenBot.currentHeadless : false;
+        }
+        await qwenBot.init(targetHeadless);
 
         let border = qwenBot;
         if (isWorker) {

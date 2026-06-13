@@ -280,7 +280,47 @@ export async function executeAgentTurn({
             ? "Bạn là trợ lý ảo AI Desktop Assistant thân thiện, hữu ích và chuyên nghiệp. Hãy trả lời câu hỏi của người dùng một cách trực tiếp, ngắn gọn và rành mạch bằng tiếng Việt dựa trên hình ảnh được cung cấp (nếu có). Bạn không có quyền sử dụng bất kỳ công cụ (tools) nào, hãy thảo luận và trả lời trực tiếp dưới dạng văn bản thông thường, tuyệt đối không định dạng đầu ra thành cấu trúc JSON hay mã gọi công cụ (tool call)."
             : getCompiledSystemPrompt();
         const apiIntent = classifyIntent(message);
-        const filteredSkills = isSimpleChat ? {} : filterSkillsByIntent(apiIntent, SKILL_REGISTRY);
+
+        let filteredSkills = {};
+        if (!isSimpleChat) {
+            let nodeTools = null;
+            try {
+                // Truy xuất cấu hình của sơ đồ FSM hiện hành từ SQLite
+                const pipelineRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
+                if (pipelineRow && pipelineRow.data) {
+                    const pipeline = JSON.parse(pipelineRow.data);
+                    const states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
+
+                    let activeNodeName = null;
+                    const runningNode = states.find(s => s.state === 'RUNNING');
+                    if (runningNode) {
+                        activeNodeName = runningNode.step_key;
+                    } else {
+                        const firstPending = states.find(s => s.state === 'PENDING');
+                        activeNodeName = firstPending ? firstPending.step_key : pipeline.initial_node;
+                    }
+
+                    if (activeNodeName && pipeline.nodes && pipeline.nodes[activeNodeName]) {
+                        nodeTools = pipeline.nodes[activeNodeName].tools;
+                    }
+                }
+            } catch (dbErr) {
+                console.warn(`[Agent Service] Lỗi truy xuất cấu hình công cụ từ SQLite: ${dbErr.message}`);
+            }
+
+            if (Array.isArray(nodeTools)) {
+                // Chỉ nạp đúng các công cụ được chọn/gán cho Node hiện hành trên giao diện đồ thị
+                for (const toolName of nodeTools) {
+                    if (SKILL_REGISTRY[toolName]) {
+                        filteredSkills[toolName] = SKILL_REGISTRY[toolName];
+                    }
+                }
+            } else {
+                // Nếu không có sơ đồ FSM hoặc không cấu hình cụ thể -> Nạp toàn bộ SKILL_REGISTRY mà không phân loại qua filterSkillsByIntent
+                filteredSkills = { ...SKILL_REGISTRY };
+            }
+        }
+
         const runMode = (mode === 'thinking' || mode === 'fast')
             ? mode
             : ((apiIntent === 'complex' || apiIntent === 'research') ? 'thinking' : 'fast');
