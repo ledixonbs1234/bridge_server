@@ -106,7 +106,7 @@ class QwenWebBot {
         this.client.on('Network.dataReceived', ({ requestId, data }) => {
             if (this.activeRequestId === requestId && data) {
                 // --- THÊM DÒNG LOG NÀY ĐỂ XÁC NHẬN CÓ NHẬN ĐƯỢC CHUNK HAY KHÔNG ---
-                console.log(`[CDP DEBUG] [${new Date().toISOString()}] 📥 Nhận chunk thô từ Qwen!`);
+                // console.log(`[CDP DEBUG] [${new Date().toISOString()}] 📥 Nhận chunk thô từ Qwen!`);
 
                 const chunkText = Buffer.from(data, 'base64').toString('utf-8');
                 this.processStreamChunk(chunkText);
@@ -404,7 +404,7 @@ class QwenWebBot {
                     const t = txt?.trim().toLowerCase();
                     return t === 'fast' || t === 'auto';
                 };
-
+                await sleep(1000);
                 const buttons = Array.from(document.querySelectorAll('span'));
                 const modelSelectorBtn = buttons.find(btn => {
                     const btnText = btn.innerText?.trim();
@@ -422,7 +422,7 @@ class QwenWebBot {
 
                         if (!listHolder) {
                             simulateClick(modelSelectorBtn);
-                            await sleep(600);
+                            await sleep(650);
                             listHolder = document.querySelector(".rc-virtual-list-holder-inner");
                             openedByUs = true;
                         }
