@@ -1,3 +1,4 @@
+// filepath: ridge_server/providers/deepseek-web.js
 import BaseProvider from './base-provider.js';
 import deepseekBot from '../deepseek_web_bot.js';
 import { jsonrepair } from 'jsonrepair';
@@ -23,7 +24,7 @@ class DeepseekWebProvider extends BaseProvider {
         }
 
         toolText += `\n[HƯỚNG DẪN GỌI TOOL BẮT BUỘC]
-If you need to run a tool, YOU MUST REPLY IN THE EXACT JSON FORMAT below in a code block \`\`\`json ... \`\`\`, with no other text:
+If you need to run a tool, YOU MUST REPLY IN THE EXACT JSON FORMAT below in a code block \`\`\`json ... \`\`\ lock, with no other text:
 \`\`\`json
 {
   "type": "tool_call",
@@ -42,8 +43,13 @@ QUAN TRỌNG:
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', headless = false } = options;
-        await deepseekBot.init(headless);
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', headless = null } = options;
+
+        let targetHeadless = headless;
+        if (targetHeadless === null) {
+            targetHeadless = deepseekBot.currentHeadless !== null ? deepseekBot.currentHeadless : false;
+        }
+        await deepseekBot.init(targetHeadless);
 
         let border = deepseekBot;
         if (isWorker) {

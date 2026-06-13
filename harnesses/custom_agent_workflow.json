@@ -31,9 +31,13 @@
         "capture_system_screenshot",
         "stop_terminal_process",
         "execute_terminal_command",
-        "workflow_brainstorming"
+        "workflow_brainstorming",
+        "google_search",
+        "google_search_and_summarize",
+        "workflow_code_review_expert",
+        "workflow_ask_questions_if_underspecified"
       ],
-      "model_mode": "fast"
+      "model_mode": "thinking"
     }
   },
   "edges": [],
