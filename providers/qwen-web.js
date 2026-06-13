@@ -46,7 +46,7 @@ QUAN TRỌNG:
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image, images, headless = null } = options;
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', image, images, headless = null, model } = options;
 
         let targetHeadless = headless;
         if (targetHeadless === null) {
@@ -60,6 +60,7 @@ QUAN TRỌNG:
         }
 
         const lastUserMessage = messages.slice().reverse().find(m => m.role === 'user')?.content || "";
+
         const userMessagesCount = messages.filter(m => m.role === 'user').length;
         const isFirstTurn = userMessagesCount <= 1 && !this.hasInitializedChat;
 
@@ -83,7 +84,8 @@ QUAN TRỌNG:
         }
 
         const isThinkingMode = (mode === 'thinking');
-        await border.sendPrompt(finalPrompt, isThinkingMode, image, images);
+        const targetModel = model || this.model;
+        await border.sendPrompt(finalPrompt, isThinkingMode, image, images, targetModel);
 
         let stepCount = 0;
 

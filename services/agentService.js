@@ -108,7 +108,8 @@ export async function executeAgentTurn({
     images = [],
     headless = true,
     isSimpleChat = false,
-    mode = 'default'
+    mode = 'default',
+    model = null // Khai báo tham số model mới
 }) {
     const resolvedProvider = activeProvider || globalThis.activeProvider;
     const traceId = tracer.createTrace(message.substring(0, 80));
@@ -429,7 +430,8 @@ export async function executeAgentTurn({
             image,
             images: images || [],
             headless,
-            executeSkill: wrappedExecuteSkill
+            executeSkill: wrappedExecuteSkill,
+            model: model // Chuyển model tới failover handler
         });
 
         if (llmSpanId) {

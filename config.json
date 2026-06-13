@@ -10,7 +10,8 @@
     "qwen-web": {
       "name": "Qwen Web (CloakBrowser)",
       "enabled": true,
-      "description": "Dùng trình duyệt tự động điều khiển chat.qwen.ai"
+      "description": "Dùng trình duyệt tự động điều khiển chat.qwen.ai",
+      "model": "Qwen3.6-Plus"
     },
     "gemini-studio": {
       "name": "Gemini Studio (Free Web)",
