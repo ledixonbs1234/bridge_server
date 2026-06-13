@@ -1,4 +1,5 @@
-import BaseProvider from './base-provider.js'; // Chú ý: Trong ESM bắt buộc phải có đuôi .js
+// filepath: ridge_server/providers/gemini-studio.js
+import BaseProvider from './base-provider.js';
 import aiStudioBot from '../ai_studio_bot.js';
 
 class GeminiStudioProvider extends BaseProvider {
@@ -15,8 +16,13 @@ class GeminiStudioProvider extends BaseProvider {
     }
 
     async chat(options) {
-        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', headless = false } = options; // THÊM headless
-        await aiStudioBot.init(headless);
+        const { messages, skillRegistry, executeSkill, onStreamChunk, systemPrompt, maxSteps = 15, isWorker, workerType = 'default', mode = 'default', headless = null } = options;
+
+        let targetHeadless = headless;
+        if (targetHeadless === null) {
+            targetHeadless = aiStudioBot.currentHeadless !== null ? aiStudioBot.currentHeadless : false;
+        }
+        await aiStudioBot.init(targetHeadless);
 
         // 1. Phân lập Tab (Cô lập Context theo ý tưởng của bạn)
         let bot = aiStudioBot;
@@ -39,7 +45,7 @@ class GeminiStudioProvider extends BaseProvider {
             if (skill.parameters) decl.parameters = skill.parameters;
             return decl;
         });
-       const thinkingLevel = (mode === 'thinking') ? "High" : "None";
+        const thinkingLevel = (mode === 'thinking') ? "High" : "None";
         await bot.setupAgentEnvironment(systemPrompt, JSON.stringify(functionDeclarations, null, 2), thinkingLevel);
 
         // 3. Gửi Prompt
@@ -54,24 +60,22 @@ class GeminiStudioProvider extends BaseProvider {
             stepCount++;
             const result = await bot.waitForResponse(onStreamChunk);
 
-          if (result.type === 'function_call') {
+            if (result.type === 'function_call') {
                 console.log(`[${this.name}] ⚙️ AI gọi hàm: [${result.functionName}]`);
                 let funcResultString = "";
                 try {
                     const funcRes = await executeSkill(result.functionName, result.arguments);
-                    
-                    // --- SỬA ĐOẠN NÀY ---
+
                     if (funcRes === "__HANDOVER_TO_ENGINE__") {
                         // 1. Phải gửi một phản hồi giả để "Mở khóa" (Unlock) giao diện trình duyệt
-                        await bot.submitFunctionResponse(JSON.stringify({ 
-                            status: "success", 
-                            message: "Kế hoạch đã được duyệt. Hệ thống tự động sẽ tiếp quản. Bạn không cần làm gì thêm." 
+                        await bot.submitFunctionResponse(JSON.stringify({
+                            status: "success",
+                            message: "Kế hoạch đã được duyệt. Hệ thống tự động sẽ tiếp quản. Bạn không cần làm gì thêm."
                         }));
-                        
+
                         // 2. Trả thẳng tín hiệu về cho Server.js
-                        return "__HANDOVER_TO_ENGINE__"; 
+                        return "__HANDOVER_TO_ENGINE__";
                     }
-                    // --------------------
 
                     funcResultString = typeof funcRes === 'object' ? JSON.stringify(funcRes) : String(funcRes);
                 } catch (err) {

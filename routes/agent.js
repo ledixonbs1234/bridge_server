@@ -1,4 +1,4 @@
-// bridge_server/routes/agent.js
+// filepath: ridge_server/routes/agent.js
 import express from 'express';
 import chalk from 'chalk';
 import fs from 'fs';
@@ -67,6 +67,7 @@ router.post('/chat', async (req, res) => {
     } else {
         activeWebSession.res = null;
     }
+
     // 1. Tự động chuyển đổi trạng thái của Node FSM hiện hành sang RUNNING trong cơ sở dữ liệu
     let activeNodeName = null;
     let pipelineRow = null;
@@ -75,6 +76,8 @@ router.post('/chat', async (req, res) => {
     } catch (dbErr) {
         console.warn(`[Agent Route] Lỗi đọc SQLite Pipeline: ${dbErr.message}`);
     }
+
+    let currentSummaryList = [];
 
     if (pipelineRow && pipelineRow.data) {
         try {
@@ -97,11 +100,44 @@ router.post('/chat', async (req, res) => {
             if (activeNodeName) {
                 db.prepare(`UPDATE agent_states SET state = 'RUNNING', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
                     .run(new Date().toISOString(), activeNodeName);
+
+                // Khôi phục danh sách câu hỏi-câu trả lời tích lũy trước đây của Node này
+                const existingState = db.prepare(`SELECT summary FROM agent_states WHERE pipeline_id = 'CURRENT' AND step_key = ?`).get(activeNodeName);
+                if (existingState && existingState.summary) {
+                    try {
+                        currentSummaryList = JSON.parse(existingState.summary);
+                        if (!Array.isArray(currentSummaryList)) {
+                            currentSummaryList = [];
+                        }
+                    } catch (e) {
+                        // Fallback nếu dữ liệu cũ trong database là chuỗi thô
+                        currentSummaryList = [{ query: "Câu hỏi trước đó", accumulator: [] }];
+                    }
+                }
             }
         } catch (dbErr) {
             console.warn(`[Agent Route] Lỗi cập nhật trạng thái RUNNING: ${dbErr.message}`);
         }
     }
+
+    // Đăng ký lượt hội thoại hiện tại vào danh sách
+    const currentTurn = {
+        query: message,
+        accumulator: [] // Chứa danh sách các block hành động/suy nghĩ cấu trúc của lượt này
+    };
+    currentSummaryList.push(currentTurn);
+
+    // Helper cập nhật real-time summary của Node đang chạy vào DB dạng danh sách JSON
+    const updateSummary = () => {
+        if (activeNodeName) {
+            try {
+                db.prepare(`UPDATE agent_states SET summary = ?, updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
+                    .run(JSON.stringify(currentSummaryList), new Date().toISOString(), activeNodeName);
+            } catch (err) {
+                console.warn(`[Agent Route] Lỗi lưu summary vào DB: ${err.message}`);
+            }
+        }
+    };
 
     try {
         if (message.trim().startsWith('/model')) {
@@ -224,15 +260,28 @@ router.post('/chat', async (req, res) => {
             images: images || [],
             mode: mode || 'default',
             onChunk: stream ? (chunk) => {
+                let text = "";
                 if (typeof chunk === 'object' && chunk !== null) {
+                    text = chunk.text;
                     res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.text, usage: chunk.usage })}\n\n`);
                 } else {
+                    text = chunk;
                     res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
                 }
+
+                const lastItem = currentTurn.accumulator[currentTurn.accumulator.length - 1];
+                if (lastItem && lastItem.type === 'chunk') {
+                    lastItem.content += text;
+                } else {
+                    currentTurn.accumulator.push({ type: 'chunk', content: text, timestamp: new Date().toISOString() });
+                }
+                updateSummary();
             } : null,
             onAction: stream ? (tool, args, stepId) => {
                 const inputVal = args ? (args.command || args.file_path || args.query || args.url || args.pattern || JSON.stringify(args)) : '';
                 res.write(`data: ${JSON.stringify({ type: 'action', tool, input: inputVal, step_id: stepId })}\n\n`);
+                currentTurn.accumulator.push({ type: 'action', tool, args, step_id: stepId, timestamp: new Date().toISOString() });
+                updateSummary();
             } : null,
             onToolOutput: stream ? (output, stepId) => {
                 let parsedOutput = output;
@@ -240,9 +289,13 @@ router.post('/chat', async (req, res) => {
                     parsedOutput = JSON.parse(output);
                 } catch (e) { }
                 res.write(`data: ${JSON.stringify({ type: 'tool_output', output: parsedOutput, step_id: stepId })}\n\n`);
+                currentTurn.accumulator.push({ type: 'tool_output', output: parsedOutput, step_id: stepId, timestamp: new Date().toISOString() });
+                updateSummary();
             } : null,
             onSystem: stream ? (content) => {
                 res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
+                currentTurn.accumulator.push({ type: 'system', content, timestamp: new Date().toISOString() });
+                updateSummary();
             } : null,
             onAskPermission: async (query, detailsOverride = null) => {
                 const { randomUUID } = await import('crypto');
@@ -304,6 +357,8 @@ router.post('/chat', async (req, res) => {
             },
             onLog: stream ? (text) => {
                 res.write(`data: ${JSON.stringify({ type: 'log', content: text })}\n\n`);
+                currentTurn.accumulator.push({ type: 'log', content: text, timestamp: new Date().toISOString() });
+                updateSummary();
             } : null
         });
 
