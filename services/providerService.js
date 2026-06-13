@@ -53,7 +53,15 @@ export async function loadProviderConfig(showMenu = false) {
 }
 
 async function getProviderInstance(providerName) {
-    if (loadedProviders[providerName]) return loadedProviders[providerName];
+    const settings = providerConfig.providers?.[providerName] || {};
+    if (!settings.enabled) return null;
+
+    // SỬA ĐỔI: Nếu thực thể đã có trong cache, cập nhật lại cấu hình model mới nhất trước khi trả về
+    if (loadedProviders[providerName]) {
+        loadedProviders[providerName].model = settings.model || loadedProviders[providerName].model;
+        loadedProviders[providerName].config = { ...loadedProviders[providerName].config, ...settings };
+        return loadedProviders[providerName];
+    }
 
     const providerMap = {
         'deepseek-web': '../providers/deepseek-web.js',
@@ -68,9 +76,6 @@ async function getProviderInstance(providerName) {
 
     const adapterPath = providerMap[providerName];
     if (!adapterPath) return null;
-
-    const settings = providerConfig.providers?.[providerName] || {};
-    if (!settings.enabled) return null;
 
     try {
         const module = await import(adapterPath);

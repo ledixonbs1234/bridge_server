@@ -11,7 +11,7 @@
       "name": "Qwen Web (CloakBrowser)",
       "enabled": true,
       "description": "Dùng trình duyệt tự động điều khiển chat.qwen.ai",
-      "model": "Qwen3.6-Plus"
+      "model": "Qwen3.7-Plus"
     },
     "gemini-studio": {
       "name": "Gemini Studio (Free Web)",
@@ -22,7 +22,7 @@
       "name": "OpenAI",
       "enabled": true,
       "apiKey": "sk-your-openai-key-here",
-      "model": "gemini",
+      "model": "gpt-4o",
       "baseUrl": "http://localhost:20128/v1",
       "maxTokens": 4096,
       "temperature": 0.7

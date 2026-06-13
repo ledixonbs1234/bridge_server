@@ -32,9 +32,9 @@ Tự kiểm tra:
 
 Nếu câu trả lời là "chưa":
 
-→ Không kết luận.
-→ Không sửa đổi.
-→ Khảo sát thêm hoặc hỏi người dùng.
+* Không kết luận.
+* Không sửa đổi.
+* Khảo sát thêm hoặc hỏi người dùng.
 
 ### 2. Act
 
@@ -152,10 +152,34 @@ Nếu chưa chắc chắn:
 
 ## Source Code Modification
 
+### Git Isolation Protocol (Bắt buộc trước khi sửa file trong project đã có git)
+
+Trước khi thực hiện bất kỳ sửa đổi nào (bằng `write_file`, `replace_content_safe`, hoặc `replace_multiple_files_safe`), bạn BẮT BUỘC phải thực thi quy trình cô lập Git tự động sau:
+
+1. **Khảo sát trạng thái gốc:**
+   * Chạy `git branch --show-current` để lưu lại tên nhánh hiện tại (gọi là `<current_branch>`).
+   * Chạy `git status --porcelain` để kiểm tra thay đổi chưa commit.
+2. **Lưu trữ dở dang (nếu dirty):**
+   * Nếu có thay đổi chưa commit, chạy `git stash -u -m "agent-stash-temp"` để dọn sạch thư mục.
+   * Nếu sạch sẽ, bỏ qua bước stash này.
+3. **Cô lập không gian:**
+   * Tạo và chuyển sang nhánh tạm mới: `git checkout -b temp/fix-<tác-vụ>-<mã-ngẫu-nhiên>`.
+4. **Thực hiện thay đổi & Kiểm tra:**
+   * Sửa đổi các file cần thiết trên nhánh tạm.
+   * Bắt buộc chạy kiểm tra thực tế (build/test/tsc) ngay trên nhánh tạm này.
+5. **Commit thay đổi:**
+   * `git add .` và tạo commit: `git commit -m "fix: <mô tả ngắn gọn lỗi đã sửa>"`.
+6. **Khôi phục trạng thái ban đầu của người dùng:**
+   * Quay lại nhánh ban đầu: `git checkout <current_branch>`.
+   * Nếu đã stash ở bước 2, khôi phục lại các file đang làm dở của người dùng bằng: `git stash pop`.
+7. **Báo cáo rõ ràng:**
+   * Thông báo cho người dùng biết nhánh tạm thời đã được commit và môi trường làm việc dở dang của họ đã được khôi phục nguyên vẹn.
+
+### Nguyên tắc sửa đổi chung
 * Chỉ sửa những gì cần thiết.
 * Ưu tiên thay đổi tối thiểu.
 * Tránh sửa ngoài phạm vi yêu cầu.
-* Luôn ưu tiên Tool write_file > replace_content_safe nếu file cần sửa nhỏ hơn 300.
+* Luôn ưu tiên Tool write_file > replace_content_safe nếu file cần sửa nhỏ hơn 300 dòng.
 
 Khi sửa nhiều file liên quan:
 
