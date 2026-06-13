@@ -33,7 +33,7 @@ router.get('/', async (req, res) => {
 
 // Chuyển đổi provider
 router.post('/switch', async (req, res) => {
-    const { provider } = req.body;
+    const { provider, model } = req.body;
     if (!provider) return res.status(400).json({ error: 'Thiếu tham số provider' });
 
     const configPath = path.join(projectRoot, 'config.json');
@@ -51,6 +51,9 @@ router.post('/switch', async (req, res) => {
     }
 
     providerConfig.activeProvider = provider;
+    if (model) {
+        providerConfig.providers[provider].model = model; // Lưu lại model làm mặc định
+    }
     fs.writeFileSync(configPath, JSON.stringify(providerConfig, null, 2), 'utf8');
 
     // Nạp lại cấu hình

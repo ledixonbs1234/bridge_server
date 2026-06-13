@@ -34,16 +34,29 @@ router.post('/chat', async (req, res) => {
 
     console.log(chalk.magenta(`\n[Web Terminal] 📥 "${message.substring(0, 80)}"${stream ? ' (Stream)' : ''}`));
 
+    let targetModelName = null;
     if (model) {
-        const modelMap = {
-            'MiniMax-M3': 'gemini-studio',
-            'GPT-4o': 'openai',
-            'Claude-3.5-Sonnet': 'claude',
-            'DeepSeek-V4-Pro': 'deepseek-web',
-            'Qwen-2.5': 'qwen-web',
-            'Qwen-2.5-Web': 'qwen-web'
-        };
-        const targetProvider = modelMap[model];
+        let targetProvider = null;
+        if (model.includes(':')) {
+            const parts = model.split(':');
+            targetProvider = parts[0];
+            targetModelName = parts[1];
+        } else {
+            const modelMap = {
+                'MiniMax-M3': 'gemini-studio',
+                'GPT-4o': 'openai',
+                'Claude-3.5-Sonnet': 'claude',
+                'DeepSeek-V4-Pro': 'deepseek-web',
+                'Qwen-2.5': 'qwen-web',
+                'Qwen-2.5-Web': 'qwen-web',
+                'Qwen3.7-Plus': 'qwen-web',
+                'Qwen3.7-Max': 'qwen-web',
+                'Qwen3.6-Plus': 'qwen-web'
+            };
+            targetProvider = modelMap[model];
+            targetModelName = model;
+        }
+
         const currentProvider = globalThis.providerConfig?.activeProvider;
 
         if (targetProvider && currentProvider !== targetProvider) {
@@ -223,6 +236,7 @@ router.post('/chat', async (req, res) => {
             image,
             images: images || [],
             mode: mode || 'default',
+            model: targetModelName, // Truyền model cụ thể
             onChunk: stream ? (chunk) => {
                 if (typeof chunk === 'object' && chunk !== null) {
                     res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.text, usage: chunk.usage })}\n\n`);
