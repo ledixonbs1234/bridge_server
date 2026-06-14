@@ -277,14 +277,12 @@ export async function executeAgentTurn({
             enrichedMessages[enrichedMessages.length - 1].content += injectedMemory;
         }
 
-        const systemPrompt = isSimpleChat
-            ? "Bạn là trợ lý ảo AI Desktop Assistant thân thiện, hữu ích và chuyên nghiệp. Hãy trả lời câu hỏi của người dùng một cách trực tiếp, ngắn gọn và rành mạch bằng tiếng Việt dựa trên hình ảnh được cung cấp (nếu có). Bạn không có quyền sử dụng bất kỳ công cụ (tools) nào, hãy thảo luận và trả lời trực tiếp dưới dạng văn bản thông thường, tuyệt đối không định dạng đầu ra thành cấu trúc JSON hay mã gọi công cụ (tool call)."
-            : getCompiledSystemPrompt();
-        const apiIntent = classifyIntent(message);
+        // 1. Khai báo trước các biến lưu thông tin Node FSM hiện hành
+        let nodeTools = null;
+        let nodeSystemPrompt = null;
+        let includeGlobalPrompt = true;
 
-        let filteredSkills = {};
         if (!isSimpleChat) {
-            let nodeTools = null;
             try {
                 // Truy xuất cấu hình của sơ đồ FSM hiện hành từ SQLite
                 const pipelineRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
@@ -302,13 +300,43 @@ export async function executeAgentTurn({
                     }
 
                     if (activeNodeName && pipeline.nodes && pipeline.nodes[activeNodeName]) {
-                        nodeTools = pipeline.nodes[activeNodeName].tools;
+                        const activeNode = pipeline.nodes[activeNodeName];
+                        nodeTools = activeNode.tools;
+                        nodeSystemPrompt = activeNode.system_prompt;
+                        includeGlobalPrompt = activeNode.include_global_prompt !== false;
                     }
                 }
             } catch (dbErr) {
-                console.warn(`[Agent Service] Lỗi truy xuất cấu hình công cụ từ SQLite: ${dbErr.message}`);
+                console.warn(`[Agent Service] Lỗi truy xuất cấu hình sơ đồ từ SQLite: ${dbErr.message}`);
             }
+        }
 
+        // 2. Tổ hợp động systemPrompt dựa trên thông tin đã nạp từ cơ sở dữ liệu
+        let systemPrompt = "";
+        if (isSimpleChat) {
+            systemPrompt = "Bạn là trợ lý ảo AI Desktop Assistant thân thiện, hữu ích và chuyên nghiệp. Hãy trả lời câu hỏi của người dùng một cách trực tiếp, ngắn gọn và rành mạch bằng tiếng Việt dựa trên hình ảnh được cung cấp (nếu có). Bạn không có quyền sử dụng bất kỳ công cụ (tools) nào, hãy thảo luận và trả lời trực tiếp dưới dạng văn bản thông thường, tuyệt đối không định dạng đầu ra thành cấu trúc JSON hay mã gọi công cụ (tool call).";
+        } else {
+            const globalPrompt = getCompiledSystemPrompt();
+            if (nodeSystemPrompt) {
+                if (includeGlobalPrompt) {
+                    // Kế thừa toàn cục: Ghép chỉ thị riêng của Node lên đầu quy tắc hệ thống
+                    systemPrompt = `${nodeSystemPrompt}\n\n${globalPrompt}`;
+                } else {
+                    // Không kế thừa: Chỉ nạp bối cảnh OS Context thô kèm Prompt riêng biệt của Node
+                    const activeWS = globalThis.activeWorkspace || process.cwd().replace(/\\/g, '/');
+                    const systemContext = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Current Working Directory (Thư mục hiện hành tuyệt đối): ${activeWS}\n\n`;
+                    systemPrompt = systemContext + nodeSystemPrompt;
+                }
+            } else {
+                // Trường hợp chat thông thường ngoài FSM: Dùng global prompt mặc định
+                systemPrompt = globalPrompt;
+            }
+        }
+
+        const apiIntent = classifyIntent(message);
+
+        let filteredSkills = {};
+        if (!isSimpleChat) {
             if (Array.isArray(nodeTools)) {
                 // Chỉ nạp đúng các công cụ được chọn/gán cho Node hiện hành trên giao diện đồ thị
                 for (const toolName of nodeTools) {
@@ -317,7 +345,7 @@ export async function executeAgentTurn({
                     }
                 }
             } else {
-                // Nếu không có sơ đồ FSM hoặc không cấu hình cụ thể -> Nạp toàn bộ SKILL_REGISTRY mà không phân loại qua filterSkillsByIntent
+                // Nếu không có sơ đồ FSM hoặc không cấu hình cụ thể -> Nạp toàn bộ SKILL_REGISTRY
                 filteredSkills = { ...SKILL_REGISTRY };
             }
         }

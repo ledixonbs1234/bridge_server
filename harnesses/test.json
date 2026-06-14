@@ -1,0 +1,39 @@
+{
+  "harness_name": "test",
+  "description": "Mô tả quy trình tự động hóa...",
+  "initial_node": "agent_96028",
+  "state_schema": {
+    "task": "",
+    "target_file": "",
+    "pending_code": "",
+    "errors": [],
+    "retry_count": 0,
+    "next_node": ""
+  },
+  "nodes": {
+    "agent_96028": {
+      "type": "agent",
+      "system_prompt": "Chỉ thị hệ thống cho Agent mới...",
+      "tools": [
+        "ask_questions_if_underspecified"
+      ],
+      "model_mode": "fast"
+    },
+    "agent_09212": {
+      "type": "agent",
+      "system_prompt": "Chỉ thị hệ thống cho Agent mới...",
+      "tools": [
+        "ask_questions_if_underspecified",
+        "read_file"
+      ],
+      "model_mode": "fast"
+    }
+  },
+  "edges": [
+    {
+      "from": "agent_96028",
+      "to": "agent_09212"
+    }
+  ],
+  "conditional_edges": []
+}

@@ -29,12 +29,30 @@ export class DeclarativeGraphCompiler {
 
                     console.log(chalk.cyan(`[Node Exec] 🤖 Spawning Declarative Agent Node: [${nodeName}]`));
 
+                    // Thiết lập System Prompt dựa trên cấu hình bật/tắt kế thừa toàn cục
+                    let systemPromptStr = `Bạn là thành viên trong đồ thị trạng thái đang thực thi node: ${nodeName}.`;
+                    if (nodeConfig.include_global_prompt !== false) {
+                        const promptPath = path.resolve(process.cwd(), 'system_prompt.md');
+                        let globalPrompt = "";
+                        if (fs.existsSync(promptPath)) {
+                            globalPrompt = fs.readFileSync(promptPath, 'utf8');
+                        }
+                        const activeWS = globalThis.activeWorkspace || process.cwd().replace(/\\/g, '/');
+                        const systemContext = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]
+- OS Platform: ${process.platform}
+- OS Arch: ${process.arch}
+- Current Working Directory (Thư mục hiện hành tuyệt đối): ${activeWS}
+
+`;
+                        systemPromptStr = `${systemPromptStr}\n\n${systemContext}${globalPrompt}`;
+                    }
+
                     const response = await ctx.provider.chat({
                         messages: [{ role: 'user', content: dynamicPrompt }],
                         mode: nodeConfig.model_mode || 'fast',
                         skillRegistry: allowedSkills,
                         executeSkill: ctx.executeSkillFn,
-                        systemPrompt: `Bạn là thành viên trong đồ thị trạng thái đang thực thi node: ${nodeName}.`,
+                        systemPrompt: systemPromptStr,
                         maxSteps: 10,
                         isWorker: true,
                         workerType: nodeName

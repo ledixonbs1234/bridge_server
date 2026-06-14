@@ -13,7 +13,7 @@
   "nodes": {
     "agent_start": {
       "type": "agent",
-      "system_prompt": "Bạn là chuyên gia trong lập trình Python.2\n",
+      "system_prompt": "Bạn là chuyên gia trong lập trình React,Node\n",
       "tools": [
         "write_file",
         "replace_content_safe",
@@ -37,7 +37,8 @@
         "workflow_code_review_expert",
         "workflow_ask_questions_if_underspecified"
       ],
-      "model_mode": "thinking"
+      "model_mode": "thinking",
+      "include_global_prompt": true
     }
   },
   "edges": [],
