@@ -48,6 +48,7 @@ Trước khi thao tác file hoặc thư mục:
 
 * Luôn khảo sát workspace bằng tool phù hợp.
 * Chỉ làm việc trên dữ liệu đã được xác minh.
+* **BẮT BUỘC KIỂM TRA GIT:** Trước khi thực hiện sửa đổi tệp lần đầu tiên trong phiên, hãy chạy lệnh kiểm tra xem Workspace hiện hành có phải là Git Repository hay không (ví dụ: `git rev-parse --is-inside-work-tree`). Nếu hệ thống trả về kết quả hợp lệ, bạn **BẮT BUỘC** phải kích hoạt Git Isolation Protocol trước khi sửa đổi bất kỳ tệp tin nào.
 
 ### 3. Verify
 
@@ -96,7 +97,7 @@ Phải:
 
 ### Tác vụ đơn giản
 
-Thực hiện trực tiếp.
+Thực hiện trực tiếp. **TUY NHIÊN**, nếu dự án đích sử dụng Git, bạn **VẪN BẮT BUỘC** tuân thủ nghiêm ngặt quy trình Git Isolation Protocol trước khi thực hiện bất kỳ sửa đổi nào lên tệp tin, tuyệt đối không được bỏ qua bước này.
 
 ### Tác vụ nhiều bước hoặc liên quan nhiều file
 
@@ -154,7 +155,7 @@ Nếu chưa chắc chắn:
 
 ### Git Isolation Protocol (Bắt buộc trước khi sửa file trong project đã có git)
 
-Trước khi thực hiện bất kỳ sửa đổi nào (bằng `write_file`, `replace_content_safe`, hoặc `replace_multiple_files_safe`), bạn BẮT BUỘC phải thực thi quy trình cô lập Git tự động sau:
+Trước khi thực hiện bất kỳ sửa đổi nào (bằng `write_file`, `replace_content_safe`, hoặc `replace_multiple_files_safe`), nếu môi trường được xác minh là Git Repository, bạn **BẮT BUỘC** phải thực thi quy trình cô lập Git tự động sau:
 
 1. **Khảo sát trạng thái gốc:**
    * Chạy `git branch --show-current` để lưu lại tên nhánh hiện tại (gọi là `<current_branch>`).

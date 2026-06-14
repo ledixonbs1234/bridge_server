@@ -4,12 +4,13 @@ import boxen from 'boxen';
 import chalk from 'chalk';
 import { analyzeCommand, printCommandWarning, getCommandTimeout } from './validators/command_guard.js';
 import { presentApprovalRequest } from '../utils/display.js';
-// 1. Quản lý các tiến trình đang chạy ngầm
-const activeProcesses = new Map();
-let processCounter = 1;
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+// 1. Quản lý các tiến trình đang chạy ngầm
+const activeProcesses = new Map();
+let processCounter = 1;
 
 const __filename_audit = fileURLToPath(import.meta.url);
 const __dirname_audit = path.dirname(__filename_audit);
@@ -32,6 +33,7 @@ function auditLog(command, cwd, result, duration) {
         // Ignore audit log errors
     }
 }
+
 // Hàm hỗ trợ tắt tiến trình ngầm (chống kẹt Port trên Windows/Mac)
 function killProcess(child) {
     if (os.platform() === 'win32') {
@@ -104,7 +106,6 @@ export default {
         },
         handler: async (args) => {
             const command = args.command;
-            // SỬA ĐỔI: Chuyển thư mục hoạt động mặc định về activeWorkspace hoặc process.cwd()
             const defaultBase = globalThis.activeWorkspace || process.cwd();
             const cwd = args.working_directory || defaultBase;
             const isBackground = args.is_background || false;
@@ -114,7 +115,7 @@ export default {
                 printCommandWarning(analysis, command);
                 auditLog(command, cwd, { status: 'error', error: 'BLOCKED_BY_GUARD' }, 0);
                 throw new Error(
-                    `COMMAND_BLOCKED: Command bị chặn bởi Command Guard vì lý do an toàn. ` +
+                    `COMMAND_BLOCKED: Command bị chặn bởi Command Guard vì lý do an sau. ` +
                     `Lý do: ${analysis.reason}. ` +
                     `Nếu bạn thực sự cần chạy lệnh này, hãy chia nhỏ thành các lệnh an toàn hơn.`
                 );
@@ -156,12 +157,15 @@ export default {
                 console.log(`\n⚡ ${chalk.gray('Auto-running:')} ${chalk.yellow(command)}`);
             }
 
+            // Xác định cấu hình shell tối ưu cho hệ điều hành
+            const shellOption = os.platform() === 'win32' ? 'powershell.exe' : true;
+
             // XỬ LÝ CHẠY NGẦM VÀ AUTO-PING
             if (isBackground) {
                 return new Promise((resolve, reject) => {
                     const child = spawn(command, {
                         cwd,
-                        shell: true,
+                        shell: shellOption,
                         timeout: getCommandTimeout(command, true),
                         env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
                     });
@@ -195,7 +199,7 @@ export default {
                         if (code !== 0 && code !== null) {
                             resolve({
                                 status: "error",
-                                error_message: `Tiến trình thoát with mã lỗi: ${code}`,
+                                error_message: `Tiến trình thoát với mã lỗi: ${code}`,
                                 startup_logs: outputLog.substring(0, 3000)
                             });
                         }
@@ -216,7 +220,7 @@ export default {
                                     resolve({
                                         command,
                                         process_id: procId,
-                                        working_directory: cwd.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN THỰC TẾ
+                                        working_directory: cwd.replace(/\\/g, '/'),
                                         status: hasError ? "warning" : "running_in_background",
                                         message: `Tiến trình chạy ngầm đã khởi động tại: ${cwd.replace(/\\/g, '/')} (ID: ${procId}). ${hasError ? 'CÓ LỖI TRONG LOG - KIỂM TRA KỸ!' : 'Đã tự động test ping tới ' + localUrl + '.'} KIỂM TRA LỖI BIÊN DỊCH TRONG LOG. NẾU KHÔNG LỖI, BẠN HOÀN TOÀN CÓ QUYỀN GỌI LỆNH 'stop_terminal_process' ĐỂ TẮT NÓ NẾU MUỐN HOÀN THÀNH NHIỆM VỤ!`,
                                         startup_logs: outputLog.substring(0, 3000)
@@ -227,7 +231,7 @@ export default {
                                 resolve({
                                     command,
                                     process_id: procId,
-                                    working_directory: cwd.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN THỰC TẾ
+                                    working_directory: cwd.replace(/\\/g, '/'),
                                     status: hasError ? "warning" : "running_in_background",
                                     message: `Tiến trình đã được khởi chạy ngầm tại: ${cwd.replace(/\\/g, '/')} với ID: ${procId}. ${hasError ? 'CÓ LỖI TRONG LOG - KIỂM TRA KỸ!' : ''} Nếu bạn đã thực hiện xong mục đích của mình, bạn CÓ THỂ gọi lệnh 'stop_terminal_process' truyền ID '${procId}' để tắt tiến trình này đi nhằm giải phóng tài nguyên.`,
                                     startup_logs: outputLog.substring(0, 1500)
@@ -238,7 +242,7 @@ export default {
                             resolve({
                                 command,
                                 process_id: procId,
-                                working_directory: cwd.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN THỰC TẾ
+                                working_directory: cwd.replace(/\\/g, '/'),
                                 status: "running_in_background",
                                 message: `Tiến trình đã được khởi chạy ngầm tại: ${cwd.replace(/\\/g, '/')} với ID: ${procId} (có thể có lỗi nhỏ).`,
                                 startup_logs: outputLog.substring(0, 1500)
@@ -252,28 +256,19 @@ export default {
             return new Promise((resolve) => {
                 const startTime = Date.now();
                 const timeout = getCommandTimeout(command, false);
-                // Thêm khai báo xác định shell ở đầu hàm handler hoặc ngoài phạm vi xuất khẩu
-                const shellOption = os.platform() === 'win32' ? 'powershell.exe' : true;
-
-                // Đối với tiến trình chạy ngầm (spawn)
-                const child = spawn(command, {
-                    cwd,
-                    shell: shellOption, // Thay thế 'true' bằng shellOption
-                    timeout: getCommandTimeout(command, true),
-                    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
-                });
 
                 // Đối với tiến trình chạy thường (exec)
                 const childProcess = exec(command, {
                     cwd,
                     timeout,
+                    shell: shellOption,
                     maxBuffer: 10 * 1024 * 1024,
                     env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
                 }, (error, stdout, stderr) => {
                     const duration = Date.now() - startTime;
                     const result = {
                         command,
-                        working_directory: cwd.replace(/\\/g, '/'), // TRẢ VỀ ĐƯỜNG DẪN CHẠY THỰC TẾ TRÁNH ĐOÁN MÒ
+                        working_directory: cwd.replace(/\\/g, '/'),
                         stdout: stdout || "",
                         stderr: stderr || "",
                         error: error ? error.message : null,
