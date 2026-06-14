@@ -27,7 +27,24 @@ function detectWorkspace(message) {
     }
     return null;
 }
+// =================================================================
+// ⏸️ DEBUG/PAUSE ENDPOINTS FOR AGENT LOOP
+// =================================================================
+router.post('/pause', (req, res) => {
+    globalThis.isPaused = true;
+    console.log(chalk.yellow('\n[Debug Route] ⏸️ Đã nhận tín hiệu tạm dừng luồng AI.'));
+    res.json({ success: true, isPaused: true, message: 'Đã tạm dừng gửi lệnh lên AI.' });
+});
 
+router.post('/resume', (req, res) => {
+    globalThis.isPaused = false;
+    console.log(chalk.green('\n[Debug Route] ▶️ Đã nhận tín hiệu tiếp tục luồng AI.'));
+    res.json({ success: true, isPaused: false, message: 'Đã tiếp tục gửi lệnh lên AI.' });
+});
+
+router.get('/debug-status', (req, res) => {
+    res.json({ success: true, isPaused: !!globalThis.isPaused });
+});
 router.post('/chat', async (req, res) => {
     const { message, stream, useReformulate, image, images, agent, model, headless, mode } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
@@ -175,6 +192,7 @@ router.post('/chat', async (req, res) => {
         if (message.trim() === '/clear' || message.trim() === '/new') {
             globalThis.activeWebSessionFile = null;
             globalThis.activeWebHistory = [];
+            globalThis.isPaused = false;
             if (typeof globalThis.activeProvider?.resetSession === 'function') {
                 globalThis.activeProvider.resetSession();
             }

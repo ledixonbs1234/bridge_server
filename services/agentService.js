@@ -363,7 +363,19 @@ export async function executeAgentTurn({
             const stepId = 'step_' + Math.random().toString(36).substring(2, 9);
 
             if (onAction) onAction(funcName, args, stepId);
+            if (globalThis.isPaused) {
+                console.log(chalk.yellow(`[Debug Mode] ⏸️ Agent đang tạm dừng trước khi chạy tool: ${funcName}. Chờ lệnh Resume...`));
+                if (onSystem) onSystem(`⏸️ [Debug] Tạm dừng trước khi chạy tool: [${funcName}]. Hãy nhấn 'Resume' để tiếp tục.`);
+                if (onLog) onLog(`⏸️ [Debug Mode] Đang tạm dừng trước khi chạy: ${funcName}`);
 
+                while (globalThis.isPaused) {
+                    await new Promise(r => setTimeout(r, 200));
+                }
+
+                console.log(chalk.green(`[Debug Mode] ▶️ Tiếp tục thực thi cho tool: ${funcName}`));
+                if (onSystem) onSystem(`▶️ [Debug] Tiếp tục thực thi tool: [${funcName}]`);
+                if (onLog) onLog(`▶️ [Debug Mode] Tiếp tục thực thi: ${funcName}`);
+            }
             let stepType = 'generic';
             let cleanTitle = `Execute ${funcName}`;
             const tool = funcName;
