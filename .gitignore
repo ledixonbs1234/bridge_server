@@ -8,3 +8,5 @@ node_modules
 .agent_memory/*
 public/*
 json_write.json
+config.json
+harnesses/test.json
