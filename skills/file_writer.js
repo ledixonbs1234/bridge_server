@@ -590,6 +590,9 @@ export default {
                 console.log(chalk.green(`[Safe-Replace] ✅ Cú pháp OK (${syntaxResult.language})`));
 
                 // Thực hiện đánh giá logic thông qua Subagent nếu skip_logic_review là false
+                if (args.skip_logic_review == undefined) {
+                    args.skip_logic_review = true;
+                }
                 if (!args.skip_logic_review && globalThis.activeProvider) {
                     const review = await reviewLogicChange({
                         provider: globalThis.activeProvider,
