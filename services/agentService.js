@@ -123,6 +123,16 @@ export async function executeAgentTurn({
     // Gán cấu hình Git Isolation để các kỹ năng sửa tệp tin đọc được
     globalThis.useGitIsolation = !!useGitIsolation;
 
+    let gitIsolationState = null;
+    const workspace = globalThis.activeWorkspace || process.cwd();
+    if (globalThis.useGitIsolation) {
+        const { startGitIsolation } = await import('../utils/gitStats.js');
+        gitIsolationState = startGitIsolation(workspace, message);
+        if (gitIsolationState) {
+            console.log(chalk.green(`[Git Isolation] Đã kích hoạt Git Isolation cấp độ lượt chat. Nhánh tạm thời: ${gitIsolationState.tempBranch}`));
+        }
+    }
+
     const serverSteps = [];
     const serverTimeline = [];
 
@@ -510,6 +520,12 @@ export async function executeAgentTurn({
 
             const savedFile = saveSession(currentHistory, persistentGoal, sessionFile);
             globalThis.activeWebHistory = currentHistory;
+
+            if (gitIsolationState) {
+                const { endGitIsolation } = await import('../utils/gitStats.js');
+                endGitIsolation(workspace, gitIsolationState, true);
+            }
+
             return { type: 'handover', history: currentHistory, sessionFile: savedFile };
         }
 
@@ -526,9 +542,23 @@ export async function executeAgentTurn({
         if (currentSessionLog.some(entry => !entry.success)) {
             runCriticAgent([...currentSessionLog], wrappedOnLog).catch(() => { });
         }
+
+        if (gitIsolationState) {
+            const { endGitIsolation } = await import('../utils/gitStats.js');
+            endGitIsolation(workspace, gitIsolationState, true);
+        }
+
         return { type: 'text', response: cleanResponse, history: currentHistory, sessionFile: savedFile };
 
     } catch (err) {
+        if (gitIsolationState) {
+            try {
+                const { endGitIsolation } = await import('../utils/gitStats.js');
+                endGitIsolation(workspace, gitIsolationState, false);
+            } catch (e) {
+                console.error('[Agent Service] Lỗi khi rollback Git Isolation:', e.message);
+            }
+        }
         if (traceId) tracer.completeTrace(traceId, 'failed', { error: err.message });
         throw err;
     } finally {

@@ -301,23 +301,20 @@ export default {
             const filesToRestore = [];
             const results = [];
 
-            // Thiết lập quy trình tự động cô lập Git dọn dẹp
-            let gitIsolationState = null;
-            const workspace = globalThis.activeWorkspace || process.cwd();
-            if (globalThis.useGitIsolation) {
-                const { startGitIsolation } = await import('../utils/gitStats.js');
-                gitIsolationState = startGitIsolation(workspace, args.task_description);
-                if (gitIsolationState) {
-                    console.log(chalk.green(`[Git Isolation] Đã tự động kích hoạt Git Isolation. Nhánh tạm thời: ${gitIsolationState.tempBranch}`));
-                }
-            }
-
             try {
                 for (const edit of edits) {
                     const filePath = resolveUserPath(edit.file_path);
                     if (!fs.existsSync(filePath)) {
                         throw new Error(`File không tồn tại: ${aiSafePath(edit.file_path)}`);
                     }
+
+                    // Kiểm duyệt Read-Before-Write Guard (Chốt chặn ngăn chặn sửa tệp khi chưa đọc)
+                    const lastRead = globalThis.lastReadTime && globalThis.lastReadTime[filePath];
+                    const stat = fs.statSync(filePath);
+                    if (!lastRead || stat.mtimeMs > lastRead) {
+                        throw new Error(`READ_BEFORE_WRITE_VIOLATION: Bạn đang cố gắng sửa đổi tệp tin "${path.basename(filePath)}" mà chưa thực hiện đọc nội dung hiện tại của nó bằng công cụ 'read_file' hoặc 'read_file_lines' trong lượt chat này. Để tránh sửa bậy, bạn BẮT BUỘC phải đọc tệp trước khi sửa.`);
+                    }
+
                     activeShadowRegistry.register(filePath);
                     penultimateShadowRegistry.register(filePath);
                     const shadow = createShadow(filePath);
@@ -454,11 +451,10 @@ export default {
                     shadow.cleanup();
                 }
 
-                // Thực hiện commit và phục hồi trạng thái môi trường nếu thành công
-                if (gitIsolationState) {
-                    const { endGitIsolation } = await import('../utils/gitStats.js');
-                    endGitIsolation(workspace, gitIsolationState, true);
-                    console.log(chalk.green(`[Git Isolation] Đã commit và khôi phục môi trường về trạng thái ban đầu.`));
+                // Cập nhật trạng thái chưa đọc sau khi lưu thay đổi thành công
+                globalThis.fileTracker = globalThis.fileTracker || {};
+                for (const item of filesToRestore) {
+                    globalThis.fileTracker[item.filePath] = { status: 'modified', readAfterWrite: false };
                 }
 
                 return {
@@ -477,13 +473,6 @@ export default {
                     } catch (restoreErr) {
                         console.error(`[Multi-Replace] Lỗi khi khôi phục shadow: ${restoreErr.message}`);
                     }
-                }
-
-                // Hoàn tác nhánh tạm và khôi phục trạng thái cũ của người dùng
-                if (gitIsolationState) {
-                    const { endGitIsolation } = await import('../utils/gitStats.js');
-                    endGitIsolation(workspace, gitIsolationState, false);
-                    console.log(chalk.yellow(`[Git Isolation] Quy trình bị hủy bỏ. Đã hoàn tác mọi thay đổi dở dang.`));
                 }
 
                 throw err;
@@ -528,18 +517,14 @@ export default {
             activeShadowRegistry.register(filePath);
             penultimateShadowRegistry.register(filePath);
 
-            // Automated Git Isolation Protocol Setup
-            let gitIsolationState = null;
-            const workspace = globalThis.activeWorkspace || process.cwd();
-            if (globalThis.useGitIsolation) {
-                const { startGitIsolation } = await import('../utils/gitStats.js');
-                gitIsolationState = startGitIsolation(workspace, args.task_description);
-                if (gitIsolationState) {
-                    console.log(chalk.green(`[Git Isolation] Automated Git Isolation started. Branch: ${gitIsolationState.tempBranch}`));
-                }
-            }
-
             try {
+                // Kiểm duyệt Read-Before-Write Guard (Chốt chặn ngăn chặn sửa tệp khi chưa đọc)
+                const lastRead = globalThis.lastReadTime && globalThis.lastReadTime[filePath];
+                const stat = fs.statSync(filePath);
+                if (!lastRead || stat.mtimeMs > lastRead) {
+                    throw new Error(`READ_BEFORE_WRITE_VIOLATION: Bạn đang cố gắng sửa đổi tệp tin "${path.basename(filePath)}" mà chưa thực hiện đọc nội dung hiện tại của nó bằng công cụ 'read_file' hoặc 'read_file_lines' trong lượt chat này. Để tránh sửa bậy, bạn BẮT BUỘC phải đọc tệp trước khi sửa.`);
+                }
+
                 // Gom cụm tham số sửa đổi đơn lẻ hoặc danh sách nhiều đoạn sửa đổi
                 let replacements = args.replacements;
                 if (!replacements || !Array.isArray(replacements)) {
@@ -705,12 +690,9 @@ export default {
 
                     shadow.cleanup();
 
-                    // Hoàn tất quy trình cô lập Git tự động
-                    if (gitIsolationState) {
-                        const { endGitIsolation } = await import('../utils/gitStats.js');
-                        endGitIsolation(workspace, gitIsolationState, true);
-                        console.log(chalk.green(`[Git Isolation] Đã commit và khôi phục môi trường về trạng thái ban đầu.`));
-                    }
+                    // Cập nhật trạng thái chưa đọc sau khi lưu thay đổi thành công
+                    globalThis.fileTracker = globalThis.fileTracker || {};
+                    globalThis.fileTracker[filePath] = { status: 'modified', readAfterWrite: false };
 
                     return {
                         status: "success",
@@ -732,20 +714,8 @@ export default {
                     };
                 }
 
-                // Hủy bỏ thay đổi dở dang nếu lặp sửa đổi thất bại
-                if (gitIsolationState) {
-                    const { endGitIsolation } = await import('../utils/gitStats.js');
-                    endGitIsolation(workspace, gitIsolationState, false);
-                }
-
                 return { status: "error", error_message: "Đã thử quá số lần cho phép hoặc gặp sự cố khi lưu file." };
             } catch (err) {
-                // Hoàn tác và phục hồi bối cảnh cũ cho người dùng khi có sự cố
-                if (gitIsolationState) {
-                    const { endGitIsolation } = await import('../utils/gitStats.js');
-                    endGitIsolation(workspace, gitIsolationState, false);
-                    console.log(chalk.yellow(`[Git Isolation] Quy trình bị hủy bỏ. Đã hoàn tác mọi thay đổi dở dang.`));
-                }
                 throw err;
             }
         }
@@ -776,18 +746,15 @@ export default {
             }
 
             let oldContent = "";
-            if (fs.existsSync(filePath)) {
+            const isNewFile = !fs.existsSync(filePath);
+            if (!isNewFile) {
                 oldContent = fs.readFileSync(filePath, 'utf8');
-            }
 
-            // Tự động kích hoạt cô lập Git
-            let gitIsolationState = null;
-            const workspace = globalThis.activeWorkspace || process.cwd();
-            if (globalThis.useGitIsolation) {
-                const { startGitIsolation } = await import('../utils/gitStats.js');
-                gitIsolationState = startGitIsolation(workspace, "write-file");
-                if (gitIsolationState) {
-                    console.log(chalk.green(`[Git Isolation] Đã tự động kích hoạt Git Isolation. Nhánh tạm thời: ${gitIsolationState.tempBranch}`));
+                // Kiểm duyệt Read-Before-Write Guard (Chốt chặn ngăn chặn sửa tệp khi chưa đọc)
+                const lastRead = globalThis.lastReadTime && globalThis.lastReadTime[filePath];
+                const stat = fs.statSync(filePath);
+                if (!lastRead || stat.mtimeMs > lastRead) {
+                    throw new Error(`READ_BEFORE_WRITE_VIOLATION: Bạn đang cố gắng ghi đè lên tệp tin "${path.basename(filePath)}" đã tồn tại mà chưa đọc nội dung hiện tại của nó bằng công cụ 'read_file' hoặc 'read_file_lines' trong lượt chat này. Để tránh sửa bậy, bạn BẮT BUỘC phải đọc tệp trước khi sửa.`);
                 }
             }
 
@@ -817,12 +784,9 @@ export default {
 
                 const incDiff = computeLineDiff(oldContent, fileContent);
 
-                // Commit và hoàn thành quy trình
-                if (gitIsolationState) {
-                    const { endGitIsolation } = await import('../utils/gitStats.js');
-                    endGitIsolation(workspace, gitIsolationState, true);
-                    console.log(chalk.green(`[Git Isolation] Đã commit và khôi phục môi trường về trạng thái ban đầu.`));
-                }
+                // Cập nhật trạng thái chưa đọc sau khi lưu thay đổi hoặc tạo mới thành công
+                globalThis.fileTracker = globalThis.fileTracker || {};
+                globalThis.fileTracker[filePath] = { status: isNewFile ? 'created' : 'modified', readAfterWrite: false };
 
                 return {
                     message: `Đã ghi file thành công`,
@@ -836,12 +800,6 @@ export default {
                     }
                 };
             } catch (err) {
-                // Hoàn tác khi có lỗi
-                if (gitIsolationState) {
-                    const { endGitIsolation } = await import('../utils/gitStats.js');
-                    endGitIsolation(workspace, gitIsolationState, false);
-                    console.log(chalk.yellow(`[Git Isolation] Quy trình bị hủy bỏ. Đã hoàn tác mọi thay đổi dở dang.`));
-                }
                 throw err;
             }
         }

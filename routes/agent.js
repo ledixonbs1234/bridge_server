@@ -198,6 +198,10 @@ router.post('/chat', async (req, res) => {
             }
             globalThis.persistentGoal = null;
 
+            // Xóa sạch bộ nhớ đệm kiểm duyệt và trạng thái tệp tin
+            globalThis.lastReadTime = {};
+            globalThis.fileTracker = {};
+
             const agentService = await import('../services/agentService.js');
             agentService.setActivePermissionData(null);
             agentService.pendingPermissions.clear();

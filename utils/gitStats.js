@@ -1,3 +1,4 @@
+// ridge_server/utils/gitStats.js
 import { execSync } from 'child_process';
 import path from 'path';
 
@@ -73,7 +74,7 @@ export function isGitRepository(dir) {
     }
 }
 
-// Khởi chạy quy trình tự động cô lập Git (Git Isolation)
+// Khởi chạy quy trình tự động cô lập Git (Git Isolation) - Cấp độ Turn Chat
 export function startGitIsolation(dir, taskDescription) {
     if (!isGitRepository(dir)) return null;
     try {
@@ -82,6 +83,15 @@ export function startGitIsolation(dir, taskDescription) {
             currentBranch = execSync('git branch --show-current', { cwd: dir, encoding: 'utf8' }).trim();
         } catch {
             currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: dir, encoding: 'utf8' }).trim();
+        }
+
+        // Nếu đã ở trên nhánh tạm, tái sử dụng nhánh này và không tạo nhánh mới hay stash nữa
+        if (currentBranch.startsWith('temp/fix-')) {
+            console.log(`[Git Isolation] Đang ở trên nhánh cô lập hoạt động: ${currentBranch}. Tiếp tục thực thi...`);
+            return {
+                alreadyIsolated: true,
+                tempBranch: currentBranch
+            };
         }
 
         const status = execSync('git status --porcelain', { cwd: dir, encoding: 'utf8' }).trim();
@@ -99,6 +109,7 @@ export function startGitIsolation(dir, taskDescription) {
         execSync(`git checkout -b ${tempBranch}`, { cwd: dir });
 
         return {
+            alreadyIsolated: false,
             currentBranch,
             tempBranch,
             isDirty
@@ -113,37 +124,37 @@ export function startGitIsolation(dir, taskDescription) {
 export function endGitIsolation(dir, isolationState, success = true) {
     if (!isolationState) return;
     try {
-        const { currentBranch, tempBranch, isDirty } = isolationState;
+        const { alreadyIsolated, currentBranch, tempBranch, isDirty } = isolationState;
 
         if (success) {
             execSync('git add .', { cwd: dir });
             try {
                 execSync('git commit -m "fix: automatic patch by agent"', { cwd: dir });
-                console.log(`[Git Isolation] Đã tự động tạo commit thành công trên nhánh ${tempBranch}`);
+                console.log(`[Git Isolation] Đã tự động tạo commit thành công trên nhánh ${tempBranch || isolationState.tempBranch}`);
             } catch (commitErr) {
                 console.log('[Git Isolation] Không có thay đổi nào để tạo commit:', commitErr.message);
             }
+            // KHÔNG checkout quay lại currentBranch nếu thành công để người dùng có thể làm việc trực tiếp trên nhánh tạm này.
         } else {
             // Hoàn tác mọi thay đổi dở dang trên nhánh tạm
             execSync('git reset --hard', { cwd: dir });
-        }
 
-        // Quay lại nhánh làm việc ban đầu của người dùng
-        execSync(`git checkout ${currentBranch}`, { cwd: dir });
+            // Nếu nhánh này được tạo mới trong lượt này (alreadyIsolated === false), thì mới dọn dẹp và trả về nhánh gốc
+            if (!alreadyIsolated) {
+                execSync(`git checkout ${currentBranch}`, { cwd: dir });
 
-        // Dọn dẹp nhánh tạm nếu thao tác thất bại
-        if (!success) {
-            try {
-                execSync(`git branch -D ${tempBranch}`, { cwd: dir });
-            } catch { }
-        }
+                try {
+                    execSync(`git branch -D ${tempBranch}`, { cwd: dir });
+                } catch { }
 
-        // Khôi phục các thay đổi dở dang gốc từ stash
-        if (isDirty) {
-            try {
-                execSync('git stash pop', { cwd: dir });
-            } catch (stashErr) {
-                console.warn('[Git Isolation] Cảnh báo khôi phục stash:', stashErr.message);
+                // Khôi phục các thay đổi dở dang gốc từ stash
+                if (isDirty) {
+                    try {
+                        execSync('git stash pop', { cwd: dir });
+                    } catch (stashErr) {
+                        console.warn('[Git Isolation] Cảnh báo khôi phục stash:', stashErr.message);
+                    }
+                }
             }
         }
     } catch (err) {
@@ -151,7 +162,7 @@ export function endGitIsolation(dir, isolationState, success = true) {
     }
 }
 
-// Tạo Chat Footer siêu tối giản cung cấp bối cảnh Git & Workspace cho AI
+// Tạo Chat Footer siêu tối giản cung cấp bối cảnh Git & Workspace & Trạng thái đọc tệp tin
 export function getGitFooterContext(targetWorkspace) {
     if (!targetWorkspace) return "";
     try {
@@ -162,15 +173,37 @@ export function getGitFooterContext(targetWorkspace) {
         } catch {
             branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: targetWorkspace, encoding: 'utf8' }).trim();
         }
+
         const diffs = getGitDiffStats(targetWorkspace);
         const modifiedFiles = diffs.map(d => d.file).filter(Boolean);
-        const modStr = modifiedFiles.length > 0 ? modifiedFiles.join(',') : "None";
+
+        // Trích xuất trạng thái đọc/chưa đọc của các tệp đã sửa trong phiên hiện hành
+        const tracker = globalThis.fileTracker || {};
+        const trackingList = [];
+        for (const [absPath, info] of Object.entries(tracker)) {
+            const relativeName = path.relative(targetWorkspace, absPath).replace(/\\/g, '/');
+            const statusIcon = info.readAfterWrite ? "(Đã đọc)" : "(Chưa đọc)";
+            trackingList.push(`${relativeName}${statusIcon}`);
+        }
+
+        const modStr = trackingList.length > 0
+            ? trackingList.join(',')
+            : (modifiedFiles.length > 0 ? modifiedFiles.join(',') : "None");
+
         const folderName = path.basename(targetWorkspace);
         return `\n\n📌 [Git: ${branch} | Dir: ${folderName} | Mod: ${modStr}]`;
     } catch (e) {
         try {
             const folderName = path.basename(targetWorkspace);
-            return `\n\n📌 [Git: None | Dir: ${folderName}]`;
+            const tracker = globalThis.fileTracker || {};
+            const trackingList = [];
+            for (const [absPath, info] of Object.entries(tracker)) {
+                const relativeName = path.relative(targetWorkspace, absPath).replace(/\\/g, '/');
+                const statusIcon = info.readAfterWrite ? "(Đã đọc)" : "(Chưa đọc)";
+                trackingList.push(`${relativeName}${statusIcon}`);
+            }
+            const modStr = trackingList.length > 0 ? trackingList.join(',') : "None";
+            return `\n\n📌 [Git: None | Dir: ${folderName} | Mod: ${modStr}]`;
         } catch {
             return "";
         }

@@ -37,6 +37,16 @@ function resolveUserPath(inputPath) {
     return validation.resolved;
 }
 
+// Đánh dấu tệp tin đã được đọc trong phiên làm việc hiện tại
+function markFileAsRead(absolutePath) {
+    globalThis.lastReadTime = globalThis.lastReadTime || {};
+    globalThis.lastReadTime[absolutePath] = Date.now();
+
+    if (globalThis.fileTracker && globalThis.fileTracker[absolutePath]) {
+        globalThis.fileTracker[absolutePath].readAfterWrite = true;
+    }
+}
+
 export default {
     "read_file": {
         description: "Đọc toàn bộ nội dung của tệp tin. Dữ liệu trả về ở dạng khối Markdown được đánh số dòng (Line Anchors), giúp loại bỏ hoàn toàn việc escape ký tự trong chuỗi JSON và tối ưu hóa lượng token cực kỳ hiệu quả.",
@@ -48,6 +58,8 @@ export default {
         handler: async (args) => {
             const filePath = resolveUserPath(args.file_path);
             if (!fs.existsSync(filePath)) throw new Error(`File không tồn tại: ${args.file_path}`);
+
+            markFileAsRead(filePath);
 
             const content = fs.readFileSync(filePath, 'utf8');
             const lines = content.split(/\r?\n/);
@@ -81,6 +93,9 @@ export default {
                         markdownResult += `### ❌ Tệp tin không tồn tại: \`${aiSafePath(filePath)}\`\n\n`;
                         continue;
                     }
+
+                    markFileAsRead(filePath);
+
                     const content = fs.readFileSync(filePath, 'utf8');
                     const lines = content.split(/\r?\n/);
                     const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
@@ -111,6 +126,9 @@ export default {
             if (!fs.existsSync(filePath)) {
                 throw new Error(`File không tồn tại: ${aiSafePath(filePath)}`);
             }
+
+            markFileAsRead(filePath);
+
             const content = fs.readFileSync(filePath, 'utf8');
             const lines = content.split(/\r?\n/);
 
@@ -122,42 +140,5 @@ export default {
             md += `\`\`\`text\n${numberedLines}\n\`\`\``;
             return md;
         }
-    },
-
-    // "read_image_asset": {
-    //     description: "Đọc nội dung của một tệp tin hình ảnh cục bộ (PNG, JPG, JPEG, WEBP) từ Workspace dự án, mã hóa sang định dạng Base64 giúp AI có khả năng xem và đối chiếu thiết kế giao diện trực quan.",
-    //     parameters: {
-    //         type: "object",
-    //         properties: {
-    //             file_path: { type: "string", description: "Đường dẫn tuyệt đối đến tệp tin hình ảnh cần đọc." }
-    //         },
-    //         required: ["file_path"]
-    //     },
-    //     handler: async (args) => {
-    //         const filePath = resolveUserPath(args.file_path);
-    //         if (!fs.existsSync(filePath)) {
-    //             throw new Error(`Tệp tin hình ảnh không tồn tại: ${args.file_path}`);
-    //         }
-
-    //         const ext = path.extname(filePath).toLowerCase();
-    //         let mimeType = 'image/png';
-    //         if (ext === '.jpg' || ext === '.jpeg') mimeType = 'image/jpeg';
-    //         else if (ext === '.gif') mimeType = 'image/gif';
-    //         else if (ext === '.webp') mimeType = 'image/webp';
-
-    //         try {
-    //             const fileBuffer = fs.readFileSync(filePath);
-    //             const base64Data = fileBuffer.toString('base64');
-    //             return {
-    //                 status: "success",
-    //                 file_path: aiSafePath(filePath),
-    //                 mime_type: mimeType,
-    //                 image_base64: `data:${mimeType};base64,${base64Data}`,
-    //                 message: "Đã đọc thành công tệp tin hình ảnh. Bạn có thể sử dụng dữ liệu 'image_base64' này để gửi kèm và phục vụ phân tích thị giác."
-    //             };
-    //         } catch (err) {
-    //             throw new Error(`Không thể đọc và mã hóa tệp tin hình ảnh: ${err.message}`);
-    //         }
-    //     }
-    // }
+    }
 };

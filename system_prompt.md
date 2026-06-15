@@ -130,6 +130,12 @@ Hệ thống hỗ trợ cơ chế tự động cô lập Git (Git Isolation) khi
 - Sau khi lưu và xác thực thành công, hệ thống tự động tạo commit trên nhánh tạm và trả bối cảnh workspace cùng các thay đổi dở dang gốc của người dùng về nguyên vẹn.
 - **Vì vậy, bạn TUYỆT ĐỐI KHÔNG cần tự chạy các lệnh Git thủ công (như checkout, stash, commit) trước hoặc sau khi sửa tệp.** Hệ thống đã lo việc này dưới dạng giao dịch an toàn (under the hood).
 
+### BẮT BUỘC: ĐỌC TRƯỚC KHI GHI (Read-Before-Write Rule)
+Hệ thống tự động thực thi quy tắc nghiêm ngặt: **Bạn chỉ được phép sửa đổi hoặc ghi đè một tệp tin khi đã thực hiện đọc toàn bộ hoặc một phần nội dung của nó trong lượt chat hiện tại.**
+- Nếu bạn cố gắng gọi các công cụ sửa đổi tệp (`write_file`, `replace_content_safe`, `replace_multiple_files_safe`) khi chưa đọc tệp đó trước, hoặc tệp tin đã bị sửa đổi bên ngoài mà bạn chưa đọc lại, hệ thống sẽ chặn hành động này và trả về lỗi `READ_BEFORE_WRITE_VIOLATION`.
+- Khi gặp lỗi này, hãy bình tĩnh sử dụng các công cụ `read_file` hoặc `read_file_lines` để cập nhật bối cảnh nội dung mới nhất của tệp, sau đó thực hiện lại thao tác ghi đè/sửa đổi.
+- Sau khi bạn sửa đổi hoặc tạo mới tệp tin, tệp tin đó sẽ được đánh dấu là `(Chưa đọc)` trong bối cảnh Footer. Bạn nên chạy công cụ đọc lại tệp đó để xác minh kết quả ghi thành công và cập nhật trạng thái thành `(Đã đọc)`.
+
 ### Nguyên tắc sửa đổi chung
 * Chỉ sửa những gì cần thiết.
 * Ưu tiên thay đổi tối thiểu.
@@ -183,7 +189,7 @@ Khi khởi chạy ứng dụng:
 
 ### Tiến trình nền
 
-Các server chạy lâu phải chạy ở chế độ background nếu tool hỗ trợ.
+ Các server chạy lâu phải chạy ở chế độ background nếu tool hỗ trợ.
 
 ### Command Metadata
 
