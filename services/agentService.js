@@ -109,7 +109,9 @@ export async function executeAgentTurn({
     headless = true,
     isSimpleChat = false,
     mode = 'default',
-    model = null // Khai báo tham số model mới
+    model = null, // Khai báo tham số model mới
+    useGitIsolation = false, // Thêm cấu hình Git Isolation từ client
+    useGitFooter = false // Thêm cấu hình cho phép đính kèm Footer bối cảnh Git
 }) {
     const resolvedProvider = activeProvider || globalThis.activeProvider;
     const traceId = tracer.createTrace(message.substring(0, 80));
@@ -117,6 +119,9 @@ export async function executeAgentTurn({
     if (onLog) global.logToWebChat = onLog;
 
     updateActiveWorkspaceFromContext(message);
+
+    // Gán cấu hình Git Isolation để các kỹ năng sửa tệp tin đọc được
+    globalThis.useGitIsolation = !!useGitIsolation;
 
     const serverSteps = [];
     const serverTimeline = [];
@@ -230,7 +235,16 @@ export async function executeAgentTurn({
         ]);
 
         const currentHistory = [...history];
-        const userMsg = { role: 'user', content: reformulatedText };
+
+        // Đính kèm Footer bối cảnh Git & Workspace nếu được bật từ phía Client
+        let finalUserText = reformulatedText;
+        if (useGitFooter) {
+            const { getGitFooterContext } = await import('../utils/gitStats.js');
+            const footerContext = getGitFooterContext(globalThis.activeWorkspace);
+            finalUserText += footerContext;
+        }
+
+        const userMsg = { role: 'user', content: finalUserText };
         if (image) userMsg.image = image;
         if (images && images.length > 0) userMsg.images = images;
         currentHistory.push(userMsg);

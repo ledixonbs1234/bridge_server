@@ -46,7 +46,7 @@ router.get('/debug-status', (req, res) => {
     res.json({ success: true, isPaused: !!globalThis.isPaused });
 });
 router.post('/chat', async (req, res) => {
-    const { message, stream, useReformulate, image, images, agent, model, headless, mode } = req.body;
+    const { message, stream, useReformulate, image, images, agent, model, headless, mode, useGitIsolation, useGitFooter } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
 
     console.log(chalk.magenta(`\n[Web Terminal] 📥 "${message.substring(0, 80)}"${stream ? ' (Stream)' : ''}`));
@@ -255,6 +255,8 @@ router.post('/chat', async (req, res) => {
             images: images || [],
             mode: mode || 'default',
             model: targetModelName, // Truyền model cụ thể
+            useGitIsolation: !!useGitIsolation, // Truyền cài đặt Git Isolation
+            useGitFooter: !!useGitFooter, // Truyền cài đặt gửi Footer Context
             onChunk: stream ? (chunk) => {
                 if (typeof chunk === 'object' && chunk !== null) {
                     res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.text, usage: chunk.usage })}\n\n`);

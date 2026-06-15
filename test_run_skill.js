@@ -1,53 +1,80 @@
+// test_run_skill.js
 import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
+import os from 'os';
+
+// 1. Phân tích động file cấu hình JSON trước khi nạp Skill để giả lập môi trường đường dẫn an toàn
+const args = process.argv.slice(2);
+const jsonFileName = args[0] || 'json_write.json';
+const jsonPath = path.resolve(process.cwd(), jsonFileName);
+
+if (fs.existsSync(jsonPath)) {
+    try {
+        const rawData = fs.readFileSync(jsonPath, 'utf8');
+        const parsed = JSON.parse(rawData);
+        const skillArguments = parsed.arguments || parsed.args || parsed.parameters || {};
+
+        // Tìm kiếm đường dẫn tệp tin hoặc thư mục mục tiêu trong tham số kiểm thử
+        const testFilePath = skillArguments.file_path ||
+            skillArguments.path ||
+            skillArguments.directory_path ||
+            skillArguments.target ||
+            (Array.isArray(skillArguments.file_paths) ? skillArguments.file_paths[0] : null);
+
+        if (testFilePath) {
+            const absoluteTestPath = path.resolve(testFilePath);
+            const parsedPath = path.parse(absoluteTestPath);
+            // Lấy thư mục chứa file hoặc chính thư mục gốc của đường dẫn kiểm thử
+            const testDir = parsedPath.dir || parsedPath.root;
+
+            if (testDir) {
+                console.log(chalk.blue(`[Test Helper] 🛠️ Giả lập os.homedir() để cho phép đường dẫn: ${testDir}`));
+                // Ghi đè các hàm hệ thống và biến môi trường trước khi các module skill được nạp động
+                os.homedir = () => testDir.replace(/\\/g, '/');
+                process.env.USERPROFILE = testDir;
+                process.env.HOME = testDir;
+
+                // Thiết lập workspace an toàn tương ứng
+                globalThis.activeWorkspace = testDir.replace(/\\/g, '/');
+            }
+        }
+    } catch (e) {
+        console.warn(chalk.yellow(`[Test Helper] Không thể trích xuất cấu trúc JSON sớm: ${e.message}`));
+    }
+}
+
+// Cấu hình mặc định nếu không tìm thấy hoặc không giả lập được từ file JSON
+if (!globalThis.activeWorkspace) {
+    globalThis.activeWorkspace = process.cwd().replace(/\\/g, '/');
+}
+global.isAutoApproveAll = true; // Tự động duyệt chạy thử nghiệm
+
+// 2. Tiến hành nạp các module skill và thực thi
 import { loadSkills, SKILL_REGISTRY } from './services/skillLoader.js';
 
-// Cấu hình môi trường an toàn giả lập
-globalThis.activeWorkspace = process.cwd().replace(/\\/g, '/');
-global.isAutoApproveAll = true; // Đặt true để tự động chạy không cần hỏi duyệt, đặt false nếu muốn hiện khung duyệt HITL
-
 async function run() {
-    const args = process.argv.slice(2);
-    const jsonFileName = args[0] || 'json_write.json';
-    const jsonPath = path.resolve(process.cwd(), jsonFileName);
-
     if (!fs.existsSync(jsonPath)) {
         console.error(chalk.red(`❌ Lỗi: Không tìm thấy tệp JSON tại: ${jsonPath}`));
-        console.log(chalk.gray(`Cách sử dụng: node run_skill_from_json.js <tên_file_json>`));
+        console.log(chalk.gray(`Cách sử dụng: node test_run_skill.js <tên_file_json>`));
         return;
     }
 
     try {
-        // 1. Đọc và parse dữ liệu từ tệp JSON
         const rawData = fs.readFileSync(jsonPath, 'utf8');
         const parsed = JSON.parse(rawData);
 
-        // Hỗ trợ nhiều định dạng từ khóa khác nhau (tùy biến hoặc chuẩn của OpenAI/Qwen)
         const skillName = parsed.skill || parsed.name || parsed.tool;
         const skillArguments = parsed.arguments || parsed.args || parsed.parameters || {};
 
         if (!skillName) {
             console.error(chalk.red("❌ File JSON không đúng định dạng. Phải chứa thuộc tính 'skill', 'name' hoặc 'tool'."));
-            console.log(chalk.gray("Mẫu cấu trúc JSON hợp lệ để hệ thống tự động nhận diện:"));
-            console.log(chalk.yellow(JSON.stringify({
-                skill: "replace_content_safe",
-                arguments: {
-                    file_path: "temp.txt",
-                    target_content: "nội dung cũ",
-                    replacement_content: "nội dung mới",
-                    start_line: 1,
-                    end_line: 1
-                }
-            }, null, 2)));
             return;
         }
 
         console.log(chalk.cyan(`\n🔍 Đang khởi tạo và đăng ký các kỹ năng của hệ thống...`));
-        // 2. Nạp toàn bộ Hard/Soft skills thực tế của dự án thông qua skillLoader
         await loadSkills();
 
-        // 3. Truy vết và tìm kiếm handler tương ứng trong SKILL_REGISTRY
         const skill = SKILL_REGISTRY[skillName];
         if (!skill) {
             console.error(chalk.red(`❌ Không tìm thấy công cụ (skill) nào đăng ký dưới tên: "${skillName}"`));
@@ -59,7 +86,6 @@ async function run() {
         console.log(chalk.gray(`Mô tả: ${skill.description}`));
         console.log(chalk.cyan(`⚙️ Đang tiến hành thực thi hành động...`));
 
-        // 4. Kích hoạt chạy trực tiếp handler của skill tìm được
         const result = await skill.handler(skillArguments);
 
         console.log(chalk.bold.green('\n🎉 KẾT QUẢ THỰC THI TRẢ VỀ:'));

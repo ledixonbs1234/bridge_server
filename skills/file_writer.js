@@ -301,6 +301,17 @@ export default {
             const filesToRestore = [];
             const results = [];
 
+            // Thiết lập quy trình tự động cô lập Git dọn dẹp
+            let gitIsolationState = null;
+            const workspace = globalThis.activeWorkspace || process.cwd();
+            if (globalThis.useGitIsolation) {
+                const { startGitIsolation } = await import('../utils/gitStats.js');
+                gitIsolationState = startGitIsolation(workspace, args.task_description);
+                if (gitIsolationState) {
+                    console.log(chalk.green(`[Git Isolation] Đã tự động kích hoạt Git Isolation. Nhánh tạm thời: ${gitIsolationState.tempBranch}`));
+                }
+            }
+
             try {
                 for (const edit of edits) {
                     const filePath = resolveUserPath(edit.file_path);
@@ -443,6 +454,13 @@ export default {
                     shadow.cleanup();
                 }
 
+                // Thực hiện commit và phục hồi trạng thái môi trường nếu thành công
+                if (gitIsolationState) {
+                    const { endGitIsolation } = await import('../utils/gitStats.js');
+                    endGitIsolation(workspace, gitIsolationState, true);
+                    console.log(chalk.green(`[Git Isolation] Đã commit và khôi phục môi trường về trạng thái ban đầu.`));
+                }
+
                 return {
                     status: "success",
                     message: `Đã thay thế an toàn hàng loạt trên cả ${edits.length} file thành công.`,
@@ -460,6 +478,14 @@ export default {
                         console.error(`[Multi-Replace] Lỗi khi khôi phục shadow: ${restoreErr.message}`);
                     }
                 }
+
+                // Hoàn tác nhánh tạm và khôi phục trạng thái cũ của người dùng
+                if (gitIsolationState) {
+                    const { endGitIsolation } = await import('../utils/gitStats.js');
+                    endGitIsolation(workspace, gitIsolationState, false);
+                    console.log(chalk.yellow(`[Git Isolation] Quy trình bị hủy bỏ. Đã hoàn tác mọi thay đổi dở dang.`));
+                }
+
                 throw err;
             }
         }
@@ -502,202 +528,226 @@ export default {
             activeShadowRegistry.register(filePath);
             penultimateShadowRegistry.register(filePath);
 
-            // Gom cụm tham số sửa đổi đơn lẻ hoặc danh sách nhiều đoạn sửa đổi
-            let replacements = args.replacements;
-            if (!replacements || !Array.isArray(replacements)) {
-                if (args.replacement_content === undefined) {
-                    throw new Error("Thiếu tham số 'replacement_content' hoặc danh sách 'replacements'.");
+            // Automated Git Isolation Protocol Setup
+            let gitIsolationState = null;
+            const workspace = globalThis.activeWorkspace || process.cwd();
+            if (globalThis.useGitIsolation) {
+                const { startGitIsolation } = await import('../utils/gitStats.js');
+                gitIsolationState = startGitIsolation(workspace, args.task_description);
+                if (gitIsolationState) {
+                    console.log(chalk.green(`[Git Isolation] Automated Git Isolation started. Branch: ${gitIsolationState.tempBranch}`));
                 }
-                replacements = [{
-                    replacement_content: args.replacement_content,
-                    start_line: args.start_line,
-                    end_line: args.end_line
-                }];
             }
 
-            const isSingleEdit = replacements.length === 1;
-            const MAX_RETRIES = 2;
-            let attempt = 0;
-
-            while (attempt <= MAX_RETRIES) {
-                attempt++;
-                console.log(chalk.cyan(`\n[Safe-Replace] 🔄 Lần thử ${attempt}/${MAX_RETRIES + 1} cho file ${aiSafePath(filePath)}`));
-
-                const shadow = createShadow(filePath);
-                const originalContent = fs.readFileSync(filePath, 'utf8');
-                const originalLines = originalContent.split(/\r?\n/);
-
-                // Trích xuất ngữ cảnh gốc của các vùng sửa đổi để phục vụ việc kiểm tra logic
-                const originalContexts = [];
-                for (const rep of replacements) {
-                    const contextStart = Math.max(0, rep.start_line - 21);
-                    const contextEnd = Math.min(originalLines.length, rep.end_line + 20);
-                    const originalContext = originalLines
-                        .slice(contextStart, contextEnd)
-                        .map((l, i) => `${contextStart + i + 1} | ${l}`)
-                        .join('\n');
-                    originalContexts.push(originalContext);
-                }
-
-                // Sắp xếp các đoạn sửa đổi theo thứ tự dòng từ dưới lên trên (start_line giảm dần)
-                // để bảo toàn tính đúng đắn của số dòng cho các đoạn ở phía trên sau mỗi lần thay thế
-                let sortedReplacements = [...replacements].sort((a, b) => b.start_line - a.start_line);
-
-                let newContent = originalContent;
-                try {
-                    for (const rep of sortedReplacements) {
-                        newContent = performBoundedReplacement(
-                            newContent,
-                            rep.replacement_content,
-                            rep.start_line,
-                            rep.end_line
-                        );
+            try {
+                // Gom cụm tham số sửa đổi đơn lẻ hoặc danh sách nhiều đoạn sửa đổi
+                let replacements = args.replacements;
+                if (!replacements || !Array.isArray(replacements)) {
+                    if (args.replacement_content === undefined) {
+                        throw new Error("Thiếu tham số 'replacement_content' hoặc danh sách 'replacements'.");
                     }
-                } catch (err) {
-                    shadow.restore();
-                    shadow.cleanup();
-                    throw err;
+                    replacements = [{
+                        replacement_content: args.replacement_content,
+                        start_line: args.start_line,
+                        end_line: args.end_line
+                    }];
                 }
 
-                // Thực hiện xác thực cú pháp tĩnh trên file mới được tạo ra
-                const syntaxResult = await validateSyntax(filePath, newContent);
-                if (!syntaxResult.valid) {
-                    console.log(chalk.red(`[Safe-Replace] ❌ Syntax Error (${syntaxResult.language}):`));
-                    console.log(chalk.red(`   ${syntaxResult.error}`));
+                const isSingleEdit = replacements.length === 1;
+                const MAX_RETRIES = 2;
+                let attempt = 0;
 
-                    shadow.restore();
-                    shadow.cleanup();
+                while (attempt <= MAX_RETRIES) {
+                    attempt++;
+                    console.log(chalk.cyan(`\n[Safe-Replace] 🔄 Lần thử ${attempt}/${MAX_RETRIES + 1} cho file ${aiSafePath(filePath)}`));
 
-                    // Tự sửa cú pháp thông qua AI nếu đây là sửa đổi đơn lẻ
-                    if (attempt <= MAX_RETRIES && isSingleEdit) {
-                        console.log(chalk.yellow(`[Safe-Replace] 🤖 Đang nhờ AI tự sửa lỗi cú pháp...`));
-                        replacements[0].replacement_content = await autoFixSyntaxError({
-                            originalCode: replacements[0].replacement_content,
-                            syntaxError: syntaxResult.error,
-                            language: syntaxResult.language,
-                            filePath
-                        });
-                        continue;
+                    const shadow = createShadow(filePath);
+                    const originalContent = fs.readFileSync(filePath, 'utf8');
+                    const originalLines = originalContent.split(/\r?\n/);
+
+                    // Trích xuất ngữ cảnh gốc của các vùng sửa đổi để phục vụ việc kiểm tra logic
+                    const originalContexts = [];
+                    for (const rep of replacements) {
+                        const contextStart = Math.max(0, rep.start_line - 21);
+                        const contextEnd = Math.min(originalLines.length, rep.end_line + 20);
+                        const originalContext = originalLines
+                            .slice(contextStart, contextEnd)
+                            .map((l, i) => `${contextStart + i + 1} | ${l}`)
+                            .join('\n');
+                        originalContexts.push(originalContext);
                     }
 
-                    return {
-                        status: "error",
-                        error_message: `Syntax Error sau khi thay thế: ${syntaxResult.error}`,
-                        file: aiSafePath(filePath),
-                        rolled_back: true
-                    };
-                }
-                console.log(chalk.green(`[Safe-Replace] ✅ Cú pháp OK (${syntaxResult.language})`));
+                    // Sắp xếp các đoạn sửa đổi theo thứ tự dòng từ dưới lên trên (start_line giảm dần)
+                    // để bảo toàn tính đúng đắn của số dòng cho các đoạn ở phía trên sau mỗi lần thay thế
+                    let sortedReplacements = [...replacements].sort((a, b) => b.start_line - a.start_line);
 
-                // Thực hiện đánh giá logic thông qua Subagent nếu skip_logic_review là false
-                if (args.skip_logic_review == undefined) {
-                    args.skip_logic_review = true;
-                }
-                if (!args.skip_logic_review && globalThis.activeProvider) {
-                    const review = await reviewLogicChange({
-                        provider: globalThis.activeProvider,
-                        filePath,
-                        originalContext: originalContexts.join('\n\n---\n\n'),
-                        newCode: replacements.map(r => r.replacement_content).join('\n\n---\n\n'),
-                        fullNewContent: newContent,
-                        taskDescription: args.task_description || ''
-                    });
+                    let newContent = originalContent;
+                    try {
+                        for (const rep of sortedReplacements) {
+                            newContent = performBoundedReplacement(
+                                newContent,
+                                rep.replacement_content,
+                                rep.start_line,
+                                rep.end_line
+                            );
+                        }
+                    } catch (err) {
+                        shadow.restore();
+                        shadow.cleanup();
+                        throw err;
+                    }
 
-                    if (review.verdict === 'FAIL') {
-                        console.log(chalk.red(`[Safe-Replace] ❌ Lỗi logic phát hiện trong file ${aiSafePath(filePath)}:`));
-                        review.issues.forEach(issue => console.log(chalk.red(`   • ${issue}`)));
+                    // Thực hiện xác thực cú pháp tĩnh trên file mới được tạo ra
+                    const syntaxResult = await validateSyntax(filePath, newContent);
+                    if (!syntaxResult.valid) {
+                        console.log(chalk.red(`[Safe-Replace] ❌ Syntax Error (${syntaxResult.language}):`));
+                        console.log(chalk.red(`   ${syntaxResult.error}`));
 
                         shadow.restore();
                         shadow.cleanup();
 
-                        if (attempt <= MAX_RETRIES && isSingleEdit && review.suggestion) {
-                            console.log(chalk.yellow(`[Safe-Replace] 🤖 Đang sửa lỗi logic theo gợi ý...`));
-                            replacements[0].replacement_content = await applyReviewSuggestion({
+                        // Tự sửa cú pháp thông qua AI nếu đây là sửa đổi đơn lẻ
+                        if (attempt <= MAX_RETRIES && isSingleEdit) {
+                            console.log(chalk.yellow(`[Safe-Replace] 🤖 Đang nhờ AI tự sửa lỗi cú pháp...`));
+                            replacements[0].replacement_content = await autoFixSyntaxError({
                                 originalCode: replacements[0].replacement_content,
-                                issues: review.issues,
-                                suggestion: review.suggestion,
+                                syntaxError: syntaxResult.error,
+                                language: syntaxResult.language,
                                 filePath
                             });
                             continue;
                         }
 
-                        return {
-                            status: "error",
-                            error_message: `Logic Error: ${review.issues.join(' | ')}`,
-                            file: aiSafePath(filePath),
-                            rolled_back: true
-                        };
+                        throw new Error(`Syntax Error sau khi thay thế: ${syntaxResult.error}`);
+                    }
+                    console.log(chalk.green(`[Safe-Replace] ✅ Cú pháp OK (${syntaxResult.language})`));
+
+                    // Thực hiện đánh giá logic thông qua Subagent nếu skip_logic_review là false
+                    if (args.skip_logic_review == undefined) {
+                        args.skip_logic_review = true;
+                    }
+                    if (!args.skip_logic_review && globalThis.activeProvider) {
+                        const review = await reviewLogicChange({
+                            provider: globalThis.activeProvider,
+                            filePath,
+                            originalContext: originalContexts.join('\n\n---\n\n'),
+                            newCode: replacements.map(r => r.replacement_content).join('\n\n---\n\n'),
+                            fullNewContent: newContent,
+                            taskDescription: args.task_description || ''
+                        });
+
+                        if (review.verdict === 'FAIL') {
+                            console.log(chalk.red(`[Safe-Replace] ❌ Lỗi logic phát hiện trong file ${aiSafePath(filePath)}:`));
+                            review.issues.forEach(issue => console.log(chalk.red(`   • ${issue}`)));
+
+                            shadow.restore();
+                            shadow.cleanup();
+
+                            if (attempt <= MAX_RETRIES && isSingleEdit && review.suggestion) {
+                                console.log(chalk.yellow(`[Safe-Replace] 🤖 Đang sửa lỗi logic theo gợi ý...`));
+                                replacements[0].replacement_content = await applyReviewSuggestion({
+                                    originalCode: replacements[0].replacement_content,
+                                    issues: review.issues,
+                                    suggestion: review.suggestion,
+                                    filePath
+                                });
+                                continue;
+                            }
+
+                            throw new Error(`Logic Error: ${review.issues.join(' | ')}`);
+                        }
+
+                        if (review.verdict === 'WARN') {
+                            console.log(chalk.yellow(`[Safe-Replace] ⚠️ Cảnh báo logic (vẫn tiếp tục):`));
+                            review.issues.forEach(issue => console.log(chalk.yellow(`   • ${issue}`)));
+                        } else {
+                            console.log(chalk.green(`[Safe-Replace] ✅ Logic Review PASS`));
+                        }
                     }
 
-                    if (review.verdict === 'WARN') {
-                        console.log(chalk.yellow(`[Safe-Replace] ⚠️ Cảnh báo logic (vẫn tiếp tục):`));
-                        review.issues.forEach(issue => console.log(chalk.yellow(`   • ${issue}`)));
-                    } else {
-                        console.log(chalk.green(`[Safe-Replace] ✅ Logic Review PASS`));
+                    // Gửi yêu cầu phê duyệt sửa đổi
+                    if (!global.isAutoApproveAll) {
+                        if (isSingleEdit) {
+                            presentApprovalRequest(
+                                '⚠️ YÊU CẦU SỬA CODE',
+                                {
+                                    file_path: args.file_path,
+                                    range: `Dòng ${args.start_line} đến ${args.end_line} (Biên tìm kiếm ±20 dòng)`,
+                                    functionality: `Chỉnh sửa nội dung tệp tin: ${args.task_description || 'Không có mô tả'}`
+                                },
+                                { content: replacements[0].replacement_content }
+                            );
+                        } else {
+                            presentApprovalRequest(
+                                '⚠️ YÊU CẦU SỬA NHIỀU ĐOẠN TRONG FILE',
+                                {
+                                    file_path: args.file_path,
+                                    range: replacements.map(r => `Dòng ${r.start_line}-${r.end_line}`).join(', '),
+                                    functionality: `Chỉnh sửa ${replacements.length} đoạn trong tệp tin: ${args.task_description || 'Không có mô tả'}`
+                                },
+                                { content: replacements.map(r => `=== Vùng ${r.start_line}-${r.end_line} ===\n${r.replacement_content}`).join('\n\n') }
+                            );
+                        }
+
+                        const answer = await global.askPermission(`👉 Cho phép áp dụng sửa đổi này? [y/a/n] : `);
+                        if (answer === 'a') global.isAutoApproveAll = true;
+                        else if (answer !== 'y') {
+                            shadow.restore();
+                            shadow.cleanup();
+                            throw new Error("PERMISSION_DENIED");
+                        }
                     }
-                }
 
-                // Gửi yêu cầu phê duyệt sửa đổi
-                if (!global.isAutoApproveAll) {
-                    if (isSingleEdit) {
-                        presentApprovalRequest(
-                            '⚠️ YÊU CẦU SỬA CODE',
-                            {
-                                file_path: args.file_path,
-                                range: `Dòng ${args.start_line} đến ${args.end_line} (Biên tìm kiếm ±20 dòng)`,
-                                functionality: `Chỉnh sửa nội dung tệp tin: ${args.task_description || 'Không có mô tả'}`
-                            },
-                            { content: replacements[0].replacement_content }
-                        );
-                    } else {
-                        presentApprovalRequest(
-                            '⚠️ YÊU CẦU SỬA NHIỀU ĐOẠN TRONG FILE',
-                            {
-                                file_path: args.file_path,
-                                range: replacements.map(r => `Dòng ${r.start_line}-${r.end_line}`).join(', '),
-                                functionality: `Chỉnh sửa ${replacements.length} đoạn trong tệp tin: ${args.task_description || 'Không có mô tả'}`
-                            },
-                            { content: replacements.map(r => `=== Vùng ${r.start_line}-${r.end_line} ===\n${r.replacement_content}`).join('\n\n') }
-                        );
+                    fs.writeFileSync(filePath, newContent, 'utf8');
+
+                    const oldContent = fs.existsSync(shadow.shadowPath) ? fs.readFileSync(shadow.shadowPath, 'utf8') : '';
+                    const incDiff = computeLineDiff(oldContent, newContent);
+
+                    shadow.cleanup();
+
+                    // Hoàn tất quy trình cô lập Git tự động
+                    if (gitIsolationState) {
+                        const { endGitIsolation } = await import('../utils/gitStats.js');
+                        endGitIsolation(workspace, gitIsolationState, true);
+                        console.log(chalk.green(`[Git Isolation] Đã commit và khôi phục môi trường về trạng thái ban đầu.`));
                     }
 
-                    const answer = await global.askPermission(`👉 Cho phép áp dụng sửa đổi này? [y/a/n] : `);
-                    if (answer === 'a') global.isAutoApproveAll = true;
-                    else if (answer !== 'y') {
-                        shadow.restore();
-                        shadow.cleanup();
-                        throw new Error("PERMISSION_DENIED");
-                    }
-                }
-
-                fs.writeFileSync(filePath, newContent, 'utf8');
-
-                const oldContent = fs.existsSync(shadow.shadowPath) ? fs.readFileSync(shadow.shadowPath, 'utf8') : '';
-                const incDiff = computeLineDiff(oldContent, newContent);
-
-                shadow.cleanup();
-
-                return {
-                    status: "success",
-                    message: `Đã thay thế an toàn ${replacements.length} đoạn trong file (sau ${attempt} lần thử)`,
-                    file: aiSafePath(filePath),
-                    absolute_path: filePath.replace(/\\/g, '/'),
-                    directory: path.dirname(filePath).replace(/\\/g, '/'),
-                    validations_passed: {
-                        syntax: true,
-                        logic_review: !args.skip_logic_review,
-                        shadow_backup: true
-                    },
-                    attempts: attempt,
-                    incremental_diff: {
+                    return {
+                        status: "success",
+                        message: `Đã thay thế an toàn ${replacements.length} đoạn trong file (sau ${attempt} lần thử)`,
                         file: aiSafePath(filePath),
-                        additions: incDiff.additions,
-                        deletions: incDiff.deletions
-                    }
-                };
-            }
+                        absolute_path: filePath.replace(/\\/g, '/'),
+                        directory: path.dirname(filePath).replace(/\\/g, '/'),
+                        validations_passed: {
+                            syntax: true,
+                            logic_review: !args.skip_logic_review,
+                            shadow_backup: true
+                        },
+                        attempts: attempt,
+                        incremental_diff: {
+                            file: aiSafePath(filePath),
+                            additions: incDiff.additions,
+                            deletions: incDiff.deletions
+                        }
+                    };
+                }
 
-            return { status: "error", error_message: "Đã thử quá số lần cho phép hoặc gặp sự cố khi lưu file." };
+                // Hủy bỏ thay đổi dở dang nếu lặp sửa đổi thất bại
+                if (gitIsolationState) {
+                    const { endGitIsolation } = await import('../utils/gitStats.js');
+                    endGitIsolation(workspace, gitIsolationState, false);
+                }
+
+                return { status: "error", error_message: "Đã thử quá số lần cho phép hoặc gặp sự cố khi lưu file." };
+            } catch (err) {
+                // Hoàn tác và phục hồi bối cảnh cũ cho người dùng khi có sự cố
+                if (gitIsolationState) {
+                    const { endGitIsolation } = await import('../utils/gitStats.js');
+                    endGitIsolation(workspace, gitIsolationState, false);
+                    console.log(chalk.yellow(`[Git Isolation] Quy trình bị hủy bỏ. Đã hoàn tác mọi thay đổi dở dang.`));
+                }
+                throw err;
+            }
         }
     },
     "write_file": {
@@ -730,42 +780,70 @@ export default {
                 oldContent = fs.readFileSync(filePath, 'utf8');
             }
 
-            if (!global.isAutoApproveAll) {
-                presentApprovalRequest(
-                    '⚠️ YÊU CẦU TẠO / GHI ĐÈ TOÀN BỘ FILE',
-                    {
-                        file_path: args.file_path,
-                        range: 'Toàn bộ file (Ghi mới hoặc ghi đè)',
-                        functionality: 'Tạo hoặc ghi đè toàn bộ tệp tin nguồn'
-                    },
-                    { content: fileContent }
-                );
-
-                const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép tạo/ghi đè file này? [y/a/n] : `));
-                if (answer === 'a') global.isAutoApproveAll = true;
-                else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
-            }
-
-            const parentDir = path.dirname(filePath);
-            if (!fs.existsSync(parentDir)) {
-                fs.mkdirSync(parentDir, { recursive: true });
-            }
-
-            fs.writeFileSync(filePath, fileContent, 'utf8');
-
-            const incDiff = computeLineDiff(oldContent, fileContent);
-
-            return {
-                message: `Đã ghi file thành công`,
-                file: aiSafePath(filePath),
-                absolute_path: filePath.replace(/\\/g, '/'),
-                directory: parentDir.replace(/\\/g, '/'),
-                incremental_diff: {
-                    file: aiSafePath(filePath),
-                    additions: incDiff.additions,
-                    deletions: incDiff.deletions
+            // Tự động kích hoạt cô lập Git
+            let gitIsolationState = null;
+            const workspace = globalThis.activeWorkspace || process.cwd();
+            if (globalThis.useGitIsolation) {
+                const { startGitIsolation } = await import('../utils/gitStats.js');
+                gitIsolationState = startGitIsolation(workspace, "write-file");
+                if (gitIsolationState) {
+                    console.log(chalk.green(`[Git Isolation] Đã tự động kích hoạt Git Isolation. Nhánh tạm thời: ${gitIsolationState.tempBranch}`));
                 }
-            };
+            }
+
+            try {
+                if (!global.isAutoApproveAll) {
+                    presentApprovalRequest(
+                        '⚠️ YÊU CẦU TẠO / GHI ĐÈ TOÀN BỘ FILE',
+                        {
+                            file_path: args.file_path,
+                            range: 'Toàn bộ file (Ghi mới hoặc ghi đè)',
+                            functionality: 'Tạo hoặc ghi đè toàn bộ tệp tin nguồn'
+                        },
+                        { content: fileContent }
+                    );
+
+                    const answer = await global.askPermission(chalk.bold.greenBright(`👉 Cho phép tạo/ghi đè file này? [y/a/n] : `));
+                    if (answer === 'a') global.isAutoApproveAll = true;
+                    else if (answer !== 'y') throw new Error("PERMISSION_DENIED");
+                }
+
+                const parentDir = path.dirname(filePath);
+                if (!fs.existsSync(parentDir)) {
+                    fs.mkdirSync(parentDir, { recursive: true });
+                }
+
+                fs.writeFileSync(filePath, fileContent, 'utf8');
+
+                const incDiff = computeLineDiff(oldContent, fileContent);
+
+                // Commit và hoàn thành quy trình
+                if (gitIsolationState) {
+                    const { endGitIsolation } = await import('../utils/gitStats.js');
+                    endGitIsolation(workspace, gitIsolationState, true);
+                    console.log(chalk.green(`[Git Isolation] Đã commit và khôi phục môi trường về trạng thái ban đầu.`));
+                }
+
+                return {
+                    message: `Đã ghi file thành công`,
+                    file: aiSafePath(filePath),
+                    absolute_path: filePath.replace(/\\/g, '/'),
+                    directory: parentDir.replace(/\\/g, '/'),
+                    incremental_diff: {
+                        file: aiSafePath(filePath),
+                        additions: incDiff.additions,
+                        deletions: incDiff.deletions
+                    }
+                };
+            } catch (err) {
+                // Hoàn tác khi có lỗi
+                if (gitIsolationState) {
+                    const { endGitIsolation } = await import('../utils/gitStats.js');
+                    endGitIsolation(workspace, gitIsolationState, false);
+                    console.log(chalk.yellow(`[Git Isolation] Quy trình bị hủy bỏ. Đã hoàn tác mọi thay đổi dở dang.`));
+                }
+                throw err;
+            }
         }
     }
 };
