@@ -27,6 +27,7 @@ function detectWorkspace(message) {
     }
     return null;
 }
+
 // =================================================================
 // ⏸️ DEBUG/PAUSE ENDPOINTS FOR AGENT LOOP
 // =================================================================
@@ -45,6 +46,7 @@ router.post('/resume', (req, res) => {
 router.get('/debug-status', (req, res) => {
     res.json({ success: true, isPaused: !!globalThis.isPaused });
 });
+
 router.post('/chat', async (req, res) => {
     const { message, stream, useReformulate, image, images, agent, model, headless, mode, useGitIsolation, useGitFooter } = req.body;
     if (!message) return res.status(400).json({ error: 'Thiếu message' });
@@ -89,14 +91,15 @@ router.post('/chat', async (req, res) => {
 
     if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache, no-transform'); // Ngăn chặn nén đệm của Vite/Middleware
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
         res.setHeader('Connection', 'keep-alive');
-        res.setHeader('X-Accel-Buffering', 'no'); // Vô hiệu hóa bộ đệm của Nginx/Vite proxy
-        res.flushHeaders(); // Gửi headers ngay lập tức để thiết lập kết nối SSE
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders();
         activeWebSession.res = res;
     } else {
         activeWebSession.res = null;
     }
+
     // 1. Tự động chuyển đổi trạng thái của Node FSM hiện hành sang RUNNING trong cơ sở dữ liệu
     let activeNodeName = null;
     let pipelineRow = null;
@@ -122,11 +125,6 @@ router.post('/chat', async (req, res) => {
             } else {
                 const firstPending = states.find(s => s.state === 'PENDING');
                 activeNodeName = firstPending ? firstPending.step_key : pipeline.initial_node;
-            }
-
-            if (activeNodeName) {
-                db.prepare(`UPDATE agent_states SET state = 'RUNNING', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
-                    .run(new Date().toISOString(), activeNodeName);
             }
         } catch (dbErr) {
             console.warn(`[Agent Route] Lỗi cập nhật trạng thái RUNNING: ${dbErr.message}`);
@@ -198,7 +196,6 @@ router.post('/chat', async (req, res) => {
             }
             globalThis.persistentGoal = null;
 
-            // Xóa sạch bộ nhớ đệm kiểm duyệt và trạng thái tệp tin
             globalThis.lastReadTime = {};
             globalThis.fileTracker = {};
 
@@ -249,152 +246,269 @@ router.post('/chat', async (req, res) => {
             globalThis.activeWebHistory = [];
         }
 
-        const result = await executeAgentTurn({
-            message,
-            history: globalThis.activeWebHistory || [],
-            sessionFile: globalThis.activeWebSessionFile,
-            useReformulate: useReformulate !== false,
-            headless: !!headless,
-            image,
-            images: images || [],
-            mode: mode || 'default',
-            model: targetModelName, // Truyền model cụ thể
-            useGitIsolation: !!useGitIsolation, // Truyền cài đặt Git Isolation
-            useGitFooter: !!useGitFooter, // Truyền cài đặt gửi Footer Context
-            onChunk: stream ? (chunk) => {
-                if (typeof chunk === 'object' && chunk !== null) {
-                    res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.text, usage: chunk.usage })}\n\n`);
-                } else {
-                    res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
-                }
-            } : null,
-            onAction: stream ? (tool, args, stepId) => {
-                const inputVal = args ? (args.command || args.file_path || args.query || args.url || args.pattern || JSON.stringify(args)) : '';
-                res.write(`data: ${JSON.stringify({ type: 'action', tool, input: inputVal, step_id: stepId })}\n\n`);
-            } : null,
-            onToolOutput: stream ? (output, stepId) => {
-                let parsedOutput = output;
+        let currentNodeName = activeNodeName;
+        let nextMessage = message;
+        let lastResult = null;
+
+        if (currentNodeName) {
+            // VÒNG LẶP CHẠY MULTI-AGENT TỰ ĐỘNG CHUỖI FSM TRÊN SSE STREAM CỦA Ô CHAT
+            while (currentNodeName) {
                 try {
-                    parsedOutput = JSON.parse(output);
-                } catch (e) { }
-                res.write(`data: ${JSON.stringify({ type: 'tool_output', output: parsedOutput, step_id: stepId })}\n\n`);
-            } : null,
-            onSystem: stream ? (content) => {
-                res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
-            } : null,
-            onAskPermission: async (query, detailsOverride = null) => {
-                const { randomUUID } = await import('crypto');
-                const permId = 'perm_' + randomUUID();
-                const agentService = await import('../services/agentService.js');
-
-                let cleanDetails = detailsOverride;
-                if (!cleanDetails) {
-                    cleanDetails = agentService.logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+                    db.prepare(`UPDATE agent_states SET state = 'RUNNING', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
+                        .run(new Date().toISOString(), currentNodeName);
+                } catch (dbErr) {
+                    console.warn(`[Agent Route] Lỗi cập nhật trạng thái RUNNING: ${dbErr.message}`);
                 }
 
-                agentService.clearLogBuffer();
+                if (stream) {
+                    res.write(`data: ${JSON.stringify({ type: 'system', content: `🎬 Bắt đầu kích hoạt Node: [${currentNodeName.toUpperCase()}]` })}\n\n`);
+                }
 
-                res.write(`data: ${JSON.stringify({ type: 'ask_permission', id: permId, query: query.replace(/\x1b\[[0-9;]*m/g, ''), details: cleanDetails })}\n\n`);
-
-                const pendingPermissions = agentService.pendingPermissions;
-
-                return new Promise((resolve) => {
-                    pendingPermissions.set(permId, resolve);
-
-                    agentService.setActivePermissionData({
-                        id: permId,
-                        query: query.replace(/\x1b\[[0-9;]*m/g, ''),
-                        details: cleanDetails
-                    });
-
-                    (async () => {
-                        try {
-                            const configPath = path.join(projectRoot, 'config.json');
-                            if (fs.existsSync(configPath)) {
-                                const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-                                if (config.telegram?.enabled && config.telegram?.notifyOnPermission) {
-                                    const { sendTelegramMessage, escapeHtml } = await import('../services/telegramService.js');
-                                    const cleanQuery = query.replace(/\x1b\[[0-9;]*m/g, '');
-
-                                    const inlineKeyboard = {
-                                        inline_keyboard: [
-                                            [
-                                                { text: "Đồng ý (Yes)", callback_data: `perm:${permId}:y` },
-                                                { text: "Từ chối (No)", callback_data: `perm:${permId}:n` }
-                                            ],
-                                            [
-                                                { text: "Đồng ý tất cả (All)", callback_data: `perm:${permId}:a` }
-                                            ]
-                                        ]
-                                    };
-
-                                    await sendTelegramMessage(
-                                        `⚠️ <b>YÊU CẦU PHÊ DUYỆT WORKFLOW:</b>\n\n<i>${escapeHtml(cleanQuery)}</i>\n\nBạn có thể nhấn các nút bấm dưới đây để phản hồi trực tiếp:`,
-                                        inlineKeyboard
-                                    );
-                                }
-                            }
-                        } catch (tgErr) {
-                            console.error("Lỗi gửi thông báo phê duyệt qua Telegram:", tgErr.message);
+                const result = await executeAgentTurn({
+                    message: nextMessage,
+                    history: globalThis.activeWebHistory || [],
+                    sessionFile: globalThis.activeWebSessionFile,
+                    useReformulate: useReformulate !== false,
+                    headless: !!headless,
+                    image,
+                    images: images || [],
+                    mode: mode || 'default',
+                    model: targetModelName,
+                    useGitIsolation: !!useGitIsolation,
+                    useGitFooter: !!useGitFooter,
+                    onChunk: stream ? (chunk) => {
+                        if (typeof chunk === 'object' && chunk !== null) {
+                            res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.text, usage: chunk.usage })}\n\n`);
+                        } else {
+                            res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
                         }
-                    })();
+                    } : null,
+                    onAction: stream ? (tool, args, stepId) => {
+                        const inputVal = args ? (args.command || args.file_path || args.query || args.url || args.pattern || JSON.stringify(args)) : '';
+                        res.write(`data: ${JSON.stringify({ type: 'action', tool, input: inputVal, step_id: stepId })}\n\n`);
+                    } : null,
+                    onToolOutput: stream ? (output, stepId) => {
+                        let parsedOutput = output;
+                        try {
+                            parsedOutput = JSON.parse(output);
+                        } catch (e) { }
+                        res.write(`data: ${JSON.stringify({ type: 'tool_output', output: parsedOutput, step_id: stepId })}\n\n`);
+                    } : null,
+                    onSystem: stream ? (content) => {
+                        res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
+                    } : null,
+                    onAskPermission: async (query, detailsOverride = null) => {
+                        const { randomUUID } = await import('crypto');
+                        const permId = 'perm_' + randomUUID();
+                        const agentService = await import('../services/agentService.js');
+
+                        let cleanDetails = detailsOverride;
+                        if (!cleanDetails) {
+                            cleanDetails = agentService.logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+                        }
+
+                        agentService.clearLogBuffer();
+                        res.write(`data: ${JSON.stringify({ type: 'ask_permission', id: permId, query: query.replace(/\x1b\[[0-9;]*m/g, ''), details: cleanDetails })}\n\n`);
+
+                        const pendingPermissions = agentService.pendingPermissions;
+
+                        return new Promise((resolve) => {
+                            pendingPermissions.set(permId, resolve);
+
+                            agentService.setActivePermissionData({
+                                id: permId,
+                                query: query.replace(/\x1b\[[0-9;]*m/g, ''),
+                                details: cleanDetails
+                            });
+
+                            (async () => {
+                                try {
+                                    const configPath = path.join(projectRoot, 'config.json');
+                                    if (fs.existsSync(configPath)) {
+                                        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                                        if (config.telegram?.enabled && config.telegram?.notifyOnPermission) {
+                                            const { sendTelegramMessage, escapeHtml } = await import('../services/telegramService.js');
+                                            const cleanQuery = query.replace(/\x1b\[[0-9;]*m/g, '');
+
+                                            const inlineKeyboard = {
+                                                inline_keyboard: [
+                                                    [
+                                                        { text: "Đồng ý (Yes)", callback_data: `perm:${permId}:y` },
+                                                        { text: "Từ chối (No)", callback_data: `perm:${permId}:n` }
+                                                    ],
+                                                    [
+                                                        { text: "Đồng ý tất cả (All)", callback_data: `perm:${permId}:a` }
+                                                    ]
+                                                ]
+                                            };
+
+                                            await sendTelegramMessage(
+                                                `⚠️ <b>YÊU CẦU PHÊ DUYỆT WORKFLOW:</b>\n\n<i>${escapeHtml(cleanQuery)}</i>\n\nBạn có thể nhấn các nút bấm dưới đây để phản hồi trực tiếp:`,
+                                                inlineKeyboard
+                                            );
+                                        }
+                                    }
+                                } catch (tgErr) {
+                                    console.error("Lỗi gửi thông báo phê duyệt qua Telegram:", tgErr.message);
+                                }
+                            })();
+                        });
+                    },
+                    onLog: stream ? (text) => {
+                        res.write(`data: ${JSON.stringify({ type: 'log', content: text })}\n\n`);
+                    } : null
                 });
-            },
-            onLog: stream ? (text) => {
-                res.write(`data: ${JSON.stringify({ type: 'log', content: text })}\n\n`);
-            } : null
-        });
 
-        globalThis.activeWebHistory = result.history;
-        globalThis.activeWebSessionFile = result.sessionFile;
+                globalThis.activeWebHistory = result.history;
+                globalThis.activeWebSessionFile = result.sessionFile;
+                lastResult = result;
 
-        // 2. Chuyển trạng thái Node hoàn thành sang DONE trong DB khi kết thúc phiên thành công
-        if (activeNodeName) {
-            try {
-                db.prepare(`UPDATE agent_states SET state = 'DONE', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
-                    .run(new Date().toISOString(), activeNodeName);
+                // Cập nhật trạng thái DONE cho Node hiện hành
+                try {
+                    db.prepare(`UPDATE agent_states SET state = 'DONE', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
+                        .run(new Date().toISOString(), currentNodeName);
+                } catch (dbErr) {
+                    console.warn(`[Agent Route] Lỗi cập nhật trạng thái DONE: ${dbErr.message}`);
+                }
 
-                const allStates = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
-                const allDone = allStates.every(s => s.state === 'DONE');
-                if (allDone) {
+                // Tự động phân giải Node tiếp theo dựa trên liên kết cạnh (Edges)
+                let nextNode = null;
+                try {
                     const pRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
                     if (pRow && pRow.data) {
                         const pipeline = JSON.parse(pRow.data);
-                        pipeline.status = 'DONE';
-                        db.prepare(`UPDATE pipelines SET status = ?, data = ? WHERE id = 'CURRENT'`)
-                            .run('DONE', JSON.stringify(pipeline));
-                    }
-                }
-            } catch (dbErr) {
-                console.warn(`[Agent Route] Lỗi cập nhật trạng thái DONE: ${dbErr.message}`);
-            }
-        }
+                        const states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
 
-        if (result.type === 'handover') {
-            if (stream) {
-                res.write(`data: ${JSON.stringify({ type: 'system', content: "✅ Workflow Engine đã xử lý thành công toàn bộ Pipeline!" })}\n\n`);
-                const fileChanges = getGitDiffStats(detectWorkspace(message));
-                res.write(`data: ${JSON.stringify({ type: 'done', response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: globalThis.activeWebHistory, fileChanges })}\n\n`);
-                res.end();
-            } else {
-                const fileChanges = getGitDiffStats(detectWorkspace(message));
-                res.json({ success: true, response: "Kế hoạch Pipeline đã chạy hoàn tất và được xác thực tự động.", history: globalThis.activeWebHistory, fileChanges });
+                        // 1. Phân giải điều kiện lỗi của Validator (nếu có)
+                        const condEdge = (pipeline.conditional_edges || []).find(ce => ce.from === currentNodeName);
+                        if (condEdge && condEdge.router) {
+                            const hasErrors = states.some(s => s.step_key === currentNodeName && (s.state === 'FAILED' || s.state === 'BLOCKED'));
+                            if (hasErrors) {
+                                nextNode = condEdge.router.is_not_empty || condEdge.router.failure;
+                            } else {
+                                nextNode = condEdge.router.is_empty || condEdge.router.success;
+                            }
+                        }
+
+                        // 2. Phân giải cạnh tuần tự tĩnh thông thường
+                        if (!nextNode) {
+                            const normalEdge = (pipeline.edges || []).find(e => e.from === currentNodeName);
+                            if (normalEdge) {
+                                nextNode = normalEdge.to;
+                            }
+                        }
+                    }
+                } catch (edgeErr) {
+                    console.warn(`[Agent Route] Lỗi phân giải cạnh tiếp theo: ${edgeErr.message}`);
+                }
+
+                if (nextNode && nextNode !== 'end') {
+                    currentNodeName = nextNode;
+                    // Bổ sung chỉ thị cấu trúc để Agent sau tiếp nhận mã nguồn/kết quả từ Agent trước
+                    nextMessage = `[HÀNH ĐỘNG CHUYỂN GIAO] Kết quả xử lý từ Node trước đó:\n${result.response}\n\nHãy tiếp tục phân tích, chỉnh sửa file hoặc thực thi nhiệm vụ tương ứng của bạn trong quy trình.`;
+                } else {
+                    currentNodeName = null; // Hoàn thành toàn bộ đồ thị
+                }
             }
         } else {
-            if (stream) {
-                const fileChanges = getGitDiffStats(detectWorkspace(message));
-                res.write(`data: ${JSON.stringify({ type: 'done', response: result.response, history: globalThis.activeWebHistory, fileChanges })}\n\n`);
-                res.end();
-            } else {
-                const fileChanges = getGitDiffStats(detectWorkspace(message));
-                res.json({ success: true, response: result.response, history: globalThis.activeWebHistory, fileChanges });
+            // Chat tự do thông thường ngoài đồ thị FSM
+            const result = await executeAgentTurn({
+                message,
+                history: globalThis.activeWebHistory || [],
+                sessionFile: globalThis.activeWebSessionFile,
+                useReformulate: useReformulate !== false,
+                headless: !!headless,
+                image,
+                images: images || [],
+                mode: mode || 'default',
+                model: targetModelName,
+                useGitIsolation: !!useGitIsolation,
+                useGitFooter: !!useGitFooter,
+                onChunk: stream ? (chunk) => {
+                    if (typeof chunk === 'object' && chunk !== null) {
+                        res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.text, usage: chunk.usage })}\n\n`);
+                    } else {
+                        res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk })}\n\n`);
+                    }
+                } : null,
+                onAction: stream ? (tool, args, stepId) => {
+                    const inputVal = args ? (args.command || args.file_path || args.query || args.url || args.pattern || JSON.stringify(args)) : '';
+                    res.write(`data: ${JSON.stringify({ type: 'action', tool, input: inputVal, step_id: stepId })}\n\n`);
+                } : null,
+                onToolOutput: stream ? (output, stepId) => {
+                    let parsedOutput = output;
+                    try {
+                        parsedOutput = JSON.parse(output);
+                    } catch (e) { }
+                    res.write(`data: ${JSON.stringify({ type: 'tool_output', output: parsedOutput, step_id: stepId })}\n\n`);
+                } : null,
+                onSystem: stream ? (content) => {
+                    res.write(`data: ${JSON.stringify({ type: 'system', content })}\n\n`);
+                } : null,
+                onAskPermission: async (query, detailsOverride = null) => {
+                    const { randomUUID } = await import('crypto');
+                    const permId = 'perm_' + randomUUID();
+                    const agentService = await import('../services/agentService.js');
+
+                    let cleanDetails = detailsOverride;
+                    if (!cleanDetails) {
+                        cleanDetails = agentService.logBuffer.map(line => line.replace(/\x1b\[[0-9;]*m/g, '')).join('\n');
+                    }
+
+                    agentService.clearLogBuffer();
+                    res.write(`data: ${JSON.stringify({ type: 'ask_permission', id: permId, query: query.replace(/\x1b\[[0-9;]*m/g, ''), details: cleanDetails })}\n\n`);
+
+                    const pendingPermissions = agentService.pendingPermissions;
+
+                    return new Promise((resolve) => {
+                        pendingPermissions.set(permId, resolve);
+
+                        agentService.setActivePermissionData({
+                            id: permId,
+                            query: query.replace(/\x1b\[[0-9;]*m/g, ''),
+                            details: cleanDetails
+                        });
+                    });
+                },
+                onLog: stream ? (text) => {
+                    res.write(`data: ${JSON.stringify({ type: 'log', content: text })}\n\n`);
+                } : null
+            });
+
+            globalThis.activeWebHistory = result.history;
+            globalThis.activeWebSessionFile = result.sessionFile;
+            lastResult = result;
+        }
+
+        // Cập nhật trạng thái DONE tổng thể cho Pipeline
+        try {
+            const allStates = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
+            const allDone = allStates.every(s => s.state === 'DONE');
+            if (allDone) {
+                const pRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
+                if (pRow && pRow.data) {
+                    const pipeline = JSON.parse(pRow.data);
+                    pipeline.status = 'DONE';
+                    db.prepare(`UPDATE pipelines SET status = ?, data = ? WHERE id = 'CURRENT'`)
+                        .run('DONE', JSON.stringify(pipeline));
+                }
             }
+        } catch (dbErr) {
+            console.warn(`[Agent Route] Lỗi cập nhật trạng thái DONE tổng thể: ${dbErr.message}`);
+        }
+
+        if (stream) {
+            const fileChanges = getGitDiffStats(detectWorkspace(message));
+            res.write(`data: ${JSON.stringify({ type: 'done', response: lastResult?.response || "Quy trình kết thúc thành công", history: globalThis.activeWebHistory, fileChanges })}\n\n`);
+            res.end();
+        } else {
+            const fileChanges = getGitDiffStats(detectWorkspace(message));
+            res.json({ success: true, response: lastResult?.response || "Quy trình kết thúc thành công", history: globalThis.activeWebHistory, fileChanges });
         }
 
     } catch (err) {
         console.error(chalk.red(`[Web Terminal] ❌ Lỗi xử lý:`), err.message);
 
-        // 3. Chuyển trạng thái Node hoàn thành sang FAILED trong DB khi kết thúc phiên gặp sự cố
         if (activeNodeName) {
             try {
                 db.prepare(`UPDATE agent_states SET state = 'FAILED', error_history = ?, updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
