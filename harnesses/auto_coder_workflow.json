@@ -1,0 +1,107 @@
+{
+  "harness_name": "auto_coder_workflow",
+  "description": "Quy trình tự động phân tích cấu trúc, viết mã nguồn, kiểm duyệt cú pháp và tự sửa lỗi",
+  "initial_node": "planner",
+  "state_schema": {
+    "task": "",
+    "target_file": "",
+    "pending_code": "",
+    "errors": [],
+    "retry_count": 0,
+    "next_node": ""
+  },
+  "nodes": {
+    "agent_54550": {
+      "type": "agent",
+      "system_prompt": "Bạn là Kỹ sư Phân tích Mã nguồn (Software Architect Planner).\nNhiệm vụ của bạn là phân tích yêu cầu lập trình từ người dùng: \"${state.task}\".\nSử dụng các công cụ tìm kiếm tệp tin để định vị chính xác vị trí cần chỉnh sửa trong thư mục làm việc hiện hành.\nKhi đã tìm thấy tệp mục tiêu, hãy bàn giao tệp đó cho bước tiếp theo.",
+      "tools": [
+        "ask_questions_if_underspecified",
+        "read_file",
+        "read_multiple_files",
+        "read_file_lines",
+        "find_content",
+        "list_directory",
+        "find_files",
+        "change_active_workspace",
+        "capture_system_screenshot",
+        "debug_desktop_app"
+      ],
+      "model_mode": "fast",
+      "include_global_prompt": true
+    },
+    "agent_48895": {
+      "type": "agent",
+      "system_prompt": "Bạn là Trợ lý Lập trình viên (Senior Developer).\nNhiệm vụ của bạn là chỉnh sửa tệp tin dựa trên phân tích từ planner.\nQUY TẮC BẮT BUỘC: Bạn phải chạy công cụ 'read_file' để đọc nội dung tệp tin cần sửa trước khi áp dụng 'replace_content_safe' hoặc 'write_file'.\nSau khi chỉnh sửa thành công, mã nguồn sẽ tự động được gửi qua validator.",
+      "tools": [
+        "list_directory",
+        "find_content",
+        "find_files",
+        "change_active_workspace",
+        "replace_multiple_files_safe",
+        "replace_content_safe",
+        "write_file",
+        "read_file_lines",
+        "debug_desktop_app",
+        "read_file",
+        "read_multiple_files",
+        "capture_system_screenshot",
+        "execute_terminal_command",
+        "stop_terminal_process",
+        "get_os_context"
+      ],
+      "model_mode": "fast",
+      "include_global_prompt": true
+    },
+    "validator_30135": {
+      "type": "validator",
+      "validation_rule": "syntax_only",
+      "target_file_key": "target_file",
+      "next_on_success": "end",
+      "next_on_failure": "agent_81287"
+    },
+    "agent_81287": {
+      "type": "agent",
+      "system_prompt": "Bạn là Chuyên gia Sửa lỗi (Debugging Expert).\nValidator báo lỗi biên dịch/cú pháp sau trong quá trình kiểm duyệt: \"${state.errors}\".\nHãy đọc lại nội dung tệp tin lỗi bằng 'read_file', phân tích thông tin lỗi kỹ lưỡng, sửa lại mã nguồn sao cho hợp lệ và gửi lại cho coder.",
+      "tools": [
+        "read_file",
+        "read_multiple_files",
+        "read_file_lines",
+        "find_content",
+        "list_directory",
+        "find_files",
+        "change_active_workspace",
+        "replace_multiple_files_safe",
+        "replace_content_safe",
+        "write_file",
+        "debug_desktop_app"
+      ],
+      "model_mode": "thinking",
+      "include_global_prompt": true
+    }
+  },
+  "edges": [
+    {
+      "from": "agent_54550",
+      "to": "agent_48895"
+    },
+    {
+      "from": "agent_48895",
+      "to": "validator_30135"
+    },
+    {
+      "from": "agent_81287",
+      "to": "agent_48895"
+    }
+  ],
+  "conditional_edges": [
+    {
+      "from": "validator_30135",
+      "condition_type": "state_check",
+      "state_key": "errors",
+      "router": {
+        "is_empty": "end",
+        "is_not_empty": "agent_81287"
+      }
+    }
+  ]
+}

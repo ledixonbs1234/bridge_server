@@ -734,6 +734,9 @@ router.post('/harnesses', (req, res) => {
         const filePath = path.join(harnessesDir, `${safeName}.json`);
         fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf8');
 
+        // Đồng bộ và tải trực tiếp vào registry để kích hoạt nóng tức thì, tránh độ trễ của hệ điều hành
+        harnessRegistry.loadHarnessFile(`${safeName}.json`);
+
         console.log(chalk.green(`[Harness Registry] 📥 Đã lưu và Hot-Deploy thành công Harness từ UI: ${safeName}.json`));
         res.json({
             success: true,
