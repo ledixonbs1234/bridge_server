@@ -149,8 +149,17 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/provider', providerRoutes);
 
 const PORT = 54321;
+// --- BỔ SUNG ĐĂNG KÝ MIDDLEWARE XỬ LÝ LỖI AN TOÀN ---
+import { errorHandler } from './error_handler.js';
+app.use(errorHandler());
+// --- BẮT CÁC LỖI BẤT ĐỒNG BỘ TRÁNH SẬP TIẾN TRÌNH ---
+process.on('unhandledRejection', (reason, promise) => {
+    console.error(chalk.red('\n[FATAL] Phát hiện Unhandled Promise Rejection (Đã chặn sập tiến trình):'), reason);
+});
 
-
+process.on('uncaughtException', (err) => {
+    console.error(chalk.red('\n[FATAL] Phát hiện Uncaught Exception (Đã chặn sập tiến trình):'), err.message);
+});
 async function bootstrap() {
     try {
         // Khởi tạo ngữ cảnh thư mục làm việc mặc định từ process.cwd() của dự án hiện hành
