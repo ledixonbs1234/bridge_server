@@ -253,6 +253,109 @@ router.post('/chat', async (req, res) => {
         if (currentNodeName) {
             // VÒNG LẶP CHẠY MULTI-AGENT TỰ ĐỘNG CHUỖI FSM TRÊN SSE STREAM CỦA Ô CHAT
             while (currentNodeName) {
+                let isValidatorNode = false;
+                let targetFileKey = 'target_file';
+
+                try {
+                    const pRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
+                    if (pRow && pRow.data) {
+                        const pipeline = JSON.parse(pRow.data);
+                        const nodeConfig = pipeline.nodes[currentNodeName];
+                        if (nodeConfig && nodeConfig.type === 'validator') {
+                            isValidatorNode = true;
+                            targetFileKey = nodeConfig.target_file_key || 'target_file';
+                        }
+                    }
+                } catch (e) { }
+
+                // TRƯỜNG HỢP 1: NẾU LÀ NODE KIỂM DUYỆT (VALIDATOR) - TỰ ĐỘNG CHẠY BIÊN DỊCH KHÔNG QUA LLM
+                if (isValidatorNode) {
+                    if (stream) {
+                        res.write(`data: ${JSON.stringify({ type: 'system', content: `🛡️ Đang tự động kích hoạt kiểm duyệt cú pháp: [${currentNodeName.toUpperCase()}]` })}\n\n`);
+                    }
+
+                    try {
+                        db.prepare(`UPDATE agent_states SET state = 'RUNNING', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
+                            .run(new Date().toISOString(), currentNodeName);
+                    } catch (dbErr) { }
+
+                    // Dò tìm chính xác tệp tin nguồn vừa sửa đổi trong workspace để xác thực cú pháp
+                    let targetFile = 'index.ts';
+                    try {
+                        const tracker = globalThis.fileTracker || {};
+                        const modifiedFiles = Object.keys(tracker).filter(k => tracker[k].status === 'modified' || tracker[k].status === 'created');
+                        if (modifiedFiles.length > 0) {
+                            targetFile = modifiedFiles[0];
+                        } else if (globalThis.activeWorkspace) {
+                            const files = fs.readdirSync(globalThis.activeWorkspace);
+                            const codeFiles = files.filter(f => f.endsWith('.js') || f.endsWith('.ts') || f.endsWith('.py'));
+                            if (codeFiles.length > 0) targetFile = path.join(globalThis.activeWorkspace, codeFiles[0]);
+                        }
+                    } catch (e) { }
+
+                    let codeToValidate = '';
+                    if (fs.existsSync(targetFile)) {
+                        codeToValidate = fs.readFileSync(targetFile, 'utf8');
+                    }
+
+                    const { validateSyntax } = await import('../skills/validators/syntax_validator.js');
+                    const syntaxResult = await validateSyntax(targetFile, codeToValidate);
+
+                    let nextNode = null;
+                    try {
+                        const pRow = db.prepare(`SELECT data FROM pipelines WHERE id = 'CURRENT'`).get();
+                        if (pRow && pRow.data) {
+                            const pipeline = JSON.parse(pRow.data);
+                            const condEdge = (pipeline.conditional_edges || []).find(ce => ce.from === currentNodeName);
+                            if (condEdge && condEdge.router) {
+                                if (!syntaxResult.valid) {
+                                    nextNode = condEdge.router.is_not_empty || condEdge.router.failure;
+                                } else {
+                                    nextNode = condEdge.router.is_empty || condEdge.router.success;
+                                }
+                            }
+                        }
+                    } catch (e) { }
+
+                    if (!syntaxResult.valid) {
+                        // Thất bại -> Lưu vết lỗi để Agent Healer sau xử lý
+                        try {
+                            db.prepare(`UPDATE agent_states SET state = 'FAILED', error_history = ?, updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
+                                .run(JSON.stringify([syntaxResult.error]), new Date().toISOString(), currentNodeName);
+                        } catch { }
+
+                        if (stream) {
+                            res.write(`data: ${JSON.stringify({ type: 'system', content: `❌ Phát hiện lỗi cú pháp trong tệp [${path.basename(targetFile)}]:\n${syntaxResult.error}` })}\n\n`);
+                        }
+
+                        if (nextNode && nextNode !== 'end') {
+                            currentNodeName = nextNode;
+                            nextMessage = `[YÊU CẦU SỬA LỖI] Kiểm duyệt phát hiện lỗi biên dịch sau trong tệp [${path.basename(targetFile)}]:\n${syntaxResult.error}\n\nHãy sửa đổi tệp tin để sửa triệt để lỗi cú pháp này.`;
+                        } else {
+                            currentNodeName = null;
+                        }
+                    } else {
+                        // Thành công -> Xóa vết lỗi
+                        try {
+                            db.prepare(`UPDATE agent_states SET state = 'DONE', error_history = '[]', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
+                                .run(new Date().toISOString(), currentNodeName);
+                        } catch { }
+
+                        if (stream) {
+                            res.write(`data: ${JSON.stringify({ type: 'system', content: `✅ Xác thực thành công tệp [${path.basename(targetFile)}]. Không phát hiện lỗi cú pháp.` })}\n\n`);
+                        }
+
+                        if (nextNode && nextNode !== 'end') {
+                            currentNodeName = nextNode;
+                            nextMessage = `[HÀNH ĐỘNG CHUYỂN GIAO] Kiểm duyệt đã thông qua thành công.`;
+                        } else {
+                            currentNodeName = null;
+                        }
+                    }
+                    continue; // Chuyển sang vòng lặp kế tiếp
+                }
+
+                // TRƯỜNG HỢP 2: NẾU LÀ NODE AGENT THÔNG THƯỜNG - CHẠY LLM TURN CHUẨN
                 try {
                     db.prepare(`UPDATE agent_states SET state = 'RUNNING', updated_at = ? WHERE pipeline_id = 'CURRENT' AND step_key = ?`)
                         .run(new Date().toISOString(), currentNodeName);
