@@ -342,14 +342,36 @@ export async function executeAgentTurn({
         } else {
             const globalPrompt = getCompiledSystemPrompt();
             if (nodeSystemPrompt) {
+                // ĐỒNG BỘ FLUXMEM: Tự động phân tích và biên dịch nóng các biến trạng thái (như errors) trong DB vào Prompt của Node
+                const statesMap = {};
+                try {
+                    const states = db.prepare(`SELECT * FROM agent_states WHERE pipeline_id = 'CURRENT'`).all() || [];
+                    states.forEach(s => {
+                        if (s.error_history) {
+                            try {
+                                const errs = JSON.parse(s.error_history);
+                                if (Array.isArray(errs) && errs.length > 0) {
+                                    statesMap['errors'] = errs;
+                                }
+                            } catch (e) { }
+                        }
+                    });
+                } catch (dbErr) { }
+
+                let interpolatedNodePrompt = nodeSystemPrompt.replace(/\${state\.(\w+)}/g, (match, key) => {
+                    const val = statesMap[key];
+                    if (Array.isArray(val)) return JSON.stringify(val);
+                    return val !== undefined ? String(val) : '';
+                });
+
                 if (includeGlobalPrompt) {
                     // Kế thừa toàn cục: Ghép chỉ thị riêng của Node lên đầu quy tắc hệ thống
-                    systemPrompt = `${nodeSystemPrompt}\n\n${globalPrompt}`;
+                    systemPrompt = `${interpolatedNodePrompt}\n\n${globalPrompt}`;
                 } else {
                     // Không kế thừa: Chỉ nạp bối cảnh OS Context thô kèm Prompt riêng biệt của Node
                     const activeWS = globalThis.activeWorkspace || process.cwd().replace(/\\/g, '/');
                     const systemContext = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS Platform: ${process.platform}\n- OS Arch: ${process.arch}\n- Current Working Directory (Thư mục hiện hành tuyệt đối): ${activeWS}\n\n`;
-                    systemPrompt = systemContext + nodeSystemPrompt;
+                    systemPrompt = systemContext + interpolatedNodePrompt;
                 }
             } else {
                 // Trường hợp chat thông thường ngoài FSM: Dùng global prompt mặc định

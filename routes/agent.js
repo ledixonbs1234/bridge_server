@@ -249,10 +249,21 @@ router.post('/chat', async (req, res) => {
         let currentNodeName = activeNodeName;
         let nextMessage = message;
         let lastResult = null;
+        let loopCount = 0;
+        const MAX_FSM_LOOPS = 6; // Chốt chặn bảo vệ tránh vòng lặp vô hạn gây cạn kiệt tài nguyên
 
         if (currentNodeName) {
             // VÒNG LẶP CHẠY MULTI-AGENT TỰ ĐỘNG CHUỖI FSM TRÊN SSE STREAM CỦA Ô CHAT
             while (currentNodeName) {
+                loopCount++;
+                if (loopCount > MAX_FSM_LOOPS) {
+                    console.warn(chalk.red(`[Agent Route] ⚠️ Phát hiện và tự động ngắt kết nối vòng lặp FSM (Circuit Breaker) sau ${MAX_FSM_LOOPS} lần chuyển tiếp để bảo vệ tài nguyên.`));
+                    if (stream) {
+                        res.write(`data: ${JSON.stringify({ type: 'system', content: `⚠️ Cảnh báo: Tự động ngắt kết nối vòng lặp FSM (Circuit Breaker) sau ${MAX_FSM_LOOPS} lần chuyển tiếp liên tục để bảo vệ an toàn ngân sách.` })}\n\n`);
+                    }
+                    break;
+                }
+
                 let isValidatorNode = false;
                 let targetFileKey = 'target_file';
 
