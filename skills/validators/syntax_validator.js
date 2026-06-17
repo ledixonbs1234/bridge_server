@@ -20,7 +20,9 @@ const EXT_MAP = {
   '.c': 'c', '.h': 'c',
   '.cpp': 'cpp', '.hpp': 'cpp'
 };
-
+if (!globalThis.activeLspClients) {
+  globalThis.activeLspClients = new Map();
+}
 // Cấu hình LSP Servers tĩnh tiêu chuẩn cho các ngôn ngữ khác
 const LSP_SERVERS = {
   typescript: {
@@ -281,11 +283,17 @@ class StdioLspClient {
       };
 
       try {
+        // Gửi didClose trước để giải phóng trạng thái file cũ trong bộ nhớ của LSP daemon
+        await this.send('textDocument/didClose', {
+          textDocument: { uri: fileUri }
+        }, true);
+
+        // Mở lại file mới với nội dung cập nhật
         await this.send('textDocument/didOpen', {
           textDocument: {
             uri: fileUri,
             languageId: languageId,
-            version: 1,
+            version: ++this.messageId, // Tăng phiên bản tài liệu một cách động
             text: content
           }
         }, true);
@@ -347,14 +355,23 @@ export async function validateSyntax(filePath, content) {
 
   if (isLspAvailable && lspConfig) {
     try {
-      console.log(chalk.blue(`[LSP Checker] 🚀 Dò thấy LSP "${path.basename(lspConfig.command)}" khả dụng. Đang tiến hành phân tích...`));
       const workspace = globalThis.activeWorkspace || process.cwd();
-      const client = new StdioLspClient(lspConfig.command, lspConfig.args, workspace);
+      const cacheKey = `${lspConfig.languageId}:${workspace}`;
 
-      await client.start();
-      await client.initialize();
+      // Lấy client từ pool đang chạy ngầm hoặc khởi tạo mới nếu chưa tồn tại
+      let client = globalThis.activeLspClients.get(cacheKey);
+
+      if (!client || !client.child || client.child.killed) {
+        console.log(chalk.blue(`[LSP Checker] 🚀 Khởi chạy LSP daemon mới cho ${lspConfig.languageId} tại ${workspace}...`));
+        client = new StdioLspClient(lspConfig.command, lspConfig.args, workspace);
+        await client.start();
+        await client.initialize();
+        globalThis.activeLspClients.set(cacheKey, client);
+      } else {
+        console.log(chalk.blue(`[LSP Checker] ⚡ Tái sử dụng LSP daemon đang chạy cho ${lspConfig.languageId}...`));
+      }
+
       const diagnostics = await client.checkFile(filePath, lspConfig.languageId, content);
-      await client.stop();
 
       // Lọc các lỗi nghiêm trọng (severity 1 = Error)
       const errors = diagnostics.filter(d => d.severity === 1);
