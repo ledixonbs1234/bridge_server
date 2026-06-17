@@ -49,7 +49,14 @@
         "stop_terminal_process",
         "capture_system_screenshot",
         "debug_desktop_app",
-        "memorize_rule"
+        "memorize_rule",
+        "lsp_get_hover",
+        "lsp_goto_definition",
+        "lsp_find_references",
+        "lsp_get_document_symbols",
+        "lsp_rename_symbol",
+        "lsp_get_code_actions",
+        "lsp_apply_code_action"
       ],
       "model_mode": "fast",
       "include_global_prompt": true
@@ -80,7 +87,15 @@
         "stop_terminal_process",
         "capture_system_screenshot",
         "debug_desktop_app",
-        "memorize_lesson"
+        "memorize_lesson",
+        "lsp_get_hover",
+        "lsp_goto_definition",
+        "lsp_find_references",
+        "lsp_rename_symbol",
+        "lsp_get_document_symbols",
+        "lsp_get_code_actions",
+        "lsp_apply_code_action",
+        "ask_questions_if_underspecified"
       ],
       "model_mode": "thinking",
       "include_global_prompt": true

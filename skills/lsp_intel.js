@@ -78,7 +78,7 @@ async function getLspClientForFile(filePath) {
         if (csharpLspPath) {
             lspConfig = {
                 command: csharpLspPath,
-                args: ['--stdio'],
+                args: ['--stdio', '--autoLoadProjects'],
                 languageId: 'csharp'
             };
         }
@@ -115,14 +115,19 @@ async function getLspClientForFile(filePath) {
 
     const fileUri = filePathToUri(filePath);
     const content = fs.readFileSync(filePath, 'utf8');
-    await client.send('textDocument/didOpen', {
-        textDocument: {
-            uri: fileUri,
-            languageId: lspConfig.languageId,
-            version: ++client.messageId,
-            text: content
-        }
-    }, true);
+
+    // CHỐT CHẶN BẢO VỆ: Chỉ gửi didOpen nếu file CHƯA ĐƯỢC MỞ trong Client này để tránh sập Roslyn LSP
+    if (!client.openFiles.has(fileUri)) {
+        await client.send('textDocument/didOpen', {
+            textDocument: {
+                uri: fileUri,
+                languageId: lspConfig.languageId,
+                version: ++client.messageId,
+                text: content
+            }
+        }, true);
+        client.openFiles.add(fileUri);
+    }
 
     return { client, fileUri, lspConfig };
 }

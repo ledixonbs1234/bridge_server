@@ -5,6 +5,7 @@ import chalk from 'chalk';
 import os from 'os';
 import crypto from 'crypto';
 import { createRequire } from 'module';
+import { pathToFileURL } from 'url';
 const require = createRequire(import.meta.url);
 
 const EXT_MAP = {
@@ -108,23 +109,28 @@ function findCSharpLspPath() {
  * Chuyển đổi đường dẫn tuyệt đối sang chuẩn URI file:// tương thích LSP
  */
 function filePathToUri(filePath) {
-  let resolvedPath = path.resolve(filePath).replace(/\\/g, '/');
-  // CHUẨN HÓA WINDOWS DRIVE LETTER: Đảm bảo URI gửi lên máy chủ LSP luôn có ổ đĩa viết hoa (C:/...)
-  if (process.platform === 'win32') {
-    const match = resolvedPath.match(/^([a-zA-Z]):(.*)/);
-    if (match) {
-      resolvedPath = match[1].toUpperCase() + ':' + match[2];
+  try {
+    return pathToFileURL(path.resolve(filePath)).href;
+  } catch (e) {
+    let resolvedPath = path.resolve(filePath).replace(/\\/g, '/');
+    if (process.platform === 'win32') {
+      const match = resolvedPath.match(/^([a-zA-Z]):(.*)/);
+      if (match) {
+        resolvedPath = match[1].toUpperCase() + ':' + match[2];
+      }
     }
+    if (!resolvedPath.startsWith('/')) {
+      resolvedPath = '/' + resolvedPath;
+    }
+    return 'file://' + encodeURI(resolvedPath);
   }
-  if (!resolvedPath.startsWith('/')) {
-    resolvedPath = '/' + resolvedPath;
-  }
-  return 'file://' + encodeURI(resolvedPath);
 }
 
 /**
  * Lớp điều khiển giao tiếp LSP stdio dạng nhẹ (JSON-RPC 2.0)
  */
+// Tìm hàm constructor của StdioLspClient và thay thế toàn bộ đoạn sau:
+// Tìm constructor của StdioLspClient và thay thế đoạn này:
 class StdioLspClient {
   constructor(command, args, rootPath) {
     this.command = command;
@@ -136,39 +142,37 @@ class StdioLspClient {
     this.requestHandlers = new Map(); // Lưu trữ các bộ xử lý yêu cầu từ Server
     this.diagnosticsCallback = null;
     this.buffer = Buffer.alloc(0);
+    this.openFiles = new Set(); // <--- CHỐT CHẶN BẢO VỆ: Theo dõi danh sách các file đang mở trong Client này
+
+    // Tự động cấu hình tệp tin log gỡ lỗi LSP
+    this.logDir = path.join(process.cwd(), '.agent_memory', 'logs');
+    if (!fs.existsSync(this.logDir)) {
+      fs.mkdirSync(this.logDir, { recursive: true });
+    }
+    this.logFile = path.join(this.logDir, 'lsp_debug.log');
   }
+
+  writeLog(type, message) {
+    try {
+      const timestamp = new Date().toISOString();
+      const content = typeof message === 'object' ? JSON.stringify(message) : String(message);
+      fs.appendFileSync(this.logFile, `[${timestamp}] [${type}] ${content}\n`, 'utf8');
+    } catch (e) {
+      // Thầm lặng bỏ qua lỗi ghi file
+    }
+  }
+
   registerRequestHandler(method, handler) {
     this.requestHandlers.set(method, handler);
   }
 
-  async handleServerRequest(message) {
-    const handler = this.requestHandlers.get(message.method);
-    let result = { applied: false };
-    if (handler) {
-      try {
-        result = await handler(message.params);
-      } catch (e) {
-        result = { applied: false, error: e.message };
-      }
-    }
-
-    // Gửi lại phản hồi xác nhận cho Server
-    const response = {
-      jsonrpc: '2.0',
-      id: message.id,
-      result: result
-    };
-    const payload = JSON.stringify(response);
-    const header = `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\r\n\r\n`;
-    if (this.child && !this.child.killed && this.child.stdin.writable) {
-      this.child.stdin.write(header + payload);
-    }
-  }
-
+  // Tìm hàm start() và thay thế bằng:
   async start() {
     const { spawn } = await import('child_process');
     return new Promise((resolve, reject) => {
       try {
+        this.writeLog('START', `Spawning: ${this.command} with args: ${JSON.stringify(this.args)} in cwd: ${this.rootPath}`);
+
         this.child = spawn(this.command, this.args, {
           cwd: this.rootPath,
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -177,6 +181,7 @@ class StdioLspClient {
         });
 
         this.child.on('error', (err) => {
+          this.writeLog('ERROR', err.message);
           reject(err);
         });
 
@@ -185,12 +190,19 @@ class StdioLspClient {
           this.parseIncomingBuffer();
         });
 
+        // LẮNG NGHE STDERR ĐỂ BẮT VẾT LỖI TỪ ROSLYN / MSBUILD
+        this.child.stderr.on('data', (chunk) => {
+          const str = chunk.toString('utf8');
+          this.writeLog('STDERR', str);
+        });
+
         if (this.child.pid) {
           resolve();
         } else {
           reject(new Error(`Failed to spawn LSP process: ${this.command}`));
         }
       } catch (err) {
+        this.writeLog('EXCEPTION', err.message);
         reject(err);
       }
     });
@@ -234,7 +246,52 @@ class StdioLspClient {
     }
   }
 
+  // Tìm hàm handleServerRequest(message) và thay thế bằng:
+  async handleServerRequest(message) {
+    this.writeLog('RECV_REQ', message);
+    const handler = this.requestHandlers.get(message.method);
+    let result = null; // Trả về null theo chuẩn đặc tả LSP đối với các yêu cầu không đăng ký
+
+    if (handler) {
+      try {
+        result = await handler(message.params);
+      } catch (e) {
+        result = { error: { code: -32603, message: e.message } };
+      }
+    } else {
+      // Phản hồi mặc định đúng chuẩn đặc tả để tránh chặn luồng biên dịch của LSP
+      if (message.method === 'workspace/configuration') {
+        result = message.params?.items ? message.params.items.map(() => null) : [];
+      } else if (message.method === 'client/registerCapability') {
+        result = null;
+      } else if (message.method === 'window/workDoneProgress/create') {
+        result = null;
+      }
+    }
+
+    // Gửi lại phản hồi xác nhận cho Server nếu yêu cầu có id
+    if (message.id !== undefined) {
+      const response = {
+        jsonrpc: '2.0',
+        id: message.id,
+        result: result
+      };
+      this.writeLog('SEND_RESP', response);
+      const payload = JSON.stringify(response);
+      const header = `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\r\n\r\n`;
+      if (this.child && !this.child.killed && this.child.stdin.writable) {
+        this.child.stdin.write(header + payload);
+      }
+    }
+  }
+
+  // Tìm hàm handleMessage(message) và thay thế bằng:
   handleMessage(message) {
+    // Không ghi diagnostics để tránh rác file log, chỉ ghi nhận các thông điệp phản hồi/yêu cầu chính
+    if (message.method !== 'textDocument/publishDiagnostics') {
+      this.writeLog('RECV', message);
+    }
+
     if (message.id !== undefined && !message.method) {
       // Phản hồi thông thường cho yêu cầu của Client
       const resolve = this.pendingRequests.get(message.id);
@@ -252,6 +309,7 @@ class StdioLspClient {
     }
   }
 
+  // Tìm hàm send(method, params, isNotification = false) và thay thế bằng:
   async send(method, params, isNotification = false) {
     const message = {
       jsonrpc: '2.0',
@@ -265,6 +323,8 @@ class StdioLspClient {
       message.id = id;
     }
 
+    this.writeLog(isNotification ? 'SEND_NOTIF' : 'SEND_REQ', message);
+
     const payload = JSON.stringify(message);
     const header = `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\r\n\r\n`;
 
@@ -277,7 +337,7 @@ class StdioLspClient {
         const timeout = setTimeout(() => {
           this.pendingRequests.delete(id);
           reject(new Error(`LSP Request Timeout: ${method}`));
-        }, 5000);
+        }, 12000); // Tăng thời gian chờ phản hồi lên 12s cho Roslyn thong thả xử lý
 
         this.pendingRequests.set(id, (res) => {
           clearTimeout(timeout);
@@ -287,15 +347,36 @@ class StdioLspClient {
     }
   }
 
+  // Tìm hàm initialize() trong StdioLspClient và thay thế bằng:
   async initialize() {
     const rootUri = filePathToUri(this.rootPath);
     const initParams = {
       processId: process.pid,
       rootUri: rootUri,
+      workspaceFolders: [
+        {
+          uri: rootUri,
+          name: path.basename(this.rootPath)
+        }
+      ],
       capabilities: {
+        workspace: {
+          configuration: true,
+          workspaceFolders: true,
+          applyEdit: true
+        },
         textDocument: {
           publishDiagnostics: {
             relatedInformation: true
+          },
+          hover: {
+            contentFormat: ['markdown', 'plaintext']
+          },
+          definition: {
+            dynamicRegistration: false
+          },
+          references: {
+            dynamicRegistration: false
           }
         }
       }
@@ -305,6 +386,7 @@ class StdioLspClient {
     await this.send('initialized', {}, true);
   }
 
+  // Tìm hàm checkFile(filePath, languageId, content) và thay thế bằng:
   async checkFile(filePath, languageId, content) {
     const fileUri = filePathToUri(filePath);
 
@@ -323,10 +405,13 @@ class StdioLspClient {
       };
 
       try {
-        // Gửi didClose trước để giải phóng trạng thái file cũ trong bộ nhớ của LSP daemon
-        await this.send('textDocument/didClose', {
-          textDocument: { uri: fileUri }
-        }, true);
+        // Gửi didClose trước nếu file đang mở để nạp lại trạng thái mới nhất
+        if (this.openFiles.has(fileUri)) {
+          await this.send('textDocument/didClose', {
+            textDocument: { uri: fileUri }
+          }, true);
+          this.openFiles.delete(fileUri);
+        }
 
         // Mở lại file mới với nội dung cập nhật
         await this.send('textDocument/didOpen', {
@@ -337,6 +422,7 @@ class StdioLspClient {
             text: content
           }
         }, true);
+        this.openFiles.add(fileUri);
       } catch (err) {
         resolve([]);
       }
@@ -379,12 +465,13 @@ export async function validateSyntax(filePath, content) {
   let isLspAvailable = false;
 
   // Giải quyết động đường dẫn nếu là C#
+  // Giải quyết động đường dẫn nếu là C#
   if (language === 'csharp') {
     const csharpLspPath = findCSharpLspPath();
     if (csharpLspPath) {
       lspConfig = {
         command: csharpLspPath,
-        args: ['--stdio'],
+        args: ['--stdio', '--autoLoadProjects'], // <--- THÊM ĐỐI SỐ NÀY
         languageId: 'csharp'
       };
       isLspAvailable = true;
