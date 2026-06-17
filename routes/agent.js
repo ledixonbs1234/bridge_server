@@ -390,6 +390,8 @@ router.post('/chat', async (req, res) => {
                     model: targetModelName,
                     useGitIsolation: !!useGitIsolation,
                     useGitFooter: !!useGitFooter,
+                    isWorker: true,                       // <-- KÍCH HOẠT CHẾ ĐỘ TAB WORKER
+                    workerType: currentNodeName,
                     onChunk: stream ? (chunk) => {
                         if (typeof chunk === 'object' && chunk !== null) {
                             res.write(`data: ${JSON.stringify({ type: 'chunk', content: chunk.text, usage: chunk.usage })}\n\n`);

@@ -111,7 +111,9 @@ export async function executeAgentTurn({
     mode = 'default',
     model = null, // Khai báo tham số model mới
     useGitIsolation = false, // Thêm cấu hình Git Isolation từ client
-    useGitFooter = false // Thêm cấu hình cho phép đính kèm Footer bối cảnh Git
+    useGitFooter = false, // Thêm cấu hình cho phép đính kèm Footer bối cảnh Git
+    isWorker = false,         // <-- THÊM ĐỂ ĐỒNG BỘ
+    workerType = 'default'    // <-- THÊM ĐỂ ĐỒNG BỘ
 }) {
     const resolvedProvider = activeProvider || globalThis.activeProvider;
     const traceId = tracer.createTrace(message.substring(0, 80));
@@ -517,7 +519,9 @@ export async function executeAgentTurn({
             images: images || [],
             headless,
             executeSkill: wrappedExecuteSkill,
-            model: model // Chuyển model tới failover handler
+            model: model, // Chuyển model tới failover handler
+            isWorker: !!isWorker,      // <-- BỔ SUNG
+            workerType: workerType     // <-- BỔ SUNG
         });
 
         if (llmSpanId) {
