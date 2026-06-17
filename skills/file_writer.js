@@ -312,7 +312,11 @@ export default {
                     const lastRead = globalThis.lastReadTime && globalThis.lastReadTime[filePath];
                     const stat = fs.statSync(filePath);
                     if (!lastRead || stat.mtimeMs > lastRead) {
-                        throw new Error(`READ_BEFORE_WRITE_VIOLATION: Bạn đang cố gắng sửa đổi tệp tin "${path.basename(filePath)}" mà chưa thực hiện đọc nội dung hiện tại của nó bằng công cụ 'read_file' hoặc 'read_file_lines' trong lượt chat này. Để tránh sửa bậy, bạn BẮT BUỘC phải đọc tệp trước khi sửa.`);
+                        const previewContent = fs.readFileSync(filePath, 'utf8');
+                        const lines = previewContent.split(/\r?\n/);
+                        const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
+
+                        throw new Error(`READ_BEFORE_WRITE_VIOLATION: Bạn chưa đọc file này trước khi sửa. Để giúp bạn sửa lỗi này ngay lập tức, đây là nội dung hiện tại của file:\n\n\`\`\`text\n${numberedLines}\n\`\`\`\nHãy dùng nội dung này để tính toán lại tọa độ dòng chính xác và thực hiện lại lệnh ghi.`);
                     }
 
                     activeShadowRegistry.register(filePath);
@@ -522,7 +526,11 @@ export default {
                 const lastRead = globalThis.lastReadTime && globalThis.lastReadTime[filePath];
                 const stat = fs.statSync(filePath);
                 if (!lastRead || stat.mtimeMs > lastRead) {
-                    throw new Error(`READ_BEFORE_WRITE_VIOLATION: Bạn đang cố gắng sửa đổi tệp tin "${path.basename(filePath)}" mà chưa thực hiện đọc nội dung hiện tại của nó bằng công cụ 'read_file' hoặc 'read_file_lines' trong lượt chat này. Để tránh sửa bậy, bạn BẮT BUỘC phải đọc tệp trước khi sửa.`);
+                    const previewContent = fs.readFileSync(filePath, 'utf8');
+                    const lines = previewContent.split(/\r?\n/);
+                    const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
+
+                    throw new Error(`READ_BEFORE_WRITE_VIOLATION: Bạn chưa đọc file này trước khi sửa. Để giúp bạn sửa lỗi này ngay lập tức, đây là nội dung hiện tại của file:\n\n\`\`\`text\n${numberedLines}\n\`\`\`\nHãy dùng nội dung này để tính toán lại tọa độ dòng chính xác và thực hiện lại lệnh ghi.`);
                 }
 
                 // Gom cụm tham số sửa đổi đơn lẻ hoặc danh sách nhiều đoạn sửa đổi
@@ -754,7 +762,11 @@ export default {
                 const lastRead = globalThis.lastReadTime && globalThis.lastReadTime[filePath];
                 const stat = fs.statSync(filePath);
                 if (!lastRead || stat.mtimeMs > lastRead) {
-                    throw new Error(`READ_BEFORE_WRITE_VIOLATION: Bạn đang cố gắng ghi đè lên tệp tin "${path.basename(filePath)}" đã tồn tại mà chưa đọc nội dung hiện tại của nó bằng công cụ 'read_file' hoặc 'read_file_lines' trong lượt chat này. Để tránh sửa bậy, bạn BẮT BUỘC phải đọc tệp trước khi sửa.`);
+                    const previewContent = fs.readFileSync(filePath, 'utf8');
+                    const lines = previewContent.split(/\r?\n/);
+                    const numberedLines = lines.map((line, idx) => `${idx + 1} | ${line}`).join('\n');
+
+                    throw new Error(`READ_BEFORE_WRITE_VIOLATION: Bạn chưa đọc file này trước khi sửa. Để giúp bạn sửa lỗi này ngay lập tức, đây là nội dung hiện tại của file:\n\n\`\`\`text\n${numberedLines}\n\`\`\`\nHãy dùng nội dung này để tính toán lại tọa độ dòng chính xác và thực hiện lại lệnh ghi.`);
                 }
             }
 

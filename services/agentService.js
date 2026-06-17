@@ -776,7 +776,20 @@ export async function executeSkillForProvider(functionName, funcArgs, activeProv
         let suggestion = "Vui lòng kiểm tra lại tham số.";
         if (error.message.includes("không tồn tại")) suggestion = "Hãy dùng list_directory để kiểm tra...";
         if (error.message.includes("PERMISSION_DENIED")) suggestion = "Người dùng đã từ chối lệnh này.";
-        return JSON.stringify({ status: "error", error_message: error.message, suggestion });
+
+        // Tự động đính kèm chi tiết đặc tả (schema) của công cụ bị lỗi để AI nhận diện tham số chính xác và tự sửa lỗi ở bước sau
+        const toolDefinition = {
+            name: functionName,
+            description: skill.description || "",
+            parameters: skill.parameters || null
+        };
+
+        return JSON.stringify({
+            status: "error",
+            error_message: error.message,
+            suggestion: `${suggestion} Dưới đây là đặc tả cú pháp chuẩn của công cụ '${functionName}' để bạn tự đối chiếu cấu trúc tham số và gọi lại chính xác:`,
+            tool_definition: toolDefinition
+        });
     } finally {
         if (isWebSessionActive) {
             console.log = originalConsoleLog;
