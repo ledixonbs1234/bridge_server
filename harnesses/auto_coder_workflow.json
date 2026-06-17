@@ -11,7 +11,7 @@
     "next_node": ""
   },
   "nodes": {
-    "agent_54550": {
+    "planner": {
       "type": "agent",
       "system_prompt": "Bạn là Kỹ sư Phân tích Mã nguồn (Software Architect Planner).\nNhiệm vụ của bạn là phân tích yêu cầu lập trình từ người dùng: \"${state.task}\".\nSử dụng các công cụ tìm kiếm tệp tin để định vị chính xác vị trí cần chỉnh sửa trong thư mục làm việc hiện hành.\nKhi đã tìm thấy tệp mục tiêu, hãy bàn giao tệp đó cho bước tiếp theo.",
       "tools": [
@@ -23,16 +23,17 @@
         "list_directory",
         "find_files",
         "change_active_workspace",
-        "capture_system_screenshot",
-        "debug_desktop_app"
+        "get_os_context",
+        "capture_system_screenshot"
       ],
       "model_mode": "fast",
       "include_global_prompt": true
     },
-    "agent_48895": {
+    "coder": {
       "type": "agent",
       "system_prompt": "Bạn là Trợ lý Lập trình viên (Senior Developer).\nNhiệm vụ của bạn là chỉnh sửa tệp tin dựa trên phân tích từ planner.\nQUY TẮC BẮT BUỘC: Bạn phải chạy công cụ 'read_file' để đọc nội dung tệp tin cần sửa trước khi áp dụng 'replace_content_safe' hoặc 'write_file'.\nSau khi chỉnh sửa thành công, mã nguồn sẽ tự động được gửi qua validator.",
       "tools": [
+        "ask_questions_if_underspecified",
         "list_directory",
         "find_content",
         "find_files",
@@ -40,28 +41,29 @@
         "replace_multiple_files_safe",
         "replace_content_safe",
         "write_file",
-        "read_file_lines",
-        "debug_desktop_app",
         "read_file",
         "read_multiple_files",
-        "capture_system_screenshot",
+        "read_file_lines",
+        "get_os_context",
         "execute_terminal_command",
         "stop_terminal_process",
-        "get_os_context"
+        "capture_system_screenshot",
+        "debug_desktop_app",
+        "memorize_rule"
       ],
       "model_mode": "fast",
       "include_global_prompt": true
     },
-    "validator_30135": {
+    "validator": {
       "type": "validator",
       "validation_rule": "syntax_only",
       "target_file_key": "target_file",
       "next_on_success": "end",
-      "next_on_failure": "agent_81287"
+      "next_on_failure": "healer"
     },
-    "agent_81287": {
+    "healer": {
       "type": "agent",
-      "system_prompt": "Bạn là Chuyên gia Sửa lỗi (Debugging Expert).\nValidator báo lỗi biên dịch/cú pháp sau trong quá trình kiểm duyệt: \"${state.errors}\".\nHãy đọc lại nội dung tệp tin lỗi bằng 'read_file', phân tích thông tin lỗi kỹ lưỡng, sửa lại mã nguồn sao cho hợp lệ và gửi lại cho coder.",
+      "system_prompt": "Bạn là Chuyên gia Sửa lỗi (Debugging Expert).\nValidator báo lỗi biên dịch/cú pháp sau trong quá trình kiểm duyệt: \"${state.errors}\".\nHãy đọc lại nội dung tệp tin lỗi bằng 'read_file', phân tích thông tin lỗi kỹ lưỡng, sửa lại mã nguồn sao cho hợp lệ và gửi lại trực tiếp cho validator để kiểm tra.",
       "tools": [
         "read_file",
         "read_multiple_files",
@@ -73,7 +75,12 @@
         "replace_multiple_files_safe",
         "replace_content_safe",
         "write_file",
-        "debug_desktop_app"
+        "get_os_context",
+        "execute_terminal_command",
+        "stop_terminal_process",
+        "capture_system_screenshot",
+        "debug_desktop_app",
+        "memorize_lesson"
       ],
       "model_mode": "thinking",
       "include_global_prompt": true
@@ -81,26 +88,26 @@
   },
   "edges": [
     {
-      "from": "agent_54550",
-      "to": "agent_48895"
+      "from": "planner",
+      "to": "coder"
     },
     {
-      "from": "agent_48895",
-      "to": "validator_30135"
+      "from": "coder",
+      "to": "validator"
     },
     {
-      "from": "agent_81287",
-      "to": "agent_48895"
+      "from": "healer",
+      "to": "validator"
     }
   ],
   "conditional_edges": [
     {
-      "from": "validator_30135",
+      "from": "validator",
       "condition_type": "state_check",
       "state_key": "errors",
       "router": {
         "is_empty": "end",
-        "is_not_empty": "agent_81287"
+        "is_not_empty": "healer"
       }
     }
   ]

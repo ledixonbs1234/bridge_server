@@ -127,62 +127,91 @@ function performBoundedReplacement(originalContent, replacementContent, startLin
     const replacementContentNormalized = replacementContent.replace(/\r\n/g, '\n');
     const replacementLines = replacementContentNormalized.split('\n');
 
-    // BƯỚC 1: Kiểm tra chính xác phạm vi dòng start_line và end_line trước
     const exactStartSearchIdx = Math.max(0, startLine - 1);
     const exactEndSearchIdx = Math.min(fileLines.length, endLine);
-    const exactCodeRounded = fileLines.slice(exactStartSearchIdx, exactEndSearchIdx).map((line, i) => ({
-        line: line,
-        originalIndex: exactStartSearchIdx + i
-    }));
-
-    let matchedStartIdx = findFuzzyLineMatch(replacementLines[0], exactCodeRounded);
-    let matchedEndIdx = -1;
-
-    if (matchedStartIdx !== -1) {
-        const searchListForEnd = exactCodeRounded.slice(matchedStartIdx);
-        matchedEndIdx = findFuzzyLineMatch(replacementLines[replacementLines.length - 1], searchListForEnd);
-        if (matchedEndIdx !== -1) {
-            matchedEndIdx = matchedStartIdx + matchedEndIdx;
-        }
-    }
 
     let finalStartOriginalIdx = -1;
     let finalEndOriginalIdx = -1;
 
-    if (matchedStartIdx !== -1 && matchedEndIdx !== -1) {
-        // Khớp thành công ngay tại dòng gốc
-        finalStartOriginalIdx = exactCodeRounded[matchedStartIdx].originalIndex;
-        finalEndOriginalIdx = exactCodeRounded[matchedEndIdx].originalIndex + 1;
+    // CHỐT CHẶN BẢO VỆ: Nếu AI yêu cầu sửa 1 dòng đơn và dòng gốc đang trống,
+    // đây là thao tác chèn (insert) trực tiếp. Ta bỏ qua việc khớp mỏ neo
+    // để tránh việc khớp nhầm sang các khối ItemGroup khác gây mất mã nguồn xung quanh.
+    if (startLine === endLine && fileLines[exactStartSearchIdx].trim() === '') {
+        finalStartOriginalIdx = exactStartSearchIdx;
+        finalEndOriginalIdx = exactEndSearchIdx;
     } else {
-        // BƯỚC 2: Nếu không khớp chính xác, mở rộng phạm vi kiểm tra đoạn (-10 dòng đầu, +10 dòng cuối)
-        const expandedStartSearchIdx = Math.max(0, startLine - 1 - 10);
-        const expandedEndSearchIdx = Math.min(fileLines.length, endLine + 10);
-        const expandedCodeRounded = fileLines.slice(expandedStartSearchIdx, expandedEndSearchIdx).map((line, i) => ({
+        // Tìm dòng không trống đầu tiên và cuối cùng trong replacementLines làm mỏ neo (anchors)
+        let firstNonEmptyIdx = 0;
+        while (firstNonEmptyIdx < replacementLines.length && replacementLines[firstNonEmptyIdx].trim() === '') {
+            firstNonEmptyIdx++;
+        }
+
+        let lastNonEmptyIdx = replacementLines.length - 1;
+        while (lastNonEmptyIdx >= 0 && replacementLines[lastNonEmptyIdx].trim() === '') {
+            lastNonEmptyIdx--;
+        }
+
+        if (firstNonEmptyIdx > lastNonEmptyIdx) {
+            firstNonEmptyIdx = 0;
+            lastNonEmptyIdx = replacementLines.length - 1;
+        }
+
+        const startAnchor = replacementLines[firstNonEmptyIdx];
+        const endAnchor = replacementLines[lastNonEmptyIdx];
+
+        // BƯỚC 1: Kiểm tra chính xác phạm vi dòng start_line và end_line trước
+        const exactCodeRounded = fileLines.slice(exactStartSearchIdx, exactEndSearchIdx).map((line, i) => ({
             line: line,
-            originalIndex: expandedStartSearchIdx + i
+            originalIndex: exactStartSearchIdx + i
         }));
 
-        matchedStartIdx = findFuzzyLineMatch(replacementLines[0], expandedCodeRounded);
-        matchedEndIdx = -1;
+        let matchedStartIdx = findFuzzyLineMatch(startAnchor, exactCodeRounded);
+        let matchedEndIdx = -1;
 
         if (matchedStartIdx !== -1) {
-            const searchListForEnd = expandedCodeRounded.slice(matchedStartIdx);
-            matchedEndIdx = findFuzzyLineMatch(replacementLines[replacementLines.length - 1], searchListForEnd);
+            const searchListForEnd = exactCodeRounded.slice(matchedStartIdx);
+            matchedEndIdx = findFuzzyLineMatch(endAnchor, searchListForEnd);
             if (matchedEndIdx !== -1) {
                 matchedEndIdx = matchedStartIdx + matchedEndIdx;
             }
         }
 
         if (matchedStartIdx !== -1 && matchedEndIdx !== -1) {
-            finalStartOriginalIdx = expandedCodeRounded[matchedStartIdx].originalIndex;
-            finalEndOriginalIdx = expandedCodeRounded[matchedEndIdx].originalIndex + 1;
+            finalStartOriginalIdx = exactCodeRounded[matchedStartIdx].originalIndex - firstNonEmptyIdx;
+            finalEndOriginalIdx = exactCodeRounded[matchedEndIdx].originalIndex + 1 + (replacementLines.length - 1 - lastNonEmptyIdx);
+        } else {
+            // BƯỚC 2: Mở rộng phạm vi kiểm tra đoạn (-10 dòng đầu, +10 dòng cuối)
+            const expandedStartSearchIdx = Math.max(0, startLine - 1 - 10);
+            const expandedEndSearchIdx = Math.min(fileLines.length, endLine + 10);
+            const expandedCodeRounded = fileLines.slice(expandedStartSearchIdx, expandedEndSearchIdx).map((line, i) => ({
+                line: line,
+                originalIndex: expandedStartSearchIdx + i
+            }));
+
+            matchedStartIdx = findFuzzyLineMatch(startAnchor, expandedCodeRounded);
+            matchedEndIdx = -1;
+
+            if (matchedStartIdx !== -1) {
+                const searchListForEnd = expandedCodeRounded.slice(matchedStartIdx);
+                matchedEndIdx = findFuzzyLineMatch(endAnchor, searchListForEnd);
+                if (matchedEndIdx !== -1) {
+                    matchedEndIdx = matchedStartIdx + matchedEndIdx;
+                }
+            }
+
+            if (matchedStartIdx !== -1 && matchedEndIdx !== -1) {
+                finalStartOriginalIdx = expandedCodeRounded[matchedStartIdx].originalIndex - firstNonEmptyIdx;
+                finalEndOriginalIdx = expandedCodeRounded[matchedEndIdx].originalIndex + 1 + (replacementLines.length - 1 - lastNonEmptyIdx);
+            }
         }
     }
 
-    // Nếu cả hai bước kiểm tra đều thất bại, trả về lỗi chi tiết cho AI
     if (finalStartOriginalIdx === -1 || finalEndOriginalIdx === -1) {
-        throw new Error(`[REPLACEMENT_MATCH_FAILED] Sửa đổi thất bại. Đoạn mã đầu tiên '${replacementLines[0].trim()}' hoặc đoạn mã cuối cùng '${replacementLines[replacementLines.length - 1].trim()}' không khớp độc nhất với dòng nào trong file (kể cả khi đã mở rộng phạm vi tìm kiếm ±10 dòng). Vui lòng kiểm tra lại chỉ số dòng start_line/end_line.`);
+        throw new Error(`[REPLACEMENT_MATCH_FAILED] Sửa đổi thất bại. Đoạn mã đầu tiên không khớp độc nhất với dòng nào trong file (kể cả khi đã mở rộng phạm vi tìm kiếm ±10 dòng). Vui lòng kiểm tra lại chỉ số dòng start_line/end_line.`);
     }
+
+    finalStartOriginalIdx = Math.max(0, finalStartOriginalIdx);
+    finalEndOriginalIdx = Math.min(fileLines.length, finalEndOriginalIdx);
 
     const prefix = fileLines.slice(0, finalStartOriginalIdx).join('\n');
     const suffix = fileLines.slice(finalEndOriginalIdx).join('\n');

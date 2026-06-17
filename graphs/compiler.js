@@ -8,6 +8,11 @@ import path from 'path';
 
 export class DeclarativeGraphCompiler {
     static compile(jsonConfig) {
+        // KIỂM DUYỆT AN TOÀN: Đảm bảo nút gốc ban đầu luôn tồn tại trong danh sách định nghĩa
+        if (!jsonConfig.initial_node || !jsonConfig.nodes || !jsonConfig.nodes[jsonConfig.initial_node]) {
+            throw new Error(`[Compiler Error] initial_node "${jsonConfig.initial_node}" không tồn tại trong danh sách cấu hình nodes.`);
+        }
+
         const compiledNodes = new Map();
         const edges = new Map();
 
