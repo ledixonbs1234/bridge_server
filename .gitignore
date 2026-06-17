@@ -11,3 +11,4 @@ json_write.json
 config.json
 harnesses/test.json
 .vscode
+lsp_test_workspace

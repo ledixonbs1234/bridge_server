@@ -109,6 +109,13 @@ function findCSharpLspPath() {
  */
 function filePathToUri(filePath) {
   let resolvedPath = path.resolve(filePath).replace(/\\/g, '/');
+  // CHUẨN HÓA WINDOWS DRIVE LETTER: Đảm bảo URI gửi lên máy chủ LSP luôn có ổ đĩa viết hoa (C:/...)
+  if (process.platform === 'win32') {
+    const match = resolvedPath.match(/^([a-zA-Z]):(.*)/);
+    if (match) {
+      resolvedPath = match[1].toUpperCase() + ':' + match[2];
+    }
+  }
   if (!resolvedPath.startsWith('/')) {
     resolvedPath = '/' + resolvedPath;
   }
@@ -126,8 +133,36 @@ class StdioLspClient {
     this.child = null;
     this.messageId = 1;
     this.pendingRequests = new Map();
+    this.requestHandlers = new Map(); // Lưu trữ các bộ xử lý yêu cầu từ Server
     this.diagnosticsCallback = null;
     this.buffer = Buffer.alloc(0);
+  }
+  registerRequestHandler(method, handler) {
+    this.requestHandlers.set(method, handler);
+  }
+
+  async handleServerRequest(message) {
+    const handler = this.requestHandlers.get(message.method);
+    let result = { applied: false };
+    if (handler) {
+      try {
+        result = await handler(message.params);
+      } catch (e) {
+        result = { applied: false, error: e.message };
+      }
+    }
+
+    // Gửi lại phản hồi xác nhận cho Server
+    const response = {
+      jsonrpc: '2.0',
+      id: message.id,
+      result: result
+    };
+    const payload = JSON.stringify(response);
+    const header = `Content-Length: ${Buffer.byteLength(payload, 'utf8')}\r\n\r\n`;
+    if (this.child && !this.child.killed && this.child.stdin.writable) {
+      this.child.stdin.write(header + payload);
+    }
   }
 
   async start() {
@@ -137,6 +172,7 @@ class StdioLspClient {
         this.child = spawn(this.command, this.args, {
           cwd: this.rootPath,
           stdio: ['pipe', 'pipe', 'pipe'],
+          shell: process.platform === 'win32', // Kích hoạt để tự động giải quyết các tệp .cmd toàn cục của npm trên Windows
           env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
         });
 
@@ -199,12 +235,16 @@ class StdioLspClient {
   }
 
   handleMessage(message) {
-    if (message.id !== undefined) {
+    if (message.id !== undefined && !message.method) {
+      // Phản hồi thông thường cho yêu cầu của Client
       const resolve = this.pendingRequests.get(message.id);
       if (resolve) {
         this.pendingRequests.delete(message.id);
         resolve(message);
       }
+    } else if (message.id !== undefined && message.method) {
+      // Server-to-Client Request (Ví dụ: workspace/applyEdit)
+      this.handleServerRequest(message);
     } else if (message.method === 'textDocument/publishDiagnostics') {
       if (this.diagnosticsCallback) {
         this.diagnosticsCallback(message.params);
@@ -661,4 +701,5 @@ function extractPythonError(stderr) {
   return syntaxLine || lines[0] || stderr;
 }
 
+export { StdioLspClient, LSP_SERVERS, EXT_MAP, filePathToUri };
 export default { validateSyntax };

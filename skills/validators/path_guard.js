@@ -1,3 +1,4 @@
+// filepath: ridge_server/skills/validators/path_guard.js
 // =================================================================
 // 🛡️ PATH GUARD - Bảo vệ chống Path Traversal & truy cập file nhạy cảm
 // =================================================================
@@ -66,7 +67,12 @@ const FORBIDDEN_EXTENSIONS = [
 ];
 
 function normalizePath(p) {
-  return path.resolve(p).replace(/\\/g, '/');
+  let resolved = path.resolve(p).replace(/\\/g, '/');
+  // CHUẨN HÓA WINDOWS DRIVE LETTER: Ép ổ đĩa về dạng CHỮ HOA (C:, D:...) để so sánh chuẩn xác [1]
+  if (process.platform === 'win32' && /^[a-zA-Z]:/.test(resolved)) {
+    resolved = resolved.charAt(0).toUpperCase() + resolved.slice(1);
+  }
+  return resolved;
 }
 
 function isPathInside(childPath, parentPath) {
@@ -99,7 +105,6 @@ export function validatePath(inputPath) {
   // Resolve về absolute path
   let resolved;
   try {
-    // SỬA ĐỔI: Sử dụng defaultBase (ngữ cảnh hiện hành) thay vì cứng Desktop
     resolved = path.isAbsolute(inputPath)
       ? path.resolve(inputPath)
       : path.resolve(defaultBase, inputPath);
