@@ -8,7 +8,6 @@ import path from 'path';
 
 export class DeclarativeGraphCompiler {
     static compile(jsonConfig) {
-        // KIỂM DUYỆT AN TOÀN: Đảm bảo nút gốc ban đầu luôn tồn tại trong danh sách định nghĩa
         if (!jsonConfig.initial_node || !jsonConfig.nodes || !jsonConfig.nodes[jsonConfig.initial_node]) {
             throw new Error(`[Compiler Error] initial_node "${jsonConfig.initial_node}" không tồn tại trong danh sách cấu hình nodes.`);
         }
@@ -20,36 +19,22 @@ export class DeclarativeGraphCompiler {
         for (const [nodeName, nodeConfig] of Object.entries(jsonConfig.nodes)) {
 
             if (nodeConfig.type === 'agent') {
-                // Biến đổi cấu hình Agent trong JSON thành một Node chạy LLM thực tế
                 compiledNodes.set(nodeName, async (state, ctx) => {
                     const dynamicPrompt = state.renderPrompt(nodeConfig.system_prompt);
-
-                    // Lọc ra các kỹ năng (Tools) được gán phép cho Agent này trong tệp JSON
                     const allowedSkills = {};
+
                     (nodeConfig.tools || []).forEach(toolName => {
-                        if (ctx.skillRegistry[toolName]) {
-                            allowedSkills[toolName] = ctx.skillRegistry[toolName];
-                        }
+                        if (ctx.skillRegistry[toolName]) allowedSkills[toolName] = ctx.skillRegistry[toolName];
                     });
 
                     console.log(chalk.cyan(`[Node Exec] 🤖 Spawning Declarative Agent Node: [${nodeName}]`));
 
-                    // Thiết lập System Prompt dựa trên cấu hình bật/tắt kế thừa toàn cục
                     let systemPromptStr = `Bạn là thành viên trong đồ thị trạng thái đang thực thi node: ${nodeName}.`;
                     if (nodeConfig.include_global_prompt !== false) {
                         const promptPath = path.resolve(process.cwd(), 'system_prompt.md');
-                        let globalPrompt = "";
-                        if (fs.existsSync(promptPath)) {
-                            globalPrompt = fs.readFileSync(promptPath, 'utf8');
-                        }
+                        let globalPrompt = fs.existsSync(promptPath) ? fs.readFileSync(promptPath, 'utf8') : "";
                         const activeWS = globalThis.activeWorkspace || process.cwd().replace(/\\/g, '/');
-                        const systemContext = `[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]
-- OS Platform: ${process.platform}
-- OS Arch: ${process.arch}
-- Current Working Directory (Thư mục hiện hành tuyệt đối): ${activeWS}
-
-`;
-                        systemPromptStr = `${systemPromptStr}\n\n${systemContext}${globalPrompt}`;
+                        systemPromptStr = `${systemPromptStr}\n\n[TỰ ĐỘNG CUNG CẤP NGỮ CẢNH HỆ THỐNG]\n- OS: ${process.platform}\n- CWD: ${activeWS}\n\n${globalPrompt}`;
                     }
 
                     const response = await ctx.provider.chat({
@@ -58,38 +43,41 @@ export class DeclarativeGraphCompiler {
                         skillRegistry: allowedSkills,
                         executeSkill: ctx.executeSkillFn,
                         systemPrompt: systemPromptStr,
-                        maxSteps: 10,
+                        maxSteps: 15,
                         isWorker: true,
                         workerType: nodeName
                     });
 
                     const cleanResponse = response.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
-                    return {
+                    // TRÍCH XUẤT STATE TỪ AGENT (Nâng cấp hỗ trợ Test Agent tự đánh dấu lỗi)
+                    let stateUpdate = {
                         last_output: cleanResponse,
                         next_node: nodeConfig.next || null
                     };
+
+                    const jsonStateMatch = cleanResponse.match(/```json\s*(\{[\s\S]*?(?:\"errors\"|\"next_node\")[\s\S]*?\})\s*```/i);
+                    if (jsonStateMatch) {
+                        try {
+                            const parsedState = JSON.parse(jsonStateMatch[1]);
+                            if (parsedState.errors !== undefined) stateUpdate.errors = parsedState.errors;
+                            if (parsedState.next_node !== undefined) stateUpdate.next_node = parsedState.next_node;
+                            console.log(chalk.yellow(`[Node Exec] ⚡ Agent [${nodeName}] đã can thiệp thay đổi FSM State (Errors: ${parsedState.errors?.length || 0}).`));
+                        } catch (e) {
+                            console.warn(chalk.yellow(`[Compiler] Lỗi parse JSON state từ Agent ${nodeName}`));
+                        }
+                    }
+
+                    return stateUpdate;
                 });
             }
 
             else if (nodeConfig.type === 'validator') {
-                // Biến đổi cấu hình kiểm duyệt thành Node kiểm thử
                 compiledNodes.set(nodeName, async (state, ctx) => {
                     const targetFile = state.store[nodeConfig.target_file_key] || 'index.ts';
+                    const absolutePath = path.isAbsolute(targetFile) ? targetFile : path.resolve(globalThis.activeWorkspace || process.cwd(), targetFile);
 
-                    // Giải quyết đường dẫn tuyệt đối chính xác để đọc từ đĩa cứng
-                    const absolutePath = path.isAbsolute(targetFile)
-                        ? targetFile
-                        : path.resolve(globalThis.activeWorkspace || process.cwd(), targetFile);
-
-                    let codeToValidate = '';
-                    if (fs.existsSync(absolutePath)) {
-                        // Ưu tiên đọc trực tiếp từ file trên đĩa cứng để tránh lời thoại thừa của AI
-                        codeToValidate = fs.readFileSync(absolutePath, 'utf8');
-                    } else {
-                        // Fallback về bộ nhớ tạm thời nếu file chưa được tạo ra
-                        codeToValidate = state.store.pending_code || state.store.last_output || '';
-                    }
+                    let codeToValidate = fs.existsSync(absolutePath) ? fs.readFileSync(absolutePath, 'utf8') : (state.store.pending_code || state.store.last_output || '');
 
                     console.log(chalk.cyan(`[Node Exec] 🛡️ Running Declarative Validator Node: [${nodeName}]`));
                     const syntaxResult = await validateSyntax(targetFile, codeToValidate);
@@ -110,23 +98,15 @@ export class DeclarativeGraphCompiler {
             }
         }
 
-        // 2. Biên dịch các rẽ nhánh Edges
-        // Đọc cấu hình rẽ nhánh tĩnh
-        (jsonConfig.edges || []).forEach(edge => {
-            edges.set(edge.from, edge.to);
-        });
+        // 2. Biên dịch Edges
+        (jsonConfig.edges || []).forEach(edge => edges.set(edge.from, edge.to));
 
-        // Đọc cấu hình rẽ nhánh động (Conditional Edges)
         (jsonConfig.conditional_edges || []).forEach(cEdge => {
             if (cEdge.condition_type === 'state_check') {
                 edges.set(cEdge.from, (stateStore) => {
                     const val = stateStore[cEdge.state_key];
                     const isNotEmpty = Array.isArray(val) ? val.length > 0 : !!val;
-
-                    if (isNotEmpty) {
-                        return cEdge.router.is_not_empty;
-                    }
-                    return cEdge.router.is_empty;
+                    return isNotEmpty ? cEdge.router.is_not_empty : cEdge.router.is_empty;
                 });
             }
         });

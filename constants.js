@@ -57,6 +57,7 @@ export const SKILL_GROUPS = {
         'debug_desktop_app'
     ],
     [SKILL_CATEGORIES.CODE]: [
+        'run_automated_tests',
         'read_file',
         'read_multiple_files',
         'write_file',
