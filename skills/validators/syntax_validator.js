@@ -139,10 +139,14 @@ class StdioLspClient {
     this.child = null;
     this.messageId = 1;
     this.pendingRequests = new Map();
-    this.requestHandlers = new Map(); // Lưu trữ các bộ xử lý yêu cầu từ Server
+    this.requestHandlers = new Map();
     this.diagnosticsCallback = null;
     this.buffer = Buffer.alloc(0);
-    this.openFiles = new Set(); // <--- CHỐT CHẶN BẢO VỆ: Theo dõi danh sách các file đang mở trong Client này
+    this.openFiles = new Set();
+
+    // --- BỔ SUNG ĐỂ THEO DÕI TRẠNG THÁI NẠP DỰ ÁN ---
+    this.projectLoaded = false;
+    this.projectLoadedCallback = null;
 
     // Tự động cấu hình tệp tin log gỡ lỗi LSP
     this.logDir = path.join(process.cwd(), '.agent_memory', 'logs');
@@ -161,7 +165,29 @@ class StdioLspClient {
       // Thầm lặng bỏ qua lỗi ghi file
     }
   }
+  /**
+     * Chờ cho đến khi máy chủ Roslyn thông báo đã nạp xong toàn bộ metadata dự án
+     */
+  async waitForProjectLoaded(timeoutMs = 25000) {
+    if (this.projectLoaded) return true;
 
+    return new Promise((resolve) => {
+      let timer;
+
+      const onLoaded = () => {
+        clearTimeout(timer);
+        this.projectLoadedCallback = null;
+        resolve(true);
+      };
+
+      this.projectLoadedCallback = onLoaded;
+
+      timer = setTimeout(() => {
+        this.projectLoadedCallback = null;
+        resolve(false); // Quá thời gian chờ -> fallback chạy tiếp
+      }, timeoutMs);
+    });
+  }
   registerRequestHandler(method, handler) {
     this.requestHandlers.set(method, handler);
   }
@@ -306,6 +332,13 @@ class StdioLspClient {
       if (this.diagnosticsCallback) {
         this.diagnosticsCallback(message.params);
       }
+    } else if (message.method === 'workspace/projectInitializationComplete') {
+      // --- PHÁT HIỆN SỰ KIỆN HOÀN THÀNH TỪ ROSLYN ---
+      this.writeLog('INFO', 'Roslyn Project Initialization Complete.');
+      this.projectLoaded = true;
+      if (this.projectLoadedCallback) {
+        this.projectLoadedCallback();
+      }
     }
   }
 
@@ -347,7 +380,7 @@ class StdioLspClient {
     }
   }
 
-  // Tìm hàm initialize() trong StdioLspClient và thay thế bằng:
+  // Khai báo khả năng hỗ trợ Pull Diagnostics để Roslyn Server đồng ý xử lý và trả về lỗi
   async initialize() {
     const rootUri = filePathToUri(this.rootPath);
     const initParams = {
@@ -369,6 +402,9 @@ class StdioLspClient {
           publishDiagnostics: {
             relatedInformation: true
           },
+          diagnostic: {
+            dynamicRegistration: true
+          },
           hover: {
             contentFormat: ['markdown', 'plaintext']
           },
@@ -384,6 +420,30 @@ class StdioLspClient {
 
     await this.send('initialize', initParams);
     await this.send('initialized', {}, true);
+
+    // --- ĐỒNG BỘ NATIVE: Gửi thông báo nạp Solution / Project cho Roslyn LSP ---
+    const cmdLower = this.command.toLowerCase();
+    if (cmdLower.includes('microsoft.codeanalysis.languageserver') ||
+      cmdLower.includes('roslyn-language-server') ||
+      cmdLower.includes('csharp')) {
+      try {
+        const files = fs.readdirSync(this.rootPath);
+        const slnFile = files.find(f => f.endsWith('.sln') || f.endsWith('.slnx'));
+        const csprojFile = files.find(f => f.endsWith('.csproj'));
+
+        if (slnFile) {
+          const slnUri = filePathToUri(path.join(this.rootPath, slnFile));
+          this.writeLog('INFO', `Sending solution/open for: ${slnFile}`);
+          await this.send('solution/open', { solution: slnUri }, true);
+        } else if (csprojFile) {
+          const csprojUri = filePathToUri(path.join(this.rootPath, csprojFile));
+          this.writeLog('INFO', `Sending project/open for: ${csprojFile}`);
+          await this.send('project/open', { projects: [csprojUri] }, true);
+        }
+      } catch (err) {
+        this.writeLog('OPEN_SOL_ERR', err.message);
+      }
+    }
   }
 
   // Tìm hàm checkFile(filePath, languageId, content) và thay thế bằng:
@@ -393,9 +453,17 @@ class StdioLspClient {
     return new Promise(async (resolve) => {
       let timer;
 
+      const normalizeUri = (uriStr) => {
+        try {
+          return decodeURIComponent(uriStr).toLowerCase().replace(/\\/g, '/');
+        } catch (e) {
+          return uriStr.toLowerCase().replace(/\\/g, '/');
+        }
+      };
+
       this.diagnosticsCallback = (params) => {
-        const receivedUri = decodeURI(params.uri).toLowerCase();
-        const expectedUri = decodeURI(fileUri).toLowerCase();
+        const receivedUri = normalizeUri(params.uri);
+        const expectedUri = normalizeUri(fileUri);
 
         if (receivedUri === expectedUri) {
           clearTimeout(timer);
@@ -423,6 +491,29 @@ class StdioLspClient {
           }
         }, true);
         this.openFiles.add(fileUri);
+
+        // --- ĐỒNG BỘ NATIVE CHO C# (ROSLYN LSP PULL DIAGNOSTICS) ---
+        if (languageId === 'csharp') {
+          // Roslyn LSP hoạt động theo mô hình Pull Diagnostics (LSP 3.17+) thay vì tự động đẩy
+          try {
+            // Đợi một khoảng ngắn (khoảng 300ms) để Roslyn kịp nạp và xử lý tệp ảo
+            await new Promise(r => setTimeout(r, 300));
+
+            const pullResult = await this.send('textDocument/diagnostic', {
+              textDocument: { uri: fileUri }
+            });
+
+            if (pullResult && pullResult.result) {
+              const items = pullResult.result.items || [];
+              clearTimeout(timer);
+              this.diagnosticsCallback = null;
+              resolve(items);
+              return;
+            }
+          } catch (pullErr) {
+            this.writeLog('PULL_DIAG_ERR', pullErr.message);
+          }
+        }
       } catch (err) {
         resolve([]);
       }
@@ -465,7 +556,6 @@ export async function validateSyntax(filePath, content) {
   let isLspAvailable = false;
 
   // Giải quyết động đường dẫn nếu là C#
-  // Giải quyết động đường dẫn nếu là C#
   if (language === 'csharp') {
     const csharpLspPath = findCSharpLspPath();
     if (csharpLspPath) {
@@ -496,6 +586,17 @@ export async function validateSyntax(filePath, content) {
         globalThis.activeLspClients.set(cacheKey, client);
       } else {
         console.log(chalk.blue(`[LSP Checker] ⚡ Tái sử dụng LSP daemon đang chạy cho ${lspConfig.languageId}...`));
+      }
+
+      // --- BỔ SUNG ĐOẠN CHỜ THÔNG MINH CHO C# ---
+      if (lspConfig.languageId === 'csharp' && !client.projectLoaded) {
+        console.log(chalk.blue(`[LSP Checker] ⏳ Đang đợi Roslyn Server hoàn tất nạp dự án (workspace/projectInitializationComplete)...`));
+        const loadSuccess = await client.waitForProjectLoaded(25000); // Đợi tối đa 25 giây
+        if (loadSuccess) {
+          console.log(chalk.green(`[LSP Checker] 🚀 Roslyn Project đã nạp xong thành công!`));
+        } else {
+          console.log(chalk.yellow(`[LSP Checker] ⚠️ Quá thời gian chờ Roslyn nạp dự án. Tiếp tục chạy chế độ Fallback.`));
+        }
       }
 
       const diagnostics = await client.checkFile(filePath, lspConfig.languageId, content);
