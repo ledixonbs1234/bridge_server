@@ -79,14 +79,7 @@ export const SKILL_GROUPS = {
         'ask_questions_if_underspecified',
         'change_active_workspace',
         'debug_desktop_app',
-        // TÍCH HỢP LSP GIAI ĐOẠN 2 VÀO NHÓM LẬP TRÌNH (CODE)
-        'lsp_get_hover',
-        'lsp_goto_definition',
-        'lsp_find_references',
-        'lsp_get_document_symbols',
-        'lsp_rename_symbol',
-        'lsp_get_code_actions',
-        'lsp_apply_code_action'
+
     ],
     [SKILL_CATEGORIES.RESEARCH]: [
         'web_markdown_reader',
@@ -107,13 +100,7 @@ export const SKILL_GROUPS = {
         'ask_questions_if_underspecified',
         'change_active_workspace',
         'debug_desktop_app',
-        // TÍCH HỢP LSP GIAI ĐOẠN 2 VÀO NHÓM NGHIÊN CỨU (RESEARCH)
-        'lsp_get_hover',
-        'lsp_goto_definition',
-        'lsp_get_document_symbols',
-        'lsp_rename_symbol',
-        'lsp_get_code_actions',
-        'lsp_apply_code_action'
+
     ],
     [SKILL_CATEGORIES.COMPLEX]: null
 };

@@ -715,7 +715,130 @@ function getLatestSession(sessionDir) {
     }
     return { file: latestFile, messages, meta, ageMinutes: Math.round(ageMinutes) };
 }
+// =================================================================
+// 🧪 API GIẢ LẬP AGENT GỌI TOOL (SKILL TESTER)
+// =================================================================
+router.post('/tester/process', async (req, res) => {
+    try {
+        const { rawText } = req.body;
+        if (!rawText) {
+            return res.status(400).json({ success: false, error: 'Thiếu dữ liệu rawText' });
+        }
 
+        // 1. Phân tích cú pháp JSON thô từ rawText đầu vào
+        let parsed = null;
+        try {
+            parsed = JSON.parse(rawText.trim());
+        } catch (e) {
+            // Thử bóc tách JSON bọc trong khối ```json ... ``` nếu có
+            const jsonMatch = rawText.match(/```json\s*([\s\S]*?)\s*```/i);
+            if (jsonMatch) {
+                try {
+                    parsed = JSON.parse(jsonMatch[1].trim());
+                } catch (innerErr) {
+                    throw new Error(`Không thể parse JSON từ markdown block: ${innerErr.message}`);
+                }
+            } else {
+                throw new Error(`Đầu vào không phải JSON hợp lệ: ${e.message}`);
+            }
+        }
+
+        if (!parsed) {
+            throw new Error("Không thể bóc tách cấu trúc JSON từ đầu vào.");
+        }
+
+        // Rút trích tên công cụ và tham số
+        const toolName = parsed.name || parsed.tool || (parsed.type === 'tool_call' ? parsed.name : null);
+        const toolArgs = parsed.arguments || parsed.args || {};
+
+        if (!toolName) {
+            throw new Error("Cấu trúc JSON không chứa tên công cụ ('name' hoặc 'tool').");
+        }
+
+        console.log(chalk.cyan(`\n[Skill Tester] 🧪 Nhận yêu cầu giả lập thực thi Tool: [${toolName}]`));
+
+        // 2. Chạy Tool thực tế thông qua hệ thống dịch vụ Agent
+        const { executeSkillForProvider, saveSession } = await import('../services/agentService.js');
+        const output = await executeSkillForProvider(toolName, toolArgs, globalThis.activeProvider, null);
+
+        // 3. Phân tích loại Tool để thiết lập tiêu đề hiển thị trực quan lên Graph
+        let stepType = 'generic';
+        let cleanTitle = `Execute ${toolName}`;
+
+        if (toolName.includes('bash') || toolName.includes('command') || toolName.includes('run') || toolName.includes('terminal')) {
+            stepType = 'terminal';
+            cleanTitle = `Terminal ${toolArgs.command || 'Command'}`;
+        } else if (toolName.includes('list_directory') || toolName.includes('dir') || toolName === 'ls') {
+            stepType = 'read_file';
+            const target = toolArgs.path || toolArgs.directory_path || 'folder';
+            const displayTarget = typeof target === 'string' && target.length > 40 ? '...' + target.slice(-37) : target;
+            cleanTitle = `📂 List Directory: ${displayTarget}`;
+        } else if (toolName === 'write_file' || toolName.includes('write') || toolName.includes('replace') || toolName.includes('edit')) {
+            stepType = 'generic';
+            const target = toolArgs.file_path || toolArgs.file_paths?.[0] || toolArgs.target || 'file';
+            const displayTarget = typeof target === 'string' && target.length > 40 ? '...' + target.slice(-37) : target;
+            cleanTitle = `📝 Modify File: ${displayTarget}`;
+        } else if (toolName.includes('read') || toolName.includes('view') || toolName.includes('file') || toolName === 'cat') {
+            stepType = 'read_file';
+            const target = toolArgs.file_path || toolArgs.file_paths?.[0] || 'file';
+            const displayTarget = typeof target === 'string' && target.length > 40 ? '...' + target.slice(-37) : target;
+            cleanTitle = `📄 Read File: ${displayTarget}`;
+        } else if (toolName.includes('search') || toolName.includes('grep') || toolName.includes('find')) {
+            stepType = 'search';
+            cleanTitle = `Search ${toolArgs.query || toolArgs.pattern || 'query'}`;
+        }
+
+        // 4. Đồng bộ hóa lịch sử Chat hiện tại
+        if (!globalThis.activeWebSessionFile) {
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+            globalThis.activeWebSessionFile = `session_${timestamp}.jsonl`;
+            globalThis.activeWebHistory = [];
+        }
+
+        const stepId = 'step_sim_' + Math.random().toString(36).substring(2, 9);
+        const newStep = {
+            id: stepId,
+            type: stepType,
+            title: cleanTitle,
+            input: typeof toolArgs === 'object' ? JSON.stringify(toolArgs, null, 2) : String(toolArgs),
+            output: typeof output === 'string' ? output : JSON.stringify(output, null, 2),
+            toolName: toolName
+        };
+
+        // Giả lập đưa vào luồng Chat các tin nhắn tương ứng để Graph tự động vẽ lại
+        globalThis.activeWebHistory.push({
+            role: 'user',
+            content: `[Giả lập thử nghiệm] Chạy công cụ: ${toolName}`
+        });
+
+        globalThis.activeWebHistory.push({
+            role: 'assistant',
+            content: `Đã hoàn tất chạy thử nghiệm công cụ **${toolName}** trực tiếp từ bảng điều khiển Skill Tester.`,
+            steps: [newStep],
+            timeline: [
+                {
+                    id: 'steps-' + Math.random().toString(36).substring(2, 9),
+                    type: 'steps',
+                    steps: [newStep]
+                }
+            ]
+        });
+
+        // Ghi lại tệp tin phiên làm việc
+        saveSession(globalThis.activeWebHistory, globalThis.persistentGoal, globalThis.activeWebSessionFile);
+
+        res.json({
+            success: true,
+            tool: toolName,
+            arguments: toolArgs,
+            output: typeof output === 'string' ? output : JSON.stringify(output)
+        });
+
+    } catch (err) {
+        console.error(chalk.red(`[Skill Tester Error] ❌ Lỗi khi giả lập chạy Tool:`), err.message);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
 // API: Lưu cấu hình Harness mới được tạo từ giao diện UI của Client
 router.post('/harnesses', (req, res) => {
     try {
